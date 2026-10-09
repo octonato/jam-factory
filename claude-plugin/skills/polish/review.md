@@ -19,21 +19,25 @@ Build the slug as `state.md` describes. If `.nogit/polish/{slug}.md` already exi
 
 ## 2. Run the reviewers
 
-Dispatch these five reviewers **in parallel**, in the same message, over the same diff:
+Each reviewer runs as a subagent on a fresh context. Pass it only what this step lists. Pass nothing else from this session.
+
+Dispatch these seven reviewers **in parallel**, in the same message, over the same diff:
 
 1. `pr-review-toolkit:code-reviewer`: bugs, logic errors and project guideline violations
 2. `pr-review-toolkit:pr-test-analyzer`: missing tests and weak test coverage
 3. `pr-review-toolkit:silent-failure-hunter`: swallowed errors and bad fallbacks
 4. `pr-review-toolkit:comment-analyzer`: comments that are wrong, stale or misleading
 5. `pr-review-toolkit:type-design-analyzer`: types that fail to express or enforce their invariants
+6. `pr-review-toolkit:code-simplifier`: code that could be simpler
+7. `oc:independent-reviewer`: an independent review against the original problem
 
 Use the **Agent** tool with `subagent_type` set to the reviewer's name. If a name is not available, run a **general-purpose** agent for it instead. Give that agent the reviewer's focus from the list above as its task.
 
-Tell each reviewer the scope in one sentence: the PR number, or the commit range. Ask each one to return located findings with a severity, a location as `path:line` and a suggested fix. Tell each one not to edit files.
+Tell reviewers 1 to 6 the scope in one sentence: the PR number, or the commit range. Ask each one to return located findings with a severity, a location as `path:line` and a suggested fix. Tell each one not to edit files. `code-simplifier` edits code by default, so tell it to report its suggestions as findings.
 
-Do not run `code-simplifier`. It edits code.
+Give `oc:independent-reviewer` the target, the commands to read it, a problem statement and the `chat` output mode. Write the problem statement as Step 2 of `../../commands/independent-reviewer.md` describes.
 
-Wait for all five to finish.
+Wait for all seven to finish.
 
 ## 3. Merge
 

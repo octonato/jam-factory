@@ -14,7 +14,7 @@ What I gave you: $ARGUMENTS
 Strip the flag out of `$ARGUMENTS` before reading the rest as the target.
 
 - **Default (`auto`):** fix and commit each finding without stopping for my approval.
-- **`-i` / `--interactive`:** show me the plan and wait for my approval. Then show me each fix with its commit message, and commit only when I approve it.
+- **`-i` / `--interactive`:** go through the findings with me one at a time. For each finding, give me your assessment and wait for my decision. Then fix it, show me the fix with its commit message, and commit only when I approve it.
 
 ## Scope of this authorization
 
@@ -35,24 +35,45 @@ The working tree must be clean, apart from `.nogit/`. If it is not, list the cha
 
 Follow `review.md` from start to end. Set `mode` in the state file header.
 
-When I resume an existing review, skip the review and the plan. Use the mode the header records. Go to the loop and continue from the first phase that is not `committed`. If that phase is `in review`, show it to me again, with the message file as it is, and wait for my answer.
+When I resume an existing review, skip the review and the plan. Use the mode the header records. Go to the loop and continue from the first phase that is `planned` or `in review`. If that phase is `in review`, show it to me again, with the message file as it is, and wait for my answer. In `interactive` mode, a `planned` phase starts at **Assess**.
 
 ## Plan
 
 Write one phase per finding with `status: open`, in finding order. Name each phase after its finding. Set each one to `status: planned`, `commit: none`, `subject: none` and `tests: not run`.
 
-Some findings are not worth fixing in this PR. Set them to `status: left out` and add them under **Left out** with a reason. List mechanical refactors, such as renames and moves, under **IDE refactors**. Leave their findings out with the reason `IDE refactor`.
+In `auto` mode:
 
-Show me the plan in a short list: one line per phase, then the findings you left out.
+- Some findings are not worth fixing in this PR. Set them to `status: left out` and add them under **Left out** with a reason.
+- List mechanical refactors, such as renames and moves, under **IDE refactors**. Leave their findings out with the reason `IDE refactor`.
+- Show me the plan in a short list: one line per phase, then the findings you left out.
+- Start the loop. Do not wait for an answer.
 
-- In `auto` mode, start the loop. Do not wait for an answer.
-- In `interactive` mode, stop and wait. I will approve the plan or change it. When I change it, update the state file and show the plan again. Start the loop when I approve it.
+In `interactive` mode, keep a phase for every finding. I decide what to leave out during the loop. Show me the plan in a short list, one line per phase, and start the loop.
 
 ## Loop
 
 Take each planned phase in order. For each one:
 
-### 1. Fix
+### 1. Assess
+
+In `auto` mode, skip this step.
+
+In `interactive` mode, show me the finding:
+
+- its ID, severity and location as `path:line`
+- the problem and the suggested fix, as the state file holds them
+- your assessment, in one or two sentences: apply the suggested fix, apply a different fix, leave it out, or treat it as an IDE refactor
+
+Read the code before you assess. Then stop and wait for my decision:
+
+- **"go ahead", "apply", or similar:** fix it as you proposed.
+- **A different fix:** fix it my way.
+- **Leave it out:** set the finding to `status: left out` with my reason under **Left out**, and take the next phase.
+- **IDE refactor:** add it under **IDE refactors**, leave the finding out with the reason `IDE refactor`, and take the next phase.
+- **A behaviour question I can't answer now:** add it under **Open questions**, set the finding to `status: deferred`, and take the next phase.
+- **A question:** answer it, and stay on this finding.
+
+### 2. Fix
 
 - Fix only this phase's finding.
 - Match the style, naming and idioms of the code around the change.
@@ -60,7 +81,7 @@ Take each planned phase in order. For each one:
 - If the fix depends on a behaviour question that only I can answer, discard the phase's changes. Add the question under **Open questions**, set the finding to `status: deferred`, and move on to the next phase.
 - If the finding turns out to be wrong, discard the phase's changes. Set the finding to `status: left out` with the reason under **Left out**, and move on.
 
-### 2. Check the writing
+### 3. Check the writing
 
 Dispatch both reviewers **in parallel**, in the same message, over the **uncommitted changes**:
 
@@ -76,7 +97,7 @@ Wait for both to finish. Merge the results into one list:
 
 If the list is not empty, hand the findings to `oc:fixer` in one Agent call, verbatim and numbered. Don't apply the edits yourself. Keep the findings it skipped for the report.
 
-### 3. Test
+### 4. Test
 
 Run the tests that cover the changed code, and the project's formatter check. Record the run in the phase's `tests` field, with `HEAD` as the base. Wait for the result before you go on.
 
@@ -86,7 +107,7 @@ If the tests or the formatter check fail, fix the cause and run them again. If y
 2. Set the finding to `status: blocked`. Add a `**Blocked:**` line to the finding with what failed and what you tried.
 3. Set the phase's `tests` result to `failed`, and move on to the next phase.
 
-### 4. Commit
+### 5. Commit
 
 In `auto` mode, dispatch a **general-purpose** agent with the Agent tool and `model: "sonnet"`. Give it:
 
@@ -96,7 +117,7 @@ In `auto` mode, dispatch a **general-purpose** agent with the Agent tool and `mo
 
 Tell it to follow `commit.md` for that phase: first **Write the message**, then **Commit**. Wait for it to finish, and check that the working tree is clean apart from `.nogit/`.
 
-In `interactive` mode, follow **Write the message** in `commit.md` yourself. Set the phase to `status: in review`. Then show me:
+In `interactive` mode, follow **Write the message** in `commit.md` yourself. Set the phase to `status: in review`. Then show me the fix for review:
 
 - what changed, per finding, with each location as `path:line`
 - the test and formatter results
@@ -105,7 +126,7 @@ In `interactive` mode, follow **Write the message** in `commit.md` yourself. Set
 
 Then stop and wait for my answer:
 
-- **"approved", "next", or similar:** follow **Commit** in `commit.md`. Commit the message file as it is. Never rewrite it at this point.
+- **"go ahead", "approved", or similar:** follow **Commit** in `commit.md`. Commit the message file as it is. Never rewrite it at this point.
 - **Changes to the code:** make them, check the writing, test again, and update the message file if the change affects it. Then show me the phase again.
 - **Changes to the message:** edit the message file, and show me the message again.
 - **A question:** answer it, and stay on this phase.
