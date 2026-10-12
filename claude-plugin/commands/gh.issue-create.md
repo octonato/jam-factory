@@ -19,7 +19,7 @@ You **MUST** consider the user input before proceeding (if not empty).
    ```
    git remote get-url upstream
    ```
-   Extract the GitHub `owner/repo` from the URL (e.g. `akka/nexus` from `https://github.com/akka/nexus.git`).
+   Extract the GitHub `owner/repo` from the URL (e.g. `octonato/octo-stack` from `https://github.com/octonato/octo-stack.git`).
 
    > [!CAUTION]
    > ONLY PROCEED IF THE REMOTE IS A GITHUB URL. If not, stop and inform the user.
