@@ -1,6 +1,6 @@
-# Verify: submit
+# Submit review
 
-This procedure turns `report.md` into a comment for the PR author. The `verify` skill runs it after the review and passes the run directory.
+This procedure turns `report.md` into a comment for the PR author. The `submit-review` skill runs this procedure with the run directory.
 
 ## 1. Check the findings
 
@@ -10,11 +10,12 @@ Read `{run directory}/report.md`. Read the code for each finding that is `checke
 
 Write `{run directory}/submit.md`.
 
-The file holds only the findings.
+The file holds only the findings and their severity.
 Leave out:
 
 - a title, an intro, or a summary
 - the names of the agents or skills that ran
+- the `source` and `checked` fields
 - strengths, praise, or what is solid
 - counts, severity totals, or an action plan
 - the finding IDs and the **Not confirmed** and **Open questions** sections
@@ -25,7 +26,7 @@ Write each finding in this shape, worst first:
 ```markdown
 ### <short title>
 
-`<path>:<line>`
+**<severity>** · `<path>:<line>`
 
 <what is wrong, in one or two sentences>
 

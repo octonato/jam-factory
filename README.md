@@ -80,7 +80,8 @@ Commands and skills are invoked with the `oc:` prefix — `/oc:checks`, `/oc:ver
 
 | Skill | Description |
 |---|---|
-| `/oc:verify` | Deep, read-only review of a PR, a commit range or the current branch. Runs the pr-review-toolkit reviewers and oc:independent-reviewer in parallel at xhigh effort. It checks each finding against the code. It writes one report to .nogit/verify-{timestamp}/. Add --submit to also write the findings as a comment for the PR author and offer to open it on GitHub. It never posts the comment. |
+| `/oc:verify` | Deep, read-only review of a PR, a commit range or the current branch. Runs the pr-review-toolkit reviewers and oc:independent-reviewer in parallel at xhigh effort. It checks each finding against the code. It writes one report to .nogit/verify-{timestamp}/. Use /oc:submit-review to turn the report into a PR comment. |
+| `/oc:submit-review` | Turns an /oc:verify report into a PR comment. The comment holds only the findings and their severity. Pass verify-{timestamp} to use a run on disk. Pass a target to run /oc:verify first. Pass nothing to pick a run from a list. It offers to open the comment on GitHub. It never posts the comment. |
 | `/oc:independent-reviewer` | Independent, read-only code review of a PR, a commit range or the current branch. A fresh subagent reviews the change and never learns how it was built. It writes the report to .nogit/verify-{timestamp}/independent-review.md. Add --report-in-chat to get the report in chat instead. |
 | `/oc:verify-fix` | Review your PR with /oc:verify. Fix each finding in its own commit. Runs on its own by default; add -i to fix one at a time. Use --resume verify-{timestamp} to continue a run. Never pushes. |
 | `/oc:walk-through` | Walk-through of a code path or a set of changes, broken into logical steps. By default it saves the whole walk to .nogit/walk-through/ to read later; add -i/--interactive to walk through it one step at a time instead. Add -r/--review to run /oc:verify plus the comment and plain-English checks. It folds their findings into each step. |
@@ -96,12 +97,14 @@ Commands and skills are invoked with the `oc:` prefix — `/oc:checks`, `/oc:ver
 
 ## Verify workflow
 
-`/oc:verify` runs seven reviewers in parallel at xhigh effort: six `pr-review-toolkit` reviewers and `oc:independent-reviewer`. `/oc:verify-fix` and `/oc:walk-through -r` run the same review.
+`/oc:verify` runs seven reviewers in parallel at xhigh effort: six `pr-review-toolkit` reviewers and `oc:independent-reviewer`. `/oc:verify-fix`, `/oc:walk-through -r` and `/oc:submit-review` (when it runs a new verify) run the same review.
 
 | Call | What it does |
 |---|---|
 | `/oc:verify [target]` | Reviews and writes a report. Changes no code. |
-| `/oc:verify --submit [target]` | Also writes the findings as a comment for the PR author, and offers to open it on GitHub. |
+| `/oc:submit-review verify-{timestamp}` | Writes the findings of that run as a comment for the PR author, and offers to open it on GitHub. |
+| `/oc:submit-review <target>` | Runs `/oc:verify` first, then writes the comment. |
+| `/oc:submit-review` | Lists the three newest runs on disk. Pick one, or run a new verify on the current branch. |
 | `/oc:verify-fix [target]` | Reviews, then fixes and commits each finding without stopping. It asks its questions at the end. It never pushes. |
 | `/oc:verify-fix -i [target]` | Shows the plan and waits for approval. Then shows each fix with its commit message, and commits it when you approve. |
 | `/oc:verify-fix --resume verify-{timestamp}` | Continues an interrupted verify-fix run. |
