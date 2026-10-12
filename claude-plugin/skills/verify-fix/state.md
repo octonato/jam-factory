@@ -1,20 +1,14 @@
-# Polish state file
+# Verify-fix state file
 
-The `polish` skill keeps all its state for one review in a single Markdown file. A new session reads this file to pick up the work.
+The `verify-fix` skill keeps all its state for one run in a single Markdown file. A new session reads this file to pick up the work.
 
 ## Location
 
-- The state file is `.nogit/polish/{slug}.md` in the repository that owns the target.
-- `.nogit/polish/current` holds the slug of the active review, on one line.
-- The slug is the branch topic in kebab case, for example `retry-backoff` for `feature/retry-backoff`:
-  - For a PR, use the PR's head branch. For any other target, use the current branch.
-  - Take the last `/` segment of the branch name. Lowercase it, and replace every run of other characters than letters and digits with `-`.
-  - On `main`, `master` or a detached `HEAD`, build the topic from the PR title or the newest commit subject instead. Keep it to four words at most.
+- The state file is `.nogit/verify-{timestamp}/fix.md`, in the repository that owns the target.
+- The run directory also holds verify's `report.md` and `independent-review.md`, and the commit message file `fix.commit-msg`.
+- To resume, I pass `--resume verify-{timestamp}`, which names the run directory. If `fix.md` is missing there, tell me and stop.
 
-Resolve the active state file this way:
-
-1. Read `.nogit/polish/current`. The state file is `.nogit/polish/{slug}.md`.
-2. If `current` is missing, list the files under `.nogit/polish/` so I can pick one, then stop. If the folder is missing, tell me to run `/oc:polish`, then stop.
+Read nothing under `.nogit/` outside the run directory.
 
 Re-read the state file before each phase. I may have edited it by hand.
 
@@ -23,21 +17,23 @@ Re-read the state file before each phase. I may have edited it by hand.
 The file has these sections, in this order. Keep the field names exactly as shown. The skill finds entries by their headings and field names.
 
 ```markdown
-# Polish: {target}
+# Verify-fix: {target}
 
-- target: {PR #5726 | 6e77038^..HEAD | 6e77038..a1b2c3d | feature/foo vs main}
+- target: {PR #5726 | 6e77038^..HEAD | 6e77038..a1b2c3d | feature/foo vs upstream/main}
 - repo: {absolute path of the repository}
 - branch: {local branch}
 - remote: {remote}/{branch}
 - pr: {number | none}
+- run: {run directory}
 - mode: {auto | interactive}
+- gpg: {unknown | available | unavailable}
 
 ## Findings
 
 ### F1: {short title}
 - severity: **{critical | high | medium | low}**
 - location: {path:line}
-- source: **{reviewer name}**
+- source: **{reviewer names}**
 - checked: **{confirmed | not checked}**
 - status: **{open | left out | deferred | blocked | fixed}**
 
@@ -68,6 +64,15 @@ The file has these sections, in this order. Keep the field names exactly as show
 ```
 
 Leave a section empty when it has no entries. Keep its heading.
+
+## Build it from the report
+
+After verify, build `fix.md` from `report.md`:
+
+- Copy the header fields. Add `remote`, `mode` and `gpg: unknown`.
+- Copy each finding under **Findings** with `status: open`.
+- Copy each finding under **Not confirmed** into **Findings** with `status: left out`. Add it under **Left out** with the reason `not confirmed: {what the code shows}`.
+- Copy each open question under **Open questions** as `open`. Set its finding to `status: deferred`.
 
 ## Statuses
 

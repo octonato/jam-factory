@@ -1,20 +1,27 @@
 ---
-name: polish
+name: verify-fix
 disable-model-invocation: true
-description: Review the user's own PR and fix each finding in its own commit — autonomously by default, or one fix at a time with -i/--interactive. Never pushes.
-argument-hint: [-i] [PR number or URL | commit hash (inclusive) | range a..b | empty for the current branch]
+description: Review my PR with /oc:verify. Fix each finding in its own commit, autonomously by default or one at a time with -i. Use --resume verify-{timestamp} to continue a run. Never pushes.
+argument-hint: [-i] [PR number or URL | commit hash (inclusive) | range a..b | empty for the current branch] [--resume verify-{timestamp}]
+allowed-tools: Bash(date *)
+effort: xhigh
 ---
 
 Review my changes, then fix the findings one by one, one commit per finding.
 
 What I gave you: $ARGUMENTS
 
+Run timestamp: !`date +%Y%m%d-%H%M%S`
+
 ## Mode
 
-Strip the flag out of `$ARGUMENTS` before reading the rest as the target.
+Strip the flags out of `$ARGUMENTS` before reading the rest as the target.
 
 - **Default (`auto`):** fix and commit each finding without stopping for my approval.
 - **`-i` / `--interactive`:** go through the findings with me one at a time. For each finding, give me your assessment and wait for my decision. Then fix it, show me the fix with its commit message, and commit only when I approve it.
+- **`--resume verify-{timestamp}`:** continue the run in `.nogit/verify-{timestamp}/`. Ignore the run timestamp above.
+
+Without `--resume`, the run directory is `.nogit/verify-{run timestamp}/`, in the repository that owns the target.
 
 ## Scope of this authorization
 
@@ -25,17 +32,21 @@ Strip the flag out of `$ARGUMENTS` before reading the rest as the target.
 
 Read these three files before you start:
 
-- `${CLAUDE_PLUGIN_ROOT}/skills/polish/state.md`: the state file format
-- `${CLAUDE_PLUGIN_ROOT}/skills/polish/review.md`: the review procedure
-- `${CLAUDE_PLUGIN_ROOT}/skills/polish/commit.md`: the commit procedure
+- `${CLAUDE_PLUGIN_ROOT}/skills/verify-fix/state.md`: the state file format
+- `${CLAUDE_PLUGIN_ROOT}/skills/verify/review.md`: the review procedure
+- `${CLAUDE_PLUGIN_ROOT}/skills/verify-fix/commit.md`: the commit procedure
+
+Read nothing under `.nogit/` outside the run directory.
+
+Run every agent in this skill with `effort: "xhigh"`.
 
 The working tree must be clean, apart from `.nogit/`. If it is not, list the changed files and stop.
 
 ## Review
 
-Follow `review.md` from start to end. Set `mode` in the state file header.
+Follow `review.md` from start to end, with the target and the run directory. Then build `fix.md` from `report.md`, as `state.md` describes. Set `mode` in the state file header.
 
-When I resume an existing review, skip the review and the plan. Use the mode the header records. Go to the loop and continue from the first phase that is `planned` or `in review`. If that phase is `in review`, show it to me again, with the message file as it is, and wait for my answer. In `interactive` mode, a `planned` phase starts at **Assess**.
+When I resume a run with `--resume`, skip the review and the plan. Use the mode the header records. Go to the loop. Continue from the first phase that is `planned` or `in review`. If that phase is `in review`, show it to me again, with the message file as it is, and wait for my answer. In `interactive` mode, a `planned` phase starts at **Assess**.
 
 ## Plan
 
@@ -109,7 +120,7 @@ If the tests or the formatter check fail, fix the cause and run them again. If y
 
 ### 5. Commit
 
-In `auto` mode, dispatch a **general-purpose** agent with the Agent tool and `model: "sonnet"`. Give it:
+In `auto` mode, dispatch a **general-purpose** agent with the Agent tool, `model: "sonnet"` and `effort: "xhigh"`. Give it:
 
 - the full path of `commit.md` and `state.md`, as this skill shows them
 - the path of the state file and the phase ID
@@ -141,6 +152,7 @@ Stop the loop on a failure that is not about one finding. Examples: the build is
 
 When no phase is planned, show me:
 
+- the run directory
 - the commits, one line each: short hash and subject
 - the blocked findings, each with its reason
 - the deferred findings and the findings you left out, each with its reason

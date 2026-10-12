@@ -1,16 +1,16 @@
-# Polish commit
+# Verify-fix commit
 
-This procedure commits one phase. The `polish` skill uses it. The state file format is in `state.md`, next to this file.
+This procedure commits one phase. The `verify-fix` skill uses it. The state file format is in `state.md`, next to this file.
 
 The caller names the phase, and may give a note for the commit message.
 
-The message file is `.nogit/polish/{slug}.commit-msg`.
+The message file is `fix.commit-msg` in the run directory, next to the state file.
 
 ## Write the message
 
 Write the commit message to the message file:
 
-- The subject is `polish({IDs}): {what the phase fixes}`, in the imperative, under 72 characters. `{IDs}` lists the phase's finding IDs, comma-separated: `polish(F1):`, or `polish(F2,F5):`.
+- The subject is `fix({IDs}): {what the phase fixes}`, in the imperative, under 72 characters. `{IDs}` lists the phase's finding IDs, comma-separated: `fix(F1):`, or `fix(F2,F5):`.
 - The body follows the format and rules below. Add the caller's note at the end, if there is one.
 - Add no `Co-Authored-By` line.
 

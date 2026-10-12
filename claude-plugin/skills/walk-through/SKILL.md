@@ -1,11 +1,15 @@
 ---
-description: Walk-through of a code path or a set of changes, broken into logical steps. By default it saves the whole walk to .nogit/walk-through/ to read later; add -i/--interactive to walk through it one step at a time instead. Add -r/--review to fold in located review findings per step, including the comment and plain-English rule checks.
+name: walk-through
+description: Walk-through of a code path or a set of changes, broken into logical steps. By default it saves the whole walk to .nogit/walk-through/ to read later; add -i/--interactive to walk through it one step at a time instead. Add -r/--review to run /oc:verify and the comment and plain-English checks, and fold their findings into each step.
 argument-hint: [a code path/behavior, OR a commit hash, OR a PR number] [-i|--interactive] [-r|--review]
+allowed-tools: Bash(date *)
 ---
 
 I want to **understand code by its logical steps**, not as a wall of text. By default, work autonomously and **write the steps to files** so I can read them at my own pace; with `-i` you instead **guide me through them one at a time** in the terminal.
 
 What I gave you: $ARGUMENTS
+
+Run timestamp: !`date +%Y%m%d-%H%M%S`
 
 If `$ARGUMENTS` is empty, ask me what I want to discover — a code path, a commit hash, or a PR number — and stop. Don't start a walk-through without a target.
 
@@ -37,18 +41,16 @@ Before presenting anything, work out the route so every pointer you give me is a
 
 ## If `-r`/`--review` is set: gather located findings (Changes mode only)
 
-While you map the route, **in parallel** dispatch the relevant `pr-review-toolkit` specialist agents over the same diff — at least **code-reviewer** and **silent-failure-hunter**, adding **type-design-analyzer** and **pr-test-analyzer** when the change warrants them. Run them as subagents (in the same message, so they run concurrently) and have the route mapping happen alongside, so the review doesn't serialize in front of Step 1.
+Run verify. Read `${CLAUDE_PLUGIN_ROOT}/skills/verify/review.md` and follow it, with the walk's target. Use `.nogit/verify-{run timestamp}/` as the run directory. Map the route while its reviewers run. Read nothing under `.nogit/` outside the run directory.
 
-Give every reviewer the **same output contract**: each finding must come back **located** — `file:line`, a one-line title, a severity, and a sentence of why — so you can slot it into the right step.
-
-In the **same message**, also dispatch my two rule checks over the same diff:
+In the **same message** as verify's reviewers, also dispatch my two rule checks over the same diff, with `effort: "xhigh"`:
 
 - **`oc:comment-reviewer`** — content of added or edited code comments.
 - **`oc:proof-reader`** — English of added or edited comments and documentation.
 
 Use the **Agent** tool with `subagent_type` set to the agent's name. If the name isn't available, find its definition under the plugin's `agents/` folder and run a **general-purpose** agent with that file's body as the prompt. Tell each one the scope in one sentence (`commit range <hash>^..HEAD` or `PR #<number>`). They already answer in a located shape — `file:line — severity — rule — "fragment" → fix` — so no extra contract is needed. If both flag the same `file:line`, keep one finding: join the rules with `;`, and if either fix is `delete`, the fix is `delete`.
 
-Collect the findings, drop duplicates, and **bucket each one under the step whose code it touches** (by file and line). Hold them; don't show me the raw review. They surface inside the walk, per step.
+When verify has written `report.md`, take its **Findings** and the rule-check findings. Leave out the **Not confirmed** findings. Drop duplicates. **Bucket each finding under the step whose code it touches**, by file and line. Hold them; don't show me the raw review. They surface inside the walk, per step.
 
 **Do not dump this research on me.** Same rule as the route: I see the guided walk with findings woven in, not the reviewers' transcripts.
 
@@ -106,7 +108,7 @@ The body follows the frontmatter: the overview, then the steps, shaped as below.
 - State the **mode and target** up front — `Commit range \`<hash>^..HEAD\``, `PR #<number>`, or `Code path: <description>`.
 - The one-line **overall summary** (in changes mode, what the change accomplishes as a whole; plus the one-line mechanical-churn note if there is any).
 - The **numbered itinerary** under a `### Itinerary` heading, one line per step.
-- If `-r`/`--review` is on, the **findings roll-up** under a `### ⚠ Findings roll-up` heading, by severity (worst first), each pointing at its `file:line`, plus any finding that didn't land on a specific step.
+- If `-r`/`--review` is on, the **findings roll-up** under a `### ⚠ Findings roll-up` heading, by severity (worst first), each pointing at its `file:line`, plus any finding that didn't land on a specific step. Name verify's `report.md` path there.
 
 **One section per step**, each opening with `## Step NN — <title>` — `NN` zero-padded (`Step 01`, `Step 02`, … `Step 10`). `## ` headings mark steps and nothing else, which is how the replay splits the body, so keep every heading inside the overview and inside a step at `###` or deeper. Each section carries the same **Shape of each step** content — the code pointers as bare `path:line`, the guided explanation, and the `⚠ Review notes` block if `-r`/`--review` is on — but **without the interactive tail**: no "hand the pen back", no "go ahead" invitation, no progress marker.
 
