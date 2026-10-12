@@ -2,6 +2,8 @@
 
 This procedure turns `report.md` into a comment for the PR author. The `submit-review` skill runs this procedure with the run directory.
 
+If `{run directory}/submit.md` exists, use it as it is. Skip steps 1 and 2, and go to step 3.
+
 ## 1. Check the findings
 
 Read `{run directory}/report.md`. Read the code for each finding that is `checked: not checked`. Drop a finding when the code does not confirm it.
@@ -45,18 +47,16 @@ Give me the path of the file and the number of findings.
 If the report's `pr` is `none`, stop here.
 Otherwise, ask whether to open it as a PR comment on GitHub.
 
-If I approve:
-
-1. Copy the comment to the clipboard. Start with the line `:robot: says...`, then a blank line, then the file:
-   `{ printf ':robot: says...\n\n'; cat {run directory}/submit.md; } | pbcopy`
-2. Open the comment form: `gh pr comment <number> --web`.
-3. Tell me the comment is on the clipboard, ready to paste.
-
-If the sandbox blocks either command, give me this line to run myself:
+If I approve, run this command with `dangerouslyDisableSandbox: true`:
 
 ```
-! { printf ':robot: says...\n\n'; cat {run directory}/submit.md; } | pbcopy && gh pr comment <number> --web
+${CLAUDE_PLUGIN_ROOT}/skills/submit-review/open-comment.sh <number> {run directory}/submit.md
 ```
+
+The script copies the comment to the clipboard and opens the comment form.
+Then tell me the comment is on the clipboard, ready to paste.
+
+If the command fails, give me the same command to run myself, prefixed with `! `.
 
 > [!CAUTION]
 > NEVER post the comment. Do not run `gh pr comment` without `--web`. Do not call the GitHub API to create a comment or a PR review. I review and submit it myself.
