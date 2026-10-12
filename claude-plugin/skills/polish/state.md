@@ -31,16 +31,15 @@ The file has these sections, in this order. Keep the field names exactly as show
 - remote: {remote}/{branch}
 - pr: {number | none}
 - mode: {auto | interactive}
-- gpg: {unknown | available | unavailable}
 
 ## Findings
 
 ### F1: {short title}
-- severity: {critical | high | medium | low}
+- severity: **{critical | high | medium | low}**
 - location: {path:line}
-- source: {reviewer name}
-- checked: {confirmed | not checked}
-- status: {open | left out | deferred | blocked | fixed}
+- source: **{reviewer name}**
+- checked: **{confirmed | not checked}**
+- status: **{open | left out | deferred | blocked | fixed}**
 
 {The problem, in one to three sentences.}
 
@@ -51,7 +50,7 @@ The file has these sections, in this order. Keep the field names exactly as show
 ### P1: {finding title}
 - findings: {F1}
 - status: {planned | in review | committed}
-- commit: {short hash | none}
+- commit: **{short hash | none}**
 - subject: {commit subject | none}
 - tests: {command} @ {base short hash} → {passed | failed | not run}
 
