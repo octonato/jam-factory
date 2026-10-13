@@ -4,42 +4,47 @@ This procedure turns `report.md` into a comment for the PR author. The `submit-r
 
 If `{run directory}/submit.md` exists, use it as it is. Skip steps 1 and 2, and go to step 3.
 
-## 1. Check the findings
+## 1. Pick the findings
 
-Read `{run directory}/report.md`. Read the code for each finding that is `checked: not checked`. Drop a finding when the code does not confirm it.
+Read `{run directory}/report.md`. Take every `must-fix` and `should-fix` finding under **Findings**.
+
+Take at most 10 `nit` findings. When there are more, keep the 10 that matter most to the PR author.
 
 ## 2. Write the comment
 
 Write `{run directory}/submit.md`.
 
-The file holds only the findings and their severity.
+The file holds only the findings, their severity and their evidence.
 Leave out:
 
 - a title, an intro, or a summary
 - the names of the agents or skills that ran
-- the `source` and `checked` fields
+- the `source` field
 - strengths, praise, or what is solid
 - counts, severity totals, or an action plan
-- the finding IDs and the **Not confirmed** and **Open questions** sections
+- the finding IDs and the **Dropped** and **Open questions** sections
 - fixes, suggested changes, or ` ```suggestion ` blocks
 
-Write each finding in this shape, worst first:
+Write the `must-fix` findings first, then the `should-fix` findings, then the `nit` findings. Write each one in this shape:
 
 ```markdown
-### <short title>
+### [<severity>] <short title>
 
-**<severity>** · `<path>:<line>`
+`<full path from the repository root>:<line>`
 
 <what is wrong, in one or two sentences>
 
 <why it is a problem: the failure it causes or the rule it breaks>
+
+<the evidence: the code or output that shows the problem, for must-fix and should-fix only>
 ```
 
 Point out the problem only. Do not say how to fix it.
 Separate findings with a blank line.
 Write for the PR author. Follow the "How to write" rules in my CLAUDE.md.
+Give a file's full path the first time you mention it. After that, give the file name and line. These rules override the citing rules in my CLAUDE.md.
 
-If no finding survives step 1, write no file. Tell me there are no findings and stop.
+If step 1 picks no finding, write no file. Tell me there are no findings and stop.
 
 ## 3. Offer to publish
 

@@ -31,13 +31,14 @@ The file has these sections, in this order. Keep the field names exactly as show
 ## Findings
 
 ### F1: {short title}
-- severity: **{critical | high | medium | low}**
+- severity: **{must-fix | should-fix | nit}**
 - location: {path:line}
 - source: **{reviewer names}**
-- checked: **{confirmed | not checked}**
 - status: **{open | left out | deferred | blocked | fixed}**
 
 {The problem, in one to three sentences.}
+
+**Evidence:** {copied from the report. Only for must-fix and should-fix.}
 
 **Suggested fix:** {one short paragraph}
 
@@ -71,7 +72,7 @@ After verify, build `fix.md` from `report.md`:
 
 - Copy the header fields. Add `remote`, `mode` and `gpg: unknown`.
 - Copy each finding under **Findings** with `status: open`.
-- Copy each finding under **Not confirmed** into **Findings** with `status: left out`. Add it under **Left out** with the reason `not confirmed: {what the code shows}`.
+- Copy each finding under **Dropped** into **Findings** with `status: left out`. Add it under **Left out** with the reason `dropped: {the reason in the report}`.
 - Copy each open question under **Open questions** as `open`. Set its finding to `status: deferred`.
 
 ## Statuses

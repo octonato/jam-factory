@@ -50,7 +50,7 @@ In the **same message** as verify's reviewers, also dispatch my two rule checks 
 
 Use the **Agent** tool with `subagent_type` set to the agent's name. If the name isn't available, find its definition under the plugin's `agents/` folder and run a **general-purpose** agent with that file's body as the prompt. Tell each one the scope in one sentence (`commit range <hash>^..HEAD` or `PR #<number>`). They already answer in a located shape — `file:line — severity — rule — "fragment" → fix` — so no extra contract is needed. If both flag the same `file:line`, keep one finding: join the rules with `;`, and if either fix is `delete`, the fix is `delete`.
 
-When verify has written `report.md`, take its **Findings** and the rule-check findings. Leave out the **Not confirmed** findings. Drop duplicates. **Bucket each finding under the step whose code it touches**, by file and line. Hold them; don't show me the raw review. They surface inside the walk, per step.
+When verify has written `report.md`, take its **Findings** and the rule-check findings. Leave out the **Dropped** findings. Drop duplicates. **Bucket each finding under the step whose code it touches**, by file and line. Hold them; don't show me the raw review. They surface inside the walk, per step.
 
 **Do not dump this research on me.** Same rule as the route: I see the guided walk with findings woven in, not the reviewers' transcripts.
 

@@ -26,7 +26,8 @@ Read `${CLAUDE_PLUGIN_ROOT}/skills/verify/review.md` and follow it from start to
 When the review finishes, print:
 
 - the path of `report.md`
-- the number of findings per severity, worst first
+- the number of `must-fix`, `should-fix` and `nit` findings
+- the number of dropped findings
 - the number of open questions
 
 Do not repeat the findings. I read the report myself.
