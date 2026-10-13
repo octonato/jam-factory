@@ -1,9 +1,9 @@
 ---
 name: verify-fix
 disable-model-invocation: true
-description: Review my PR with /oc:verify. Fix each finding in its own commit, autonomously by default or one at a time with -i. Use --resume verify-{timestamp} to continue a run. Never pushes.
-argument-hint: [-i] [PR number or URL | commit hash (inclusive) | range a..b | empty for the current branch] [--resume verify-{timestamp}]
-allowed-tools: Bash(date *)
+description: Fix the findings of an /oc:verify run, each in its own commit, autonomously by default or one at a time with -i. Pass --resume verify-{timestamp} to use a run on disk. Otherwise pick a run from a list, or run a new review. Add --deep to a new review to also run the pr-review-toolkit reviewers. Never pushes.
+argument-hint: [-i] [--deep] [PR number or URL | commit hash (inclusive) | range a..b | empty for the current branch] [--resume verify-{timestamp}]
+allowed-tools: Bash(date *), Bash(find *)
 effort: xhigh
 ---
 
@@ -13,15 +13,28 @@ What I gave you: $ARGUMENTS
 
 Run timestamp: !`date +%Y%m%d-%H%M%S`
 
+Run files on disk:
+!`find . -maxdepth 3 -path './.nogit/verify-*/*.md'`
+
 ## Mode
 
 Strip the flags out of `$ARGUMENTS` before reading the rest as the target.
 
 - **Default (`auto`):** fix and commit each finding without stopping for my approval.
 - **`-i` / `--interactive`:** go through the findings with me one at a time. For each finding, give me your assessment and wait for my decision. Then fix it, show me the fix with its commit message, and commit only when I approve it.
-- **`--resume verify-{timestamp}`:** continue the run in `.nogit/verify-{timestamp}/`. Ignore the run timestamp above.
+- **`--resume verify-{timestamp}`:** use the run in `.nogit/verify-{timestamp}/`. Ignore the run timestamp above.
+- **No `--resume verify-{timestamp}`:** pick a run, as **Pick a run** describes. A bare `--resume` counts as no run name.
+- **`--deep`:** a new review runs at the `deep` depth. Without it, a new review runs at the `standard` depth. A run on disk keeps the review it has. If I pass `--deep` and use a run on disk, tell me the flag has no effect.
 
-Without `--resume`, the run directory is `.nogit/verify-{run timestamp}/`, in the repository that owns the target.
+## Pick a run
+
+A run is a `.nogit/verify-*/` directory that holds `report.md`. If no run is on disk, run a new review.
+
+Otherwise, ask me with **AskUserQuestion**. Offer the three newest runs, newest first, then `Run a new review`. The names sort by time. Label each run with its directory name. Describe it as `fix in progress` when it holds `fix.md`, and as `report only` when it does not.
+
+- **A run:** use it as if I passed `--resume` with its name.
+- **A new review:** the run directory is `.nogit/verify-{run timestamp}/`, in the repository that owns the target.
+- **Other:** read my text as a run name or a target, and pick the mode again.
 
 ## Scope of this authorization
 
@@ -36,7 +49,7 @@ Read these three files before you start:
 - `${CLAUDE_PLUGIN_ROOT}/skills/verify/review.md`: the review procedure
 - `${CLAUDE_PLUGIN_ROOT}/skills/verify-fix/commit.md`: the commit procedure
 
-Read nothing under `.nogit/` outside the run directory.
+Read nothing under `.nogit/` outside the run directory, apart from the run list above.
 
 Run every agent in this skill with `effort: "xhigh"`.
 
@@ -44,9 +57,11 @@ The working tree must be clean, apart from `.nogit/`. If it is not, list the cha
 
 ## Review
 
-Follow `review.md` from start to end, with the target and the run directory. Then build `fix.md` from `report.md`, as `state.md` describes. Set `mode` in the state file header.
+For a new review, follow `review.md` from start to end, with the target, the run directory and the review depth. Then build `fix.md` from `report.md`, as `state.md` describes. Set `mode` in the state file header.
 
-When I resume a run with `--resume`, skip the review and the plan. Use the mode the header records. Go to the loop. Continue from the first phase that is `planned` or `in review`. If that phase is `in review`, show it to me again, with the message file as it is, and wait for my answer. In `interactive` mode, a `planned` phase starts at **Assess**.
+For a run on disk without `fix.md`, skip the review. Compare the report's `head` with the short hash of `HEAD` in the report's `repo`. If they differ, tell me both hashes and ask whether to continue. The locations may point at moved code. Then build `fix.md` from `report.md`, set `mode`, and go to the plan.
+
+For a run on disk with `fix.md`, skip the review and the plan. Use the mode the header records. Go to the loop. Continue from the first phase that is `planned` or `in review`. If that phase is `in review`, show it to me again, with the message file as it is, and wait for my answer. In `interactive` mode, a `planned` phase starts at **Assess**.
 
 ## Plan
 

@@ -6,9 +6,9 @@ The `verify-fix` skill keeps all its state for one run in a single Markdown file
 
 - The state file is `.nogit/verify-{timestamp}/fix.md`, in the repository that owns the target.
 - The run directory also holds verify's `report.md` and `independent-review.md`, and the commit message file `fix.commit-msg`.
-- To resume, I pass `--resume verify-{timestamp}`, which names the run directory. If `fix.md` is missing there, tell me and stop.
+- `--resume verify-{timestamp}` names the run directory. If `fix.md` is there, continue it. If only `report.md` is there, build `fix.md` from it. If both are missing, tell me and stop.
 
-Read nothing under `.nogit/` outside the run directory.
+Read nothing under `.nogit/` outside the run directory, apart from the run list in `SKILL.md`.
 
 Re-read the state file before each phase. I may have edited it by hand.
 

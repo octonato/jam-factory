@@ -19,7 +19,8 @@ For example:
 ## Requirements
 
 - [Claude Code](https://docs.claude.com/en/docs/claude-code) installed and working. The review skills need v2.1.292 or later.
-- The `pr-review-toolkit` plugin. `/oc:verify`, `/oc:verify-fix` and `/oc:walk-through -r` need it.
+- The `superpowers` plugin. `/oc:verify`, `/oc:verify-fix`, `/oc:submit-review` and `/oc:walk-through -r` need it.
+- The `pr-review-toolkit` plugin. `/oc:verify --deep` and `/oc:verify-fix --deep` need it.
 
 ## Install
 
@@ -80,10 +81,10 @@ Commands and skills are invoked with the `oc:` prefix — `/oc:checks`, `/oc:ver
 
 | Skill | Description |
 |---|---|
-| `/oc:verify` | Deep, read-only review of a PR, a commit range or the current branch. Runs the pr-review-toolkit reviewers and oc:independent-reviewer in parallel at xhigh effort. It checks each finding against the code. It writes one report to .nogit/verify-{timestamp}/. Use /oc:submit-review to turn the report into a PR comment. |
+| `/oc:verify` | Read-only review of a PR, a commit range or the current branch. Runs oc:independent-reviewer and superpowers:requesting-code-review in parallel at xhigh effort. Add --deep to also run the pr-review-toolkit reviewers. It checks each finding against the code. It writes one report to .nogit/verify-{timestamp}/. Use /oc:submit-review to turn the report into a PR comment. |
 | `/oc:submit-review` | Turns an /oc:verify report into a PR comment. The comment holds only the findings and their severity. Pass verify-{timestamp} to use a run on disk. Pass a target to run /oc:verify first. Pass nothing to pick a run from a list. It offers to open the comment on GitHub. It never posts the comment. |
 | `/oc:independent-reviewer` | Independent, read-only code review of a PR, a commit range or the current branch. A fresh subagent reviews the change and never learns how it was built. It writes the report to .nogit/verify-{timestamp}/independent-review.md. Add --report-in-chat to get the report in chat instead. |
-| `/oc:verify-fix` | Review your PR with /oc:verify. Fix each finding in its own commit. Runs on its own by default; add -i to fix one at a time. Use --resume verify-{timestamp} to continue a run. Never pushes. |
+| `/oc:verify-fix` | Fix the findings of an /oc:verify run, each in its own commit. Runs on its own by default; add -i to fix one at a time. Pass --resume verify-{timestamp} to use a run on disk. Otherwise pick a run from a list, or run a new review. Add --deep to a new review to also run the pr-review-toolkit reviewers. Never pushes. |
 | `/oc:walk-through` | Walk-through of a code path or a set of changes, broken into logical steps. By default it saves the whole walk to .nogit/walk-through/ to read later; add -i/--interactive to walk through it one step at a time instead. Add -r/--review to run /oc:verify plus the comment and plain-English checks. It folds their findings into each step. |
 
 ## Agents
@@ -97,17 +98,19 @@ Commands and skills are invoked with the `oc:` prefix — `/oc:checks`, `/oc:ver
 
 ## Verify workflow
 
-`/oc:verify` runs seven reviewers in parallel at xhigh effort: six `pr-review-toolkit` reviewers and `oc:independent-reviewer`. `/oc:verify-fix`, `/oc:walk-through -r` and `/oc:submit-review` (when it runs a new verify) run the same review.
+`/oc:verify` runs two reviewers in parallel at xhigh effort: `oc:independent-reviewer` and `superpowers:requesting-code-review`. `--deep` adds the six `pr-review-toolkit` reviewers. `/oc:verify-fix`, `/oc:walk-through -r` and `/oc:submit-review` (when it runs a new verify) run the same review. Only `/oc:verify-fix` takes `--deep`.
 
 | Call | What it does |
 |---|---|
 | `/oc:verify [target]` | Reviews and writes a report. Changes no code. |
+| `/oc:verify --deep [target]` | Same, with the six `pr-review-toolkit` reviewers added. |
 | `/oc:submit-review verify-{timestamp}` | Writes the findings of that run as a comment for the PR author, and offers to open it on GitHub. |
 | `/oc:submit-review <target>` | Runs `/oc:verify` first, then writes the comment. |
 | `/oc:submit-review` | Lists the three newest runs on disk. Pick one, or run a new verify on the current branch. |
-| `/oc:verify-fix [target]` | Reviews, then fixes and commits each finding without stopping. It asks its questions at the end. It never pushes. |
-| `/oc:verify-fix -i [target]` | Shows the plan and waits for approval. Then shows each fix with its commit message, and commits it when you approve. |
-| `/oc:verify-fix --resume verify-{timestamp}` | Continues an interrupted verify-fix run. |
+| `/oc:verify-fix [target]` | Lists the three newest runs on disk. Pick one, or run a new review of the target. Then fixes and commits each finding without stopping. It asks its questions at the end. It never pushes. |
+| `/oc:verify-fix -i [target]` | Goes through the findings one at a time. For each one, it gives its assessment and waits for your decision. Then it shows the fix with its commit message, and commits it when you approve. |
+| `/oc:verify-fix --deep [target]` | Same as `/oc:verify-fix [target]`. A new review adds the six `pr-review-toolkit` reviewers. |
+| `/oc:verify-fix --resume verify-{timestamp}` | Fixes the findings of that run. Continues its fixes if the run already has them. |
 
 The target is a PR number or URL, a commit hash, a range `a..b`, or nothing for the current branch. A commit hash is inclusive.
 
