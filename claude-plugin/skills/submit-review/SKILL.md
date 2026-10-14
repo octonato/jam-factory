@@ -1,9 +1,9 @@
 ---
 name: submit-review
 disable-model-invocation: true
-description: Turns an /oc:verify report into a PR comment. The comment holds only the findings and their severity. Pass verify-{timestamp} to use a run on disk. Pass a target to run /oc:verify first. Pass nothing to pick a run from a list. It offers to open the comment on GitHub. It never posts the comment.
+description: Turns an /oc:verify report into a PR comment. The comment holds only the findings and their severity. It drops findings that comments on the PR already report. Pass verify-{timestamp} to use a run on disk. Pass a target to run /oc:verify first. Pass nothing to pick a run from a list. It offers to open the comment on GitHub. It never posts the comment.
 argument-hint: [verify-{timestamp} | PR number or URL | commit hash (inclusive) | range a..b | empty to pick a run]
-allowed-tools: Bash(date *), Bash(find *), Bash(*/skills/submit-review/open-comment.sh *)
+allowed-tools: Bash(date *), Bash(find *), Bash(*/skills/submit-review/open-comment.sh *), Bash(*/skills/submit-review/fetch-comments.sh *)
 effort: xhigh
 ---
 

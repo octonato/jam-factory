@@ -28,7 +28,8 @@ Leave out:
 Write the `must-fix` findings first, then the `should-fix` findings, then the `nit` findings. Write each one in this shape:
 
 ```markdown
-### [<severity>] <short title>
+**[<severity>]**
+<short title>
 
 `<full path from the repository root>:<line>`
 
@@ -51,15 +52,40 @@ If step 1 picks no finding, write no file. Tell me there are no findings and sto
 Give me the path of the file and the number of findings.
 If the report's `pr` is `none`, stop here.
 Otherwise, ask whether to open it as a PR comment on GitHub.
+If I decline, stop here.
 
-If I approve, run this command with `dangerouslyDisableSandbox: true`:
+## 4. Drop the findings already on the PR
+
+Run this command with the report's `repo` and `pr`, with `dangerouslyDisableSandbox: true`:
+
+```
+${CLAUDE_PLUGIN_ROOT}/skills/submit-review/fetch-comments.sh <repo> <pr>
+```
+
+It prints every PR comment, review body and inline review comment, from any author.
+If it fails, show me the error and stop.
+
+Remove a finding from `{run directory}/submit.md` when a comment already reports the same problem in the same code.
+Match on the problem, not on the wording.
+A comment on the same line about a different problem is not a match.
+When you are unsure, keep the finding and tell me about the doubt.
+
+List the removed findings for me. For each one, give its title and the link of the comment that covers it.
+
+If you removed at least one finding, make `(duplicates removed)` the first line of `submit.md`, followed by a blank line. Add it only once.
+
+If no finding is left, tell me the PR comments already cover every finding and stop.
+
+## 5. Open the comment
+
+Run this command with `dangerouslyDisableSandbox: true`:
 
 ```
 ${CLAUDE_PLUGIN_ROOT}/skills/submit-review/open-comment.sh <number> {run directory}/submit.md
 ```
 
 The script copies the comment to the clipboard and opens the comment form.
-Then tell me the comment is on the clipboard, ready to paste.
+Then tell me the comment is on the clipboard, ready to paste, and how many findings it holds.
 
 If the command fails, give me the same command to run myself, prefixed with `! `.
 
