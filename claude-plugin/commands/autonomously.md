@@ -54,13 +54,21 @@ If the build, the tests or the formatter check fail, fix the cause and run them 
 
 ### 4. Commit
 
-Stage only the files the phase changed. Never stage `.nogit/`.
+The project may hold subprojects, each with its own git repository. Find every repository the phase changed: run `git status --porcelain` in the working directory, and in each folder below it that holds a `.git` entry. Commit in each one.
 
-Write the commit message:
+In each repository, stage only the files the phase changed. Never stage `.nogit/`.
 
-- The subject is `phase N: {what the phase does}`, in the imperative, under 72 characters.
-- The body is a short paragraph that explains the change for a reader who has not seen this session. Do not repeat the subject.
-- Use a list in the body when the phase has several separate parts.
+Write the commit message for each repository. I squash the commits of a task into its first one, so the first commit carries the final message.
+
+- **Phase 0** is the first commit this task makes in that repository. It describes the whole task, not only this phase.
+  - The subject is a Conventional Commit: `{type}({scope}): {summary}`, in the imperative, under 72 characters. The type is one of `feat`, `fix`, `docs`, `refactor`, `perf`, `test`, `build`, `ci` and `chore`. The scope is optional.
+  - The body explains the whole change for a reader who has not seen this session.
+- **Later commits** in that repository have the subject `phase N: {what the phase does}`, in the imperative, under 72 characters. `N` counts this task's commits in that repository, from 1. The body explains this phase only.
+
+For every message:
+
+- Do not repeat the subject in the body.
+- Use a list in the body when the change has several separate parts.
 - Put code names in backticks: classes, methods, fields, files and commands.
 - Follow the plain-English rules in my CLAUDE.md.
 - Add no `Co-Authored-By` line.

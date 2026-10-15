@@ -19,7 +19,8 @@ directory. Write it only in file mode. Run a mutation check in a throwaway workt
 **Evidence** describes how.
 Re-running a build or a test to verify is fine and encouraged.
 
-Do NOT read, list or search anything under `.nogit/`. You only write there.
+Do NOT read, list or search anything under `.nogit/`, or under `$FACTORY_ROOT`
+when it is set. You only write in the run directory.
 
 ## Input
 
@@ -32,9 +33,8 @@ The prompt gives you:
   only in a throwaway worktree, and say so under Verification.
 - **The original problem**: what the change was asked to solve.
 - **The output mode**: `file` or `chat`. The default is `file`.
-- **The run directory**: `.nogit/verify-{timestamp}/` in the repository root, in
-  file mode. If the prompt gives none, run `date +%Y%m%d-%H%M%S` and use
-  `.nogit/verify-{its output}/`.
+- **The run directory**, in file mode. If the prompt gives none, run
+  `date +%Y%m%d-%H%M%S` and use `.nogit/verify-{its output}/` in the repository root.
 
 ## What to do
 1. Read the log and the full diff. Read the surrounding code where you need it.

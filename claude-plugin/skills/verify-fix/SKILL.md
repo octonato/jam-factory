@@ -1,8 +1,8 @@
 ---
 name: verify-fix
 disable-model-invocation: true
-description: Fix the findings of an /oc:verify run, each in its own commit, autonomously by default or one at a time with -i. Pass --resume verify-{timestamp} to use a run on disk. Otherwise pick a run from a list, or run a new review. Add --deep to a new review to also run the pr-review-toolkit reviewers. Never pushes.
-argument-hint: [-i] [--deep] [PR number or URL | commit hash (inclusive) | range a..b | empty for the current branch] [--resume verify-{timestamp}]
+description: Fix the findings of an /oc:verify run, each in its own commit, autonomously by default or one at a time with -i. Pass --resume verify-{timestamp} to use a run on disk. Otherwise pick a run from a list, or run a new review. Never pushes.
+argument-hint: [-i] [PR number or URL | commit hash (inclusive) | range a..b | empty for the current branch] [--resume verify-{timestamp}]
 allowed-tools: Bash(date *), Bash(find *)
 effort: xhigh
 ---
@@ -24,7 +24,6 @@ Strip the flags out of `$ARGUMENTS` before reading the rest as the target.
 - **`-i` / `--interactive`:** go through the findings with me one at a time. For each finding, give me your assessment and wait for my decision. Then fix it, show me the fix with its commit message, and commit only when I approve it.
 - **`--resume verify-{timestamp}`:** use the run in `.nogit/verify-{timestamp}/`. Ignore the run timestamp above.
 - **No `--resume verify-{timestamp}`:** pick a run, as **Pick a run** describes. A bare `--resume` counts as no run name.
-- **`--deep`:** a new review runs at the `deep` depth. Without it, a new review runs at the `standard` depth. A run on disk keeps the review it has. If I pass `--deep` and use a run on disk, tell me the flag has no effect.
 
 ## Pick a run
 
@@ -57,7 +56,7 @@ The working tree must be clean, apart from `.nogit/`. If it is not, list the cha
 
 ## Review
 
-For a new review, follow `review.md` from start to end, with the target, the run directory and the review depth. Then build `fix.md` from `report.md`, as `state.md` describes. Set `mode` in the state file header.
+For a new review, follow `review.md` from start to end, with the target and the run directory. Then build `fix.md` from `report.md`, as `state.md` describes. Set `mode` in the state file header.
 
 For a run on disk without `fix.md`, skip the review. Compare the report's `head` with the short hash of `HEAD` in the report's `repo`. If they differ, tell me both hashes and ask whether to continue. The locations may point at moved code. Then build `fix.md` from `report.md`, set `mode`, and go to the plan.
 

@@ -1,8 +1,8 @@
 # Verify
 
-This procedure reviews a target and writes the findings to `report.md` in the run directory. The caller gives the target, the run directory and the review depth. The depth is `deep` when the caller passes `--deep`, and `standard` otherwise.
+This procedure reviews a target and writes the findings to `report.md` in the run directory. The caller gives the target and the run directory. The caller may also give a problem statement.
 
-Read nothing under `.nogit/` outside the run directory.
+Read nothing under `.nogit/` outside the run directory. When `$FACTORY_ROOT` is set, read nothing under it outside the run directory.
 
 ## 1. Resolve the target
 
@@ -19,7 +19,7 @@ If the diff is empty, say `Nothing to review.` and stop.
 
 If `git status` shows uncommitted changes, tell me they are not part of the review.
 
-Run `mkdir -p {run directory}`.
+Run `mkdir -p {run directory}/reviews`.
 
 ## 2. Run the reviewers
 
@@ -27,12 +27,12 @@ Each reviewer runs as an agent on a fresh context. Pass it only what this step l
 
 Dispatch the reviewers **in parallel**, in the same message, over the same diff.
 
-Every depth runs these two:
+The base reviewers:
 
 1. `oc:independent-reviewer`: an independent review against the original problem
 2. `superpowers:requesting-code-review`: a code review against the requirements
 
-The `deep` depth adds these six:
+The extra reviewers, from `pr-review-toolkit`. They run only when I pick them in step 4:
 
 3. `pr-review-toolkit:code-reviewer`: bugs, logic errors and project guideline violations
 4. `pr-review-toolkit:pr-test-analyzer`: missing tests and weak test coverage
@@ -41,27 +41,65 @@ The `deep` depth adds these six:
 7. `pr-review-toolkit:type-design-analyzer`: types that fail to express or enforce their invariants
 8. `pr-review-toolkit:code-simplifier`: code that could be simpler
 
+### Pick the base reviewers
+
+Count the changed lines: the insertions plus the deletions that `git diff --shortstat` prints for the target.
+
+- **Under 300 lines**: run one base reviewer, picked at random. Run `echo $((RANDOM % 2))`. On `0`, run `oc:independent-reviewer`. On `1`, run `superpowers:requesting-code-review`.
+- **300 lines or more**: run both.
+
+Record each reviewer with one line on why it runs. For example: `random pick, 42 changed lines`, or `342 changed lines`. The report lists them under **Reviewers**.
+
+### List the extra reviewer candidates
+
+Read the diff. A reviewer is a candidate for each row that matches:
+
+| The diff | Candidate |
+|---|---|
+| adds or changes tests | `pr-test-analyzer` |
+| changes production code with no test change | `pr-test-analyzer` |
+| adds or changes types, records or classes | `type-design-analyzer` |
+| adds or changes error handling, retries or fallbacks | `silent-failure-hunter` |
+| adds or changes comments or docs | `comment-analyzer` |
+| adds more than about 200 lines of production code | `code-simplifier` |
+| changes production code | `code-reviewer` |
+
+Write `{run directory}/extras.md` in this layout. Add one line per candidate, with the reason from its row. If no row matches, write no candidate lines and set `decision: none`.
+
+```markdown
+# Extra reviewers
+
+- decision: pending
+
+## Candidates
+
+- [ ] pr-test-analyzer: changes production code with no test change
+- [ ] code-reviewer: changes production code
+```
+
+### Dispatch
+
 Run each reviewer with the **Agent** tool and `effort: "xhigh"`. For reviewers 1 and 3 to 8, set `subagent_type` to its name. If the name is not available, run a **general-purpose** agent. Give that agent the reviewer's focus from the list above as its task.
+
+The problem statement is the one the caller gives. If the caller gives none, write one as Step 2 of `../independent-reviewer/SKILL.md` describes.
 
 Give `oc:independent-reviewer`:
 
 - the target and the commands to read it
-- a problem statement, written as Step 2 of `../independent-reviewer/SKILL.md` describes
+- the problem statement
 - the `file` output mode
-- the run directory
+- `{run directory}/reviews/` as the folder to write into
 
 For reviewer 2, load the `superpowers:requesting-code-review` skill with the **Skill** tool. Use only its `code-reviewer.md` template. Skip its steps on acting on feedback. Dispatch a **general-purpose** agent with the template's prompt. Fill the placeholders:
 
 - `DESCRIPTION`: the PR title, or the commit subjects in the range
-- `PLAN_OR_REQUIREMENTS`: the same problem statement you give `oc:independent-reviewer`
+- `PLAN_OR_REQUIREMENTS`: the problem statement
 - `BASE_SHA` and `HEAD_SHA`: the two ends of the diff range. For a PR or the current branch, `BASE_SHA` is the merge base.
 
 Add to its prompt:
 
-- do not read, list or search anything under `.nogit/`
+- do not read, list or search anything under `.nogit/`, or under `$FACTORY_ROOT` when it is set
 - the **Finding rules** section below, word for word
-
-In step 3, map its `Critical` issues to `must-fix`, `Important` to `should-fix` and `Minor` to `nit`.
 
 Tell reviewers 3 to 8:
 
@@ -69,11 +107,15 @@ Tell reviewers 3 to 8:
 - to return located findings, each with a severity, a location and a suggested fix
 - the **Finding rules** section below, word for word
 - not to edit or write any file
-- not to read, list or search anything under `.nogit/`
+- not to read, list or search anything under `.nogit/`, or under `$FACTORY_ROOT` when it is set
 
 `code-simplifier` edits code by default, so tell it to report its suggestions as findings.
 
-Wait for all reviewers to finish.
+### Save each review
+
+`oc:independent-reviewer` writes `reviews/independent-review.md` itself. Save every other review the moment its reviewer returns. Don't wait for the others. Write its output verbatim to `{run directory}/reviews/{reviewer}.md`. Use the name after the plugin prefix as `{reviewer}`. For example: `requesting-code-review.md`, `pr-test-analyzer.md`.
+
+Wait for all reviewers to finish. Then check that `reviews/` holds one file per reviewer that ran.
 
 ### Finding rules
 
@@ -98,62 +140,26 @@ Give evidence for each `must-fix` and `should-fix` finding: a concrete failing s
 
 Give the full path from the repository root on the first mention of a file. After that, use the file name and the line. These rules override the citing rules in `CLAUDE.md`.
 
-## 3. Merge
+## 3. Write the report
 
-- Merge findings that share one root cause. Keep the clearest wording and list all sources.
-- Sort by severity, worst first, then by file and line.
-- Number them `F1`, `F2`, and so on in that order. The IDs never change after this step.
+Run the `oc:report-writer` agent with the **Agent** tool and `effort: "xhigh"`. If the name is not available, find its definition under the plugin's `agents/` folder and run a **general-purpose** agent with that file's body as the prompt. Pass it only:
 
-The severities are `must-fix`, `should-fix` and `nit`. Map other scales to the closest one.
+- the target and the commands to read it
+- the run directory
+- the reviewers that ran, each with why it ran
+- the **Finding rules** section above, word for word
 
-Add the questions from `oc:independent-reviewer` under **Open questions**.
+Pass nothing else from this session. The agent merges the reviews, checks each finding against the code, and writes `{run directory}/report.md`.
 
-## 4. Check and triage
+When it finishes, check that `report.md` exists. If it does not, tell me and stop.
 
-Read the code for every finding. Then apply the **Finding rules**.
+## 4. Extra reviewers
 
-- If the code does not confirm the finding, move it under **Dropped** with what the code shows.
-- If the finding fails a rule, move it under **Dropped** with the number of the rule it fails.
-- If a design concern fails rule 4 but still matters, add it under **Open questions** too.
-- If a `must-fix` or `should-fix` finding has no evidence, find the evidence or lower it to `nit`.
+Run this step only when the caller asks for it. `extras.md` holds the decision. Re-read it first: I may have edited it.
 
-Some findings raise a behaviour question that only I can answer. For example: "should a cancelled stream still record the interaction?" Add each one under **Open questions**, linked to its finding.
+- **`decision: none`**: skip this step.
+- **`decision: pending`**: show me the report's counts per severity. Then ask me with **AskUserQuestion** which candidates to run, with `multiSelect: true`. Offer one option per candidate, with its reason as the description. Split them over several questions when there are more than four. Tick the ones I pick in `extras.md`. Set `decision: chosen` when I pick any, and `decision: none` otherwise.
+- **`decision: chosen`**: run the ticked candidates.
 
-## 5. Write the report
+To run them, dispatch each ticked candidate that has no file in `reviews/` yet, as **Dispatch** and **Save each review** describe. Record each one with the reason `picked as an extra`. Then run step 3 again with every reviewer that ran. The new `report.md` replaces the old one.
 
-Write `{run directory}/report.md` in this layout. Keep the field names exactly as shown. Leave a section empty when it has no entries, and keep its heading.
-
-```markdown
-# Verify: {target}
-
-- target: {PR #5726 | 6e77038^..HEAD | 6e77038..a1b2c3d | feature/foo vs main}
-- repo: {absolute path of the repository}
-- branch: {local branch}
-- head: {short hash of HEAD}
-- pr: {number | none}
-- depth: {standard | deep}
-- run: {run directory}
-
-## Findings
-
-### F1: {short title}
-- severity: **{must-fix | should-fix | nit}**
-- location: {full path from the repository root}:{line}
-- source: **{reviewer names}**
-
-{The problem, in one to three sentences.}
-
-**Evidence:** {the failing scenario, the mutation and its result, or the command output. Only for must-fix and should-fix.}
-
-**Suggested fix:** {one short paragraph}
-
-## Dropped
-
-- F7: {title}: {what the code shows | fails rule {n}: {why}}
-
-## Open questions
-
-- Q1 (F4): {question}
-```
-
-Follow the "How to write" rules in my CLAUDE.md. Cite files as the **Finding rules** say. Ignore the citing rules in my CLAUDE.md.

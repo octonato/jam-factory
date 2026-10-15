@@ -1,0 +1,360 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Factory</title>
+<style>
+  :root {
+    --bg: #f7f7f5;
+    --surface: #ffffff;
+    --ink: #1a1a19;
+    --ink-2: #55554f;
+    --muted: #8a8a82;
+    --line: #e2e2dc;
+    --good: #0ca30c;
+    --warning: #fab219;
+    --critical: #d03b3b;
+    --accent: #2f6fdb;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #121211;
+      --surface: #1a1a19;
+      --ink: #ededea;
+      --ink-2: #b5b5ae;
+      --muted: #85857e;
+      --line: #2e2e2b;
+      --accent: #6c9cf0;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --bg: #121211;
+    --surface: #1a1a19;
+    --ink: #ededea;
+    --ink-2: #b5b5ae;
+    --muted: #85857e;
+    --line: #2e2e2b;
+    --accent: #6c9cf0;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+
+  header {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    padding: 16px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  header h1 { margin: 0; font-size: 18px; }
+  #status { color: var(--muted); font-size: 12px; }
+  #problems { color: var(--critical); padding: 0 16px; }
+
+  #board {
+    display: grid;
+    grid-template-columns: repeat(7, minmax(180px, 1fr));
+    gap: 12px;
+    padding: 16px;
+    overflow-x: auto;
+  }
+
+  .column h2 {
+    margin: 0 0 8px;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--ink-2);
+  }
+
+  .card {
+    display: block;
+    width: 100%;
+    margin-bottom: 8px;
+    padding: 10px 12px;
+    text-align: left;
+    color: inherit;
+    font: inherit;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-left: 4px solid var(--line);
+    border-radius: 6px;
+    cursor: pointer;
+  }
+
+  .card:hover { border-color: var(--accent); }
+  .card.waiting { border-left-color: var(--warning); }
+  .card.blocked { border-left-color: var(--critical); }
+  .card.done { border-left-color: var(--good); }
+
+  .card .title { font-weight: 600; }
+  .card .repo { color: var(--muted); font-weight: 400; }
+  .card .meta { color: var(--ink-2); font-size: 12px; margin-top: 4px; }
+
+  .tag {
+    display: inline-block;
+    margin-top: 6px;
+    margin-right: 4px;
+    padding: 1px 6px;
+    font-size: 11px;
+    color: var(--ink);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+  }
+
+  .tag .icon { margin-right: 3px; }
+  .tag.waiting .icon { color: var(--warning); }
+  .tag.blocked .icon { color: var(--critical); }
+  .tag.done .icon { color: var(--good); }
+  .tag.review.landed { border-color: var(--accent); }
+  .tag.review.pending { color: var(--muted); border-style: dashed; }
+
+  #detail {
+    display: none;
+    margin: 0 16px 16px;
+    padding: 16px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+  }
+
+  #detail.open { display: block; }
+  #detail h3 { margin: 0 0 8px; }
+  #files { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+
+  #files button {
+    padding: 2px 8px;
+    color: var(--ink);
+    font: inherit;
+    font-size: 12px;
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    cursor: pointer;
+  }
+
+  #files button.selected { border-color: var(--accent); }
+
+  #content {
+    margin: 0;
+    max-height: 60vh;
+    overflow: auto;
+    white-space: pre-wrap;
+    font: 12px/1.5 ui-monospace, Menlo, monospace;
+  }
+
+  @media (max-width: 640px) {
+    #board { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Factory</h1>
+  <span id="status">loading…</span>
+</header>
+<div id="problems"></div>
+<main id="board"></main>
+<section id="detail">
+  <h3 id="detail-title"></h3>
+  <div id="files"></div>
+  <pre id="content"></pre>
+</section>
+
+<script>
+const POLL_MS = 2000
+const STAGES = ['spec', 'plan', 'implement', 'verify', 'triage', 'done', 'blocked']
+const STATUS = {
+  triage: { cls: 'waiting', icon: '●', label: 'waiting for you' },
+  blocked: { cls: 'blocked', icon: '■', label: 'blocked' },
+  done: { cls: 'done', icon: '✓', label: 'done' },
+}
+
+const $ = (id) => document.getElementById(id)
+let openJob = null
+let openFile = null
+
+function escape(text) {
+  return String(text).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)
+}
+
+async function fetchText(url) {
+  const res = await fetch(url, { cache: 'no-store' })
+  if (!res.ok) throw new Error(`${res.status} ${url}`)
+  return res.text()
+}
+
+// Lists the entries of a directory from the server's HTML listing.
+async function listDir(url) {
+  let html
+  try {
+    html = await fetchText(url)
+  } catch {
+    return []
+  }
+  const doc = new DOMParser().parseFromString(html, 'text/html')
+  return [...doc.querySelectorAll('a')]
+    .map((a) => decodeURIComponent(a.getAttribute('href')))
+    .filter((href) => !href.startsWith('?') && !href.startsWith('/') && !href.startsWith('.'))
+}
+
+async function loadJobs() {
+  const repos = (await listDir('./')).filter((e) => e.endsWith('/'))
+  const jobs = []
+  const problems = []
+
+  for (const repo of repos) {
+    const ids = (await listDir(`${repo}jobs/`)).filter((e) => e.endsWith('/'))
+    for (const id of ids) {
+      const dir = `${repo}jobs/${id}`
+      try {
+        const job = JSON.parse(await fetchText(`${dir}job.json`))
+        job.dir = dir
+        if (job.stage === 'verify' && job.round > 0) {
+          job.reviews = (await listDir(`${dir}round-${job.round}/reviews/`))
+            .filter((e) => e.endsWith('.md'))
+            .map((e) => e.replace(/\.md$/, ''))
+        }
+        jobs.push(job)
+      } catch (err) {
+        problems.push(`${dir}: ${err.message}`)
+      }
+    }
+  }
+  return { jobs, problems }
+}
+
+function tags(job) {
+  const out = []
+  const status = STATUS[job.stage]
+  if (status) {
+    out.push(`<span class="tag ${status.cls}"><span class="icon">${status.icon}</span>${status.label}</span>`)
+  }
+
+  const c = {
+    tasksOpen: 0, tasksDone: 0, mustFix: 0, shouldFix: 0, nit: 0, dismissed: 0, deferred: 0, issued: 0,
+    ...job.counts,
+  }
+  if (job.stage === 'implement') out.push(`<span class="tag">${c.tasksDone}/${c.tasksDone + c.tasksOpen} tasks</span>`)
+  if (job.stage === 'triage') {
+    out.push(`<span class="tag">${c.mustFix} must-fix</span>`)
+    out.push(`<span class="tag">${c.shouldFix} should-fix</span>`)
+    out.push(`<span class="tag">${c.nit} nit</span>`)
+  }
+  if (job.stage === 'verify') {
+    for (const name of job.reviews || []) out.push(`<span class="tag review landed">${escape(name)}</span>`)
+    if (!job.reviews || job.reviews.length === 0) out.push('<span class="tag review pending">reviewers running</span>')
+  }
+  if (job.stage === 'done' && c.deferred > c.issued) {
+    out.push(`<span class="tag waiting"><span class="icon">●</span>${c.deferred - c.issued} deferred without issue</span>`)
+  }
+  if (job.stage === 'blocked' && job.blocked) {
+    out.push(`<div class="meta">${escape(job.blocked.stage)}: ${escape(job.blocked.reason)}</div>`)
+  }
+  return out.join('')
+}
+
+function card(job) {
+  const status = STATUS[job.stage]
+  const cls = status ? status.cls : ''
+  const round = job.round > 0 ? `round ${job.round}` : 'no round yet'
+  const last = job.lastRound ? ' · last round' : ''
+  return `
+    <button class="card ${cls}" data-dir="${escape(job.dir)}">
+      <div class="title"><span class="repo">${escape(job.repo)} /</span> ${escape(job.id)}</div>
+      <div class="meta">${round}${last} · ${escape(job.branch)} → ${escape(job.base)}</div>
+      ${tags(job)}
+    </button>`
+}
+
+function render(jobs) {
+  const byStage = Object.fromEntries(STAGES.map((s) => [s, []]))
+  const problems = []
+  for (const job of jobs) {
+    if (byStage[job.stage]) byStage[job.stage].push(job)
+    else problems.push(`${job.repo}/${job.id}: unknown stage "${job.stage}"`)
+  }
+
+  $('board').innerHTML = STAGES.map((stage) => `
+    <section class="column">
+      <h2>${stage} (${byStage[stage].length})</h2>
+      ${byStage[stage].sort((a, b) => (b.updated || '').localeCompare(a.updated || '')).map(card).join('')}
+    </section>`).join('')
+
+  for (const el of document.querySelectorAll('.card')) {
+    el.addEventListener('click', () => openDetail(jobs.find((j) => j.dir === el.dataset.dir)))
+  }
+  return problems
+}
+
+async function jobFiles(job) {
+  const entries = await listDir(job.dir)
+  const files = entries.filter((e) => e.endsWith('.md') || e === 'job.json')
+  const rounds = entries.filter((e) => /^round-\d+\/$/.test(e))
+  for (const round of rounds.sort((a, b) => parseInt(a.slice(6)) - parseInt(b.slice(6)))) {
+    for (const f of await listDir(job.dir + round)) if (f.endsWith('.md')) files.push(round + f)
+    for (const f of await listDir(`${job.dir}${round}reviews/`)) if (f.endsWith('.md')) files.push(`${round}reviews/${f}`)
+  }
+  return files
+}
+
+async function openDetail(job) {
+  if (!job) return
+  openJob = job
+  openFile = openFile && openFile.job === job.dir ? openFile : null
+  $('detail').classList.add('open')
+  $('detail-title').textContent = `${job.repo} / ${job.id} · ${job.stage}`
+
+  const files = await jobFiles(job)
+  const selected = openFile ? openFile.path : files.includes('spec.md') ? 'spec.md' : files[0]
+  $('files').innerHTML = files
+    .map((f) => `<button data-path="${escape(f)}" class="${f === selected ? 'selected' : ''}">${escape(f)}</button>`)
+    .join('')
+  for (const el of $('files').querySelectorAll('button')) {
+    el.addEventListener('click', () => {
+      openFile = { job: job.dir, path: el.dataset.path }
+      openDetail(job)
+    })
+  }
+
+  if (selected) {
+    try {
+      $('content').textContent = await fetchText(job.dir + selected)
+    } catch (err) {
+      $('content').textContent = err.message
+    }
+  } else {
+    $('content').textContent = 'No files yet.'
+  }
+}
+
+async function poll() {
+  try {
+    const { jobs, problems } = await loadJobs()
+    problems.push(...render(jobs))
+    $('problems').innerHTML = problems.map((p) => `<div>${escape(p)}</div>`).join('')
+    $('status').textContent = `${jobs.length} jobs · ${new Date().toLocaleTimeString()}`
+    if (openJob) {
+      const fresh = jobs.find((j) => j.dir === openJob.dir)
+      if (fresh) openJob = fresh
+    }
+  } catch (err) {
+    $('status').textContent = `error: ${err.message}`
+  }
+}
+
+poll()
+setInterval(poll, POLL_MS)
+</script>
+</body>
+</html>
