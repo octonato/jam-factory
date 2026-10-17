@@ -147,6 +147,27 @@
   .back { white-space: nowrap; text-decoration: none; }
   .back:hover { text-decoration: underline; }
 
+  .list-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .job-page .archive { align-self: start; }
+
+  .archive {
+    padding: 4px 12px;
+    color: var(--ink-2);
+    font: inherit;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    cursor: pointer;
+  }
+
+  .archive:hover { color: var(--critical); border-color: var(--critical); }
+
   .pane {
     grid-column: 2;
     align-self: stretch;
@@ -518,6 +539,8 @@ async function loadJobs() {
       const dir = `${repo}jobs/${id}`
       try {
         const job = JSON.parse(await fetchText(`${dir}job.json`))
+        if (job.archived === true) continue
+
         job.dir = dir
         jobs.push(job)
       } catch (err) {
@@ -609,12 +632,25 @@ function rowContent(job) {
 
 function renderList() {
   const jobs = [...state.jobs].sort((a, b) => String(b.updated || '').localeCompare(String(a.updated || '')))
-  const rows = jobs.map((job) => `<a class="row ${tint(job)}" href="${escape(jobHref(job))}">${rowContent(job)}</a>`).join('')
+  const rows = jobs.map((job) => `
+    <div class="list-row">
+      <a class="row ${tint(job)}" href="${escape(jobHref(job))}">${rowContent(job)}</a>
+      <button type="button" class="archive" data-dir="${escape(job.dir)}">Archive</button>
+    </div>`).join('')
   const html = `<div class="column rows">${rows || '<p class="empty">No jobs yet.</p>'}</div>`
   if (listView.el === $('page').firstElementChild && listView.html === html) return
 
   $('page').innerHTML = html
   listView = { html, el: $('page').firstElementChild }
+  listView.el.addEventListener('click', onArchiveRow)
+}
+
+function onArchiveRow(event) {
+  const button = event.target.closest('button.archive')
+  if (!button) return
+
+  const job = state.jobs.find((j) => j.dir === button.dataset.dir)
+  if (job) archiveJob(job)
 }
 
 function buildTree(paths) {
@@ -853,6 +889,21 @@ async function showFile(job, path, seq) {
   if (!sameFile) $('view').scrollTop = 0
 }
 
+async function archiveJob(job) {
+  if (!confirm(`Archive ${job.repo}/${job.id}? The dashboard will no longer list it.`)) return
+
+  try {
+    const res = await fetch(`archive/${encodeURIComponent(job.repo)}/${encodeURIComponent(job.id)}`, { method: 'POST' })
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
+  } catch (err) {
+    alert(`Could not archive ${job.repo}/${job.id}: ${err.message}`)
+    return
+  }
+
+  location.hash = '#/'
+  poll()
+}
+
 async function renderJobPage(job, path) {
   const seq = renderSeq
   const row = rowContent(job)
@@ -862,6 +913,7 @@ async function renderJobPage(job, path) {
       <div class="column job-page">
         <a class="back" href="#/">← Jobs</a>
         <div class="row ${tint(job)}" id="job-row">${row}</div>
+        <button type="button" class="archive" id="archive">Archive</button>
         <div class="pane">
           <nav id="tree"></nav>
           <section id="view"></section>
@@ -869,6 +921,7 @@ async function renderJobPage(job, path) {
       </div>`
     $('tree').addEventListener('toggle', onToggle, true)
     $('view').addEventListener('click', onPickRound)
+    $('archive').addEventListener('click', () => archiveJob(job))
     jobView = { dir: job.dir, el: $('page').firstElementChild, row, files: null }
     lastView = { key: null, text: null }
     pickedRound = null

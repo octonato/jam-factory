@@ -35,6 +35,7 @@ Run every agent in this skill with `effort: "xhigh"`.
 If the current branch is empty, HEAD is detached. Tell me to switch to a feature branch and stop.
 
 - **`issues`**: go to **Issues**.
+- **The job folder holds `job.json` with `archived: true`**: tell me the job is archived and stop.
 - **The job folder holds `job.json`**: go to **Resume**. If I passed anything else, tell me the job already exists and ignore it.
 - **Anything else**: go to **New job**.
 
@@ -50,7 +51,7 @@ If the current branch is empty, HEAD is detached. Tell me to switch to a feature
    - **An issue number, `#n` or an issue URL**: run `gh issue view {issue} --json number,title,body,url`. The request is the issue's title, URL and body.
    - **Anything else**: the request is my text, verbatim.
 6. Write `{job folder}/request.md` with the request, as `state.md` shows.
-7. Write `{job folder}/job.json` with this worktree, the current branch and the base. Set `stage: spec`, `round: 0`, `lastRound: false`, every count `0` and `blocked: null`. The Write tool creates the folders.
+7. Write `{job folder}/job.json` with this worktree, the current branch and the base. Set `stage: spec`, `round: 0`, `lastRound: false`, every count `0`, `blocked: null` and `archived: false`. The Write tool creates the folders.
 8. Go to **Spec**.
 
 ## Resume

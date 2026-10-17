@@ -15,4 +15,4 @@ cp "$here/dashboard.html" "$here/marked.min.js" "$here/purify.min.js" "$root/"
 port="$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["port"])' "$config")"
 
 echo "Factory dashboard: http://localhost:$port/dashboard.html"
-exec python3 -m http.server "$port" --bind 127.0.0.1 --directory "$root"
+exec python3 "$here/serve.py" "$root" "$port"

@@ -28,7 +28,7 @@ Write every file in the job folder with the **Write** or **Edit** tool, never wi
 
 ## job.json
 
-Only the factory skill writes it. Rewrite the whole file on every change, and set `updated` to the current UTC time.
+Only the factory skill writes it. The one exception is the dashboard's Archive button, which sets `archived` and `updated`. Rewrite the whole file on every change, and set `updated` to the current UTC time.
 
 ```json
 {
@@ -46,6 +46,7 @@ Only the factory skill writes it. Rewrite the whole file on every change, and se
     "dismissed": 4, "deferred": 1, "issued": 0
   },
   "blocked": null,
+  "archived": false,
   "updated": "2026-10-15T14:02:11Z"
 }
 ```
@@ -61,6 +62,7 @@ Only the factory skill writes it. Rewrite the whole file on every change, and se
 - `dismissed`, `deferred`: the entries in `decisions.md` and `deferred.md`.
 - `issued`: the entries in `deferred.md` with an issue URL.
 - `blocked`: `null`, or `{ "stage": "<stage>", "reason": "<text>" }`.
+- `archived`: `true` when the job is archived. The dashboard hides archived jobs. A missing field means `false`.
 
 ## request.md
 
