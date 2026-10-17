@@ -21,8 +21,8 @@ If the session holds no agreed implementation, say so and stop. Don't guess a ta
 
 When the implementation is done, dispatch both reviewers **in parallel** — in the same message — over the **uncommitted changes**: staged, unstaged, and untracked files from `git status`.
 
-1. **`oc:comment-reviewer`** — content of added or edited code comments.
-2. **`oc:proof-reader`** — English of added or edited comments and documentation.
+1. **`jam:comment-reviewer`** — content of added or edited code comments.
+2. **`jam:proof-reader`** — English of added or edited comments and documentation.
 
 Use the **Agent** tool with `subagent_type` set to the agent's name. If the name isn't available, find its definition under the plugin's `agents/` folder and run a **general-purpose** agent with that file's body as the prompt. Tell each agent the scope in one sentence (`uncommitted changes`). Don't add instructions of your own.
 
@@ -40,7 +40,7 @@ If the merged list is empty, skip to the report.
 
 ## Fix
 
-Hand the merged findings, **verbatim and numbered**, to **`oc:fixer`** in one Agent call. Don't apply edits yourself and don't reword the findings. Wait for it to finish.
+Hand the merged findings, **verbatim and numbered**, to **`jam:fixer`** in one Agent call. Don't apply edits yourself and don't reword the findings. Wait for it to finish.
 
 ## Report
 

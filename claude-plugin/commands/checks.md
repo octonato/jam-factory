@@ -1,9 +1,9 @@
 ---
-description: Run the session checks — comment-reviewer (comment rules) and proof-reader (plain-English rules) in parallel over the changed code — and report located findings. Changes nothing; /oc:checks-fix applies them.
+description: Run the session checks — comment-reviewer (comment rules) and proof-reader (plain-English rules) in parallel over the changed code — and report located findings. Changes nothing; /jam:checks-fix applies them.
 argument-hint: [optional commit hash to widen the scope from that commit (inclusive) to HEAD, on top of the uncommitted changes]
 ---
 
-Check what changed in this session against my writing rules. This is the **check** half, like `scalafmtCheck`: report, don't edit. `/oc:checks-fix` is the other half.
+Check what changed in this session against my writing rules. This is the **check** half, like `scalafmtCheck`: report, don't edit. `/jam:checks-fix` is the other half.
 
 What I gave you: $ARGUMENTS
 
@@ -18,8 +18,8 @@ If the scope is empty, say `Nothing to check.` and stop.
 
 Dispatch both reviewers **in parallel** — in the same message — over the same scope:
 
-1. **`oc:comment-reviewer`** — content of added or edited code comments.
-2. **`oc:proof-reader`** — English of added or edited comments and documentation.
+1. **`jam:comment-reviewer`** — content of added or edited code comments.
+2. **`jam:proof-reader`** — English of added or edited comments and documentation.
 
 Use the **Agent** tool with `subagent_type` set to the agent's name. If the name isn't available, find its definition under the plugin's `agents/` folder and run a **general-purpose** agent with that file's body as the prompt. Tell each agent the scope in one sentence (`uncommitted changes`, or `commit range <hash>^..HEAD plus uncommitted changes`). Don't add instructions of your own.
 
@@ -44,6 +44,6 @@ Otherwise print the numbered list, one finding per line, in the reviewers' own s
 2. docs/setup.md:8 — low — [prose] passive voice — "the config is read by the loader" → "The loader reads the config."
 ```
 
-Close with one line: `N findings. Run /oc:checks-fix to apply them.`
+Close with one line: `N findings. Run /jam:checks-fix to apply them.`
 
 Then stop. Don't edit, don't offer to edit, don't summarize the reviewers' transcripts.

@@ -1,6 +1,6 @@
 ---
 name: walk-through
-description: Walk-through of a code path or a set of changes, broken into logical steps. By default it saves the whole walk to .nogit/walk-through/ to read later; add -i/--interactive to walk through it one step at a time instead. Add -r/--review to run /oc:verify and the comment and plain-English checks, and fold their findings into each step.
+description: Walk-through of a code path or a set of changes, broken into logical steps. By default it saves the whole walk to .nogit/walk-through/ to read later; add -i/--interactive to walk through it one step at a time instead. Add -r/--review to run /jam:verify and the comment and plain-English checks, and fold their findings into each step.
 argument-hint: [a code path/behavior, OR a commit hash, OR a PR number] [-i|--interactive] [-r|--review]
 allowed-tools: Bash(date *)
 ---
@@ -45,8 +45,8 @@ Run verify. Read `${CLAUDE_PLUGIN_ROOT}/skills/verify/review.md` and follow it, 
 
 In the **same message** as verify's reviewers, also dispatch my two rule checks over the same diff, with `effort: "xhigh"`:
 
-- **`oc:comment-reviewer`** — content of added or edited code comments.
-- **`oc:proof-reader`** — English of added or edited comments and documentation.
+- **`jam:comment-reviewer`** — content of added or edited code comments.
+- **`jam:proof-reader`** — English of added or edited comments and documentation.
 
 Use the **Agent** tool with `subagent_type` set to the agent's name. If the name isn't available, find its definition under the plugin's `agents/` folder and run a **general-purpose** agent with that file's body as the prompt. Tell each one the scope in one sentence (`commit range <hash>^..HEAD` or `PR #<number>`). They already answer in a located shape — `file:line — severity — rule — "fragment" → fix` — so no extra contract is needed. If both flag the same `file:line`, keep one finding: join the rules with `;`, and if either fix is `delete`, the fix is `delete`.
 
@@ -69,7 +69,7 @@ For the current step:
 - **Title it** — `Step N: <what this step covers>`.
 - **Point me at the code** — give the concrete locations to open, as bare relative paths with line numbers in plain text (e.g. `src/main/scala/foo/Bar.scala:42`), following my citation rules. These are the pointers *I* navigate to. In changes mode, cite the **post-change** line so I open the file at its current state.
 - **Walk me through what's there** — explain what this code does and how it connects to the previous step and the next one. In changes mode, explain what the change does, why it's there, and how it serves the overall goal of the PR/commit — not just the mechanics of the diff. A few focused paragraphs at most. This is a guided tour, not a full exposition — surface what matters at this stop and leave the rest for my questions.
-- **Surface this step's review notes** (only if `-r`/`--review` is on) — after the explanation, under a short **⚠ Review notes** heading, list the findings bucketed to this step: each as `file:line` + severity + the one-line concern, ordered worst-first. If this step has none, say so in one line. Findings from the rule checks keep their `→ fix`, so I can apply them later with `/oc:checks-fix`. Present these as observations for me to weigh, not edits — this walk explains and flags; it doesn't change code.
+- **Surface this step's review notes** (only if `-r`/`--review` is on) — after the explanation, under a short **⚠ Review notes** heading, list the findings bucketed to this step: each as `file:line` + severity + the one-line concern, ordered worst-first. If this step has none, say so in one line. Findings from the rule checks keep their `→ fix`, so I can apply them later with `/jam:checks-fix`. Present these as observations for me to weigh, not edits — this walk explains and flags; it doesn't change code.
 - **Hand the pen back** — end by inviting me to ask questions about this step, or to say "go ahead" / "next" to move on. Close with a one-line progress marker showing how many steps remain (e.g. `Step 2 of 5 — 3 to go`).
 
 ## How the walk proceeds
@@ -85,7 +85,7 @@ After the final step, give me a short **recap** — the path (or the set of chan
 
 ## Auto mode (default): save the walk
 
-This is the **default** — it runs whenever `-i` is **not** passed. Do not walk me through it. Map the same route and gather the same `-r`/`--review` findings, if set. Write the whole walk to one file and hand me a manifest. I read it myself — or replay it with `/oc:walk-replay <slug>` — and come back with questions later.
+This is the **default** — it runs whenever `-i` is **not** passed. Do not walk me through it. Map the same route and gather the same `-r`/`--review` findings, if set. Write the whole walk to one file and hand me a manifest. I read it myself — or replay it with `/jam:walk-replay <slug>` — and come back with questions later.
 
 **The slug.** Derive `{slug}` from the target so different targets don't clash:
 
@@ -114,4 +114,4 @@ The body follows the frontmatter: the overview, then the steps, shaped as below.
 
 **Re-running a target** overwrites its file.
 
-**Then report a manifest and stop.** Print the path of the file, the step count, and each step's one-line title. Add a one-line reminder that I can page through them with `/oc:walk-replay <slug>`. Say nothing else — keep the mapped route and any findings in context so that when I reload this session and ask about a step, you can answer from where we left off. **Answer follow-up questions in the terminal, on the step I ask about; don't rewrite the file unless I ask you to.**
+**Then report a manifest and stop.** Print the path of the file, the step count, and each step's one-line title. Add a one-line reminder that I can page through them with `/jam:walk-replay <slug>`. Say nothing else — keep the mapped route and any findings in context so that when I reload this session and ask about a step, you can answer from where we left off. **Answer follow-up questions in the terminal, on the step I ask about; don't rewrite the file unless I ask you to.**

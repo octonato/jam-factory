@@ -1,5 +1,5 @@
 ---
-description: Spawn a background agent to run a task in parallel while the user keeps working — it stays alive and accessible for the user to open, read, and interact with; the main thread gets only a short launch/finish note, never the agent's report. Pass a plain task, or another slash command (e.g. /oc:subagent /oc:walk-through 247 -r) to run that command in the background.
+description: Spawn a background agent to run a task in parallel while the user keeps working — it stays alive and accessible for the user to open, read, and interact with; the main thread gets only a short launch/finish note, never the agent's report. Pass a plain task, or another slash command (e.g. /jam:subagent /jam:walk-through 247 -r) to run that command in the background.
 argument-hint: [a task to run in the background, OR a slash command with its arguments]
 ---
 
@@ -13,7 +13,7 @@ If `$ARGUMENTS` is empty, ask me what the background agent should do and stop.
 
 Look at `$ARGUMENTS`:
 
-- **If it starts with a slash command** (e.g. `/oc:walk-through 247 -r`, `/oc:save`) → the agent's job is to **run that command** with the arguments that follow it. Have the agent invoke the command through its own `Skill` tool (the `oc:*` commands are registered as skills — `/oc:walk-through` → skill `oc:walk-through`, args `247 -r`). If for some reason it can't invoke the command that way, tell it to locate the command's definition and follow it. Pass the arguments through **verbatim**, including any flags.
+- **If it starts with a slash command** (e.g. `/jam:walk-through 247 -r`, `/jam:save`) → the agent's job is to **run that command** with the arguments that follow it. Have the agent invoke the command through its own `Skill` tool (the `jam:*` commands are registered as skills — `/jam:walk-through` → skill `jam:walk-through`, args `247 -r`). If for some reason it can't invoke the command that way, tell it to locate the command's definition and follow it. Pass the arguments through **verbatim**, including any flags.
 - **Otherwise** → the agent's job is the **plain task** described in `$ARGUMENTS`. Give it the task as-is.
 
 ## How to launch it
@@ -21,7 +21,7 @@ Look at `$ARGUMENTS`:
 - Use the **Agent** tool with a **general-purpose** agent — always general-purpose, whatever the task.
 - Launch it to run **in the background** so I keep working; don't block on it. Give it a short, descriptive label naming the task — that label is how I'll find it, so make it clear.
 - After launching, tell me in **one line** what it's doing and that it's running in the background — and that I can **open the subagent to read its report or interact with it**. Then **return control to me**. Don't narrate its progress.
-- I may fire off several of these — each `/oc:subagent` is its own independent agent. Don't try to coordinate them.
+- I may fire off several of these — each `/jam:subagent` is its own independent agent. Don't try to coordinate them.
 
 ## Keep it alive so I can navigate to it
 
@@ -36,4 +36,4 @@ A brief completion notification is welcome; a report is not.
 
 - **When it completes, at most one short line** — e.g. `bg task "<label>" finished — open it to read`. **Never** paste, summarize, or quote its result into this thread, on completion or when I ask. If I ask whether it's done, a bare "still running" / "finished — open it" is the whole answer.
 - **Store the output only if the task asked for it.** If `$ARGUMENTS` says to save the output (e.g. "…and save it", "…write it down"), have the agent write it to `.nogit/bg/<slug>.md`. `<slug>` is a short kebab-case name for the task. That's the agent's doing, not a report from you.
-- If the agent ran a chained slash command that stores its own output (like `/oc:walk-through` in auto mode), that stored summary is the output — I'll read it or open the subagent. Don't echo it here.
+- If the agent ran a chained slash command that stores its own output (like `/jam:walk-through` in auto mode), that stored summary is the output — I'll read it or open the subagent. Don't echo it here.

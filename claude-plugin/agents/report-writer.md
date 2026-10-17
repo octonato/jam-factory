@@ -1,6 +1,6 @@
 ---
 name: report-writer
-description: Merges the reviews of one /oc:verify run into report.md. Reads only the run's reviews/ folder and the code. Checks each finding against the code and the finding rules, and drops the ones that fail.
+description: Merges the reviews of one /jam:verify run into report.md. Reads only the run's reviews/ folder and the code. Checks each finding against the code and the finding rules, and drops the ones that fail.
 tools: Read, Grep, Glob, Bash, Write
 model: opus
 effort: xhigh
@@ -18,7 +18,7 @@ The prompt gives you:
 
 - **The target**: a PR, a commit range or a branch against its base.
 - **The commands** to read it.
-- **The run directory**. Its `reviews/` folder holds one file per reviewer. `independent-review.md` comes from `oc:independent-reviewer`. Each other file is named after its reviewer.
+- **The run directory**. Its `reviews/` folder holds one file per reviewer. `independent-review.md` comes from `jam:independent-reviewer`. Each other file is named after its reviewer.
 - **The reviewers**: each name, with why it ran.
 - **The finding rules**.
 

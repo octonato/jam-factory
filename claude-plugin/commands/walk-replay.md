@@ -1,9 +1,9 @@
 ---
-description: Replay a walk-through saved by /oc:walk-through — present each step verbatim in the terminal, one at a time, advancing when the user says "go ahead". Presents the steps as written; it does not summarize them.
+description: Replay a walk-through saved by /jam:walk-through — present each step verbatim in the terminal, one at a time, advancing when the user says "go ahead". Presents the steps as written; it does not summarize them.
 argument-hint: [a walk-through slug (e.g. pr-247), OR a file path]
 ---
 
-I want you to **replay a walk-through** that `/oc:walk-through` saved. Present the pre-written steps to me **one at a time**, exactly as they were written. Do **not** summarize, condense, or rephrase a step — I wrote these on purpose and I want to read them **as-is**. You are the pager here, not the author.
+I want you to **replay a walk-through** that `/jam:walk-through` saved. Present the pre-written steps to me **one at a time**, exactly as they were written. Do **not** summarize, condense, or rephrase a step — I wrote these on purpose and I want to read them **as-is**. You are the pager here, not the author.
 
 What I gave you: $ARGUMENTS
 

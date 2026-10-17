@@ -1,14 +1,14 @@
 {
-  "name": "octo-stack",
+  "name": "jam-factory",
   "owner": {
     "name": "octonato"
   },
-  "description": "Claude Code plugins that keep the engineer in charge and sharp",
+  "description": "Claude Code plugins for coding jam sessions: the orchestrator keeps the tempo, the engineer leads.",
   "plugins": [
     {
-      "name": "oc",
+      "name": "jam",
       "source": "./claude-plugin",
-      "description": "Commands for code walk-throughs, GitHub, comment and prose checks, and session workflow"
+      "description": "Claude Code plugins for coding jam sessions: the orchestrator keeps the tempo, the engineer leads."
     }
   ]
 }

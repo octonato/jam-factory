@@ -1,7 +1,7 @@
 {
-  "name": "oc",
-  "description": "Commands for code walk-throughs, GitHub, comment and prose checks, and session workflow",
-  "version": "1.4.12",
+  "name": "jam",
+  "description": "Claude Code plugins for coding jam sessions: the orchestrator keeps the tempo, the engineer leads.",
+  "version": "2.0.0",
   "author": {
     "name": "octonato"
   }

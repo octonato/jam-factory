@@ -12,7 +12,7 @@ What I gave you: $ARGUMENTS
 
 Run timestamp: !`date +%Y%m%d-%H%M%S`
 
-The review runs in the `oc:independent-reviewer` agent, on a fresh context. The agent must not see this session's context. It gets the problem the change was meant to solve, and nothing about how it was solved. It forms its own judgment.
+The review runs in the `jam:independent-reviewer` agent, on a fresh context. The agent must not see this session's context. It gets the problem the change was meant to solve, and nothing about how it was solved. It forms its own judgment.
 
 ## Step 1: Resolve the target
 
@@ -47,7 +47,7 @@ Do not show me this statement before the review. Do not add your own opinion of 
 
 ## Step 3: Dispatch the reviewer
 
-Launch the `oc:independent-reviewer` agent with `effort: "xhigh"`. Pass it only these things:
+Launch the `jam:independent-reviewer` agent with `effort: "xhigh"`. Pass it only these things:
 
 - **The target**: "PR #<n> (<headRefName> into <baseRefName>)", "commits <a>..<b>", or "branch <name> against <remote>/<base>".
 - **The commands** to read it: the `git log` and `git diff` (or `gh pr diff`) commands for this target. For a PR not checked out locally, say that it must read files with `git show FETCH_HEAD:<path>`.

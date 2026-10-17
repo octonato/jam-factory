@@ -29,7 +29,7 @@ Dispatch the reviewers **in parallel**, in the same message, over the same diff.
 
 The base reviewers:
 
-1. `oc:independent-reviewer`: an independent review against the original problem
+1. `jam:independent-reviewer`: an independent review against the original problem
 2. `superpowers:requesting-code-review`: a code review against the requirements
 
 The extra reviewers, from `pr-review-toolkit`. They run only when I pick them in step 4:
@@ -45,7 +45,7 @@ The extra reviewers, from `pr-review-toolkit`. They run only when I pick them in
 
 Count the changed lines: the insertions plus the deletions that `git diff --shortstat` prints for the target.
 
-- **Under 300 lines**: run one base reviewer, picked at random. Run `echo $((RANDOM % 2))`. On `0`, run `oc:independent-reviewer`. On `1`, run `superpowers:requesting-code-review`.
+- **Under 300 lines**: run one base reviewer, picked at random. Run `echo $((RANDOM % 2))`. On `0`, run `jam:independent-reviewer`. On `1`, run `superpowers:requesting-code-review`.
 - **300 lines or more**: run both.
 
 Record each reviewer with one line on why it runs. For example: `random pick, 42 changed lines`, or `342 changed lines`. The report lists them under **Reviewers**.
@@ -83,7 +83,7 @@ Run each reviewer with the **Agent** tool and `effort: "xhigh"`. For reviewers 1
 
 The problem statement is the one the caller gives. If the caller gives none, write one as Step 2 of `../independent-reviewer/SKILL.md` describes.
 
-Give `oc:independent-reviewer`:
+Give `jam:independent-reviewer`:
 
 - the target and the commands to read it
 - the problem statement
@@ -113,7 +113,7 @@ Tell reviewers 3 to 8:
 
 ### Save each review
 
-`oc:independent-reviewer` writes `reviews/independent-review.md` itself. Save every other review the moment its reviewer returns. Don't wait for the others. Write its output verbatim to `{run directory}/reviews/{reviewer}.md`. Use the name after the plugin prefix as `{reviewer}`. For example: `requesting-code-review.md`, `pr-test-analyzer.md`.
+`jam:independent-reviewer` writes `reviews/independent-review.md` itself. Save every other review the moment its reviewer returns. Don't wait for the others. Write its output verbatim to `{run directory}/reviews/{reviewer}.md`. Use the name after the plugin prefix as `{reviewer}`. For example: `requesting-code-review.md`, `pr-test-analyzer.md`.
 
 Wait for all reviewers to finish. Then check that `reviews/` holds one file per reviewer that ran.
 
@@ -142,7 +142,7 @@ Give the full path from the repository root on the first mention of a file. Afte
 
 ## 3. Write the report
 
-Run the `oc:report-writer` agent with the **Agent** tool and `effort: "xhigh"`. If the name is not available, find its definition under the plugin's `agents/` folder and run a **general-purpose** agent with that file's body as the prompt. Pass it only:
+Run the `jam:report-writer` agent with the **Agent** tool and `effort: "xhigh"`. If the name is not available, find its definition under the plugin's `agents/` folder and run a **general-purpose** agent with that file's body as the prompt. Pass it only:
 
 - the target and the commands to read it
 - the run directory

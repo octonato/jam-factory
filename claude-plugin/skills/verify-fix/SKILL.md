@@ -1,7 +1,7 @@
 ---
 name: verify-fix
 disable-model-invocation: true
-description: Fix the findings of an /oc:verify run, each in its own commit, autonomously by default or one at a time with -i. Pass --resume verify-{timestamp} to use a run on disk. Otherwise pick a run from a list, or run a new review. Never pushes.
+description: Fix the findings of a /jam:verify run, each in its own commit, autonomously by default or one at a time with -i. Pass --resume verify-{timestamp} to use a run on disk. Otherwise pick a run from a list, or run a new review. Never pushes.
 argument-hint: [-i] [PR number or URL | commit hash (inclusive) | range a..b | empty for the current branch] [--resume verify-{timestamp}]
 allowed-tools: Bash(date *), Bash(find *)
 effort: xhigh
@@ -110,8 +110,8 @@ Read the code before you assess. Then stop and wait for my decision:
 
 Dispatch both reviewers **in parallel**, in the same message, over the **uncommitted changes**:
 
-1. `oc:comment-reviewer`: content of added or edited code comments
-2. `oc:proof-reader`: English of added or edited comments and documentation
+1. `jam:comment-reviewer`: content of added or edited code comments
+2. `jam:proof-reader`: English of added or edited comments and documentation
 
 Use the **Agent** tool with `subagent_type` set to the agent's name. Tell each agent the scope in one sentence: `uncommitted changes`. Don't add instructions of your own.
 
@@ -120,7 +120,7 @@ Wait for both to finish. Merge the results into one list:
 - Sort by file, then line.
 - If both reviewers flag the same `file:line`, keep one entry. Join the two rules with `;`. If either fix is `delete`, the merged fix is `delete`.
 
-If the list is not empty, hand the findings to `oc:fixer` in one Agent call, verbatim and numbered. Don't apply the edits yourself. Keep the findings it skipped for the report.
+If the list is not empty, hand the findings to `jam:fixer` in one Agent call, verbatim and numbered. Don't apply the edits yourself. Keep the findings it skipped for the report.
 
 ### 4. Test
 

@@ -3,7 +3,7 @@ description: Run the session checks — comment-reviewer and proof-reader in par
 argument-hint: [optional commit hash to widen the scope from that commit (inclusive) to HEAD, on top of the uncommitted changes] [-i|--interactive]
 ---
 
-Check what changed in this session against my writing rules and **fix it**. This is the **fix** half, like `scalafmt`: by default it applies every finding. `/oc:checks` is the report-only half.
+Check what changed in this session against my writing rules and **fix it**. This is the **fix** half, like `scalafmt`: by default it applies every finding. `/jam:checks` is the report-only half.
 
 What I gave you: $ARGUMENTS
 
@@ -24,8 +24,8 @@ If the scope is empty, say `Nothing to check.` and stop.
 
 Dispatch both reviewers **in parallel** — in the same message — over the same scope:
 
-1. **`oc:comment-reviewer`** — content of added or edited code comments.
-2. **`oc:proof-reader`** — English of added or edited comments and documentation.
+1. **`jam:comment-reviewer`** — content of added or edited code comments.
+2. **`jam:proof-reader`** — English of added or edited comments and documentation.
 
 Use the **Agent** tool with `subagent_type` set to the agent's name. If the name isn't available, find its definition under the plugin's `agents/` folder and run a **general-purpose** agent with that file's body as the prompt. Tell each agent the scope in one sentence (`uncommitted changes`, or `commit range <hash>^..HEAD plus uncommitted changes`). Don't add instructions of your own.
 
@@ -55,7 +55,7 @@ Print the numbered list, one finding per line:
 
 ## Apply
 
-Hand the chosen findings, **verbatim and numbered**, to **`oc:fixer`** in one Agent call. Don't apply edits yourself and don't reword the findings. Wait for it to finish.
+Hand the chosen findings, **verbatim and numbered**, to **`jam:fixer`** in one Agent call. Don't apply edits yourself and don't reword the findings. Wait for it to finish.
 
 ## Verify
 

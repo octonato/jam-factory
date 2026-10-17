@@ -1,7 +1,7 @@
 ---
 name: take
 disable-model-invocation: true
-description: Run one job through the software factory — spec, plan, implement, verify and triage — tracked in files under $FACTORY_ROOT. Run it on a feature branch, in the main checkout or in a worktree. Pass a description or a GitHub issue to start the branch's job. Pass nothing to start it from the session. Add -r/--resume to resume the job, or -v/--verify to run another verify round on a done job. It runs on its own and asks only when the request is unclear. Add -a/--autonomously to never ask, or -i/--interactive to approve every step. Never merges or pushes.
+description: Run one job through the Jam Factory — spec, plan, implement, verify and triage — tracked in files under $FACTORY_ROOT. Run it on a feature branch, in the main checkout or in a worktree. Pass a description or a GitHub issue to start the branch's job. Pass nothing to start it from the session. Add -r/--resume to resume the job, or -v/--verify to run another verify round on a done job. It runs on its own and asks only when the request is unclear. Add -a/--autonomously to never ask, or -i/--interactive to approve every step. Never merges or pushes.
 argument-hint: [-a|--autonomously | -i|--interactive] [-r|--resume | -v|--verify] [description | issue number or URL]
 allowed-tools: Bash(echo *), Bash(git rev-parse *), Bash(git branch --show-current), Bash(date *)
 effort: xhigh
@@ -68,10 +68,10 @@ When you go to **Resume** and the argument is not empty, tell me the job already
 
 Show this list when a step says to show the usage:
 
-- `/oc:take <description | issue>`: start the branch's job from a description or a GitHub issue.
-- `/oc:take`: start the branch's job from what we discussed in this session.
-- `/oc:take -r`: resume the branch's job.
-- `/oc:take -v`: run another verify round on the branch's done job.
+- `/jam:take <description | issue>`: start the branch's job from a description or a GitHub issue.
+- `/jam:take`: start the branch's job from what we discussed in this session.
+- `/jam:take -r`: resume the branch's job.
+- `/jam:take -v`: run another verify round on the branch's done job.
 - `-a` or `-i` on any call: set the job's mode to `autonomous` or `interactive`.
 
 ## New job
@@ -154,7 +154,7 @@ Set every `failed` task in `tasks.md` back to `open`. Then take each `open` task
 
 ### 1. Implement
 
-Run the `oc:implementer` agent with the **Agent** tool. Pass it only:
+Run the `jam:implementer` agent with the **Agent** tool. Pass it only:
 
 - the worktree
 - the path of `spec.md`
@@ -218,7 +218,7 @@ Show me:
 - the deferred findings without an issue, from `deferred.md`
 - the job folder
 
-If any deferred finding has no issue, tell me that `/oc:gh.issue-create` opens one. Tell me to run `/oc:take -v` for another verify round. Remind me that the branch is ready for me to push, merge or open a PR.
+If any deferred finding has no issue, tell me that `/jam:gh.issue-create` opens one. Tell me to run `/jam:take -v` for another verify round. Remind me that the branch is ready for me to push, merge or open a PR.
 
 ## Rules
 
