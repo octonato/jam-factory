@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Factory</title>
+<title>Octo Factory</title>
 <style>
   :root {
     --bg: #f7f7f5;
@@ -43,11 +43,22 @@
   * { box-sizing: border-box; }
 
   body {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
     margin: 0;
     background: var(--bg);
     color: var(--ink);
     font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
   }
+
+  #page {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+  }
+
+  a { color: var(--accent); }
 
   header {
     display: flex;
@@ -61,128 +72,407 @@
   #status { color: var(--muted); font-size: 12px; }
   #problems { color: var(--critical); padding: 0 16px; }
 
-  #board {
+  .column {
+    max-width: 80%;
+    margin: 16px auto;
+  }
+
+  .rows { display: grid; gap: 8px; }
+  .empty { color: var(--muted); }
+
+  .row {
     display: grid;
-    grid-template-columns: repeat(7, minmax(180px, 1fr));
-    gap: 12px;
-    padding: 16px;
-    overflow-x: auto;
-  }
-
-  .column h2 {
-    margin: 0 0 8px;
-    font-size: 12px;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: var(--ink-2);
-  }
-
-  .card {
-    display: block;
-    width: 100%;
-    margin-bottom: 8px;
-    padding: 10px 12px;
-    text-align: left;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    align-items: center;
+    gap: 8px 16px;
+    padding: 10px 14px;
     color: inherit;
-    font: inherit;
+    text-decoration: none;
     background: var(--surface);
     border: 1px solid var(--line);
-    border-left: 4px solid var(--line);
-    border-radius: 6px;
-    cursor: pointer;
-  }
-
-  .card:hover { border-color: var(--accent); }
-  .card.waiting { border-left-color: var(--warning); }
-  .card.blocked { border-left-color: var(--critical); }
-  .card.done { border-left-color: var(--good); }
-
-  .card .title { font-weight: 600; }
-  .card .repo { color: var(--muted); font-weight: 400; }
-  .card .meta { color: var(--ink-2); font-size: 12px; margin-top: 4px; }
-
-  .tag {
-    display: inline-block;
-    margin-top: 6px;
-    margin-right: 4px;
-    padding: 1px 6px;
-    font-size: 11px;
-    color: var(--ink);
-    border: 1px solid var(--line);
-    border-radius: 10px;
-  }
-
-  .tag .icon { margin-right: 3px; }
-  .tag.waiting .icon { color: var(--warning); }
-  .tag.blocked .icon { color: var(--critical); }
-  .tag.done .icon { color: var(--good); }
-  .tag.review.landed { border-color: var(--accent); }
-  .tag.review.pending { color: var(--muted); border-style: dashed; }
-
-  #detail {
-    display: none;
-    margin: 0 16px 16px;
-    padding: 16px;
-    background: var(--surface);
-    border: 1px solid var(--line);
+    border-left: 3px solid var(--tone, var(--accent));
     border-radius: 6px;
   }
 
-  #detail.open { display: block; }
-  #detail h3 { margin: 0 0 8px; }
-  #files { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+  .row.waiting { --tone: var(--warning); }
+  .row.blocked { --tone: var(--critical); }
+  .row.done { --tone: var(--good); }
 
-  #files button {
-    padding: 2px 8px;
+  a.row:hover { border-color: var(--accent); border-left-color: var(--tone, var(--accent)); }
+
+  .row .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row .id { font-weight: 600; }
+  .row .path { color: var(--muted); }
+  .row .label { color: var(--ink-2); font-size: 12px; }
+  .row .warn { color: var(--warning); }
+
+  .steps { display: flex; align-items: center; }
+
+  .steps .line {
+    width: 8px;
+    height: 2px;
+    background: var(--muted);
+  }
+
+  .steps .dot {
+    --dot: var(--ink-2);
+    width: 10px;
+    height: 10px;
+    border: 2px solid var(--dot);
+    border-radius: 50%;
+  }
+
+  .steps .dot.past { background: var(--dot); }
+
+  .steps .dot.current {
+    --dot: var(--accent);
+    background: var(--dot);
+    box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--dot);
+  }
+
+  .steps .dot.future { --dot: var(--muted); }
+  .steps .dot.waiting { --dot: var(--warning); }
+  .steps .dot.blocked { --dot: var(--critical); border-radius: 2px; }
+  .steps .dot.done { --dot: var(--good); }
+
+  .job-page {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+    align-items: center;
+    gap: 12px;
+    height: calc(100% - 32px);
+  }
+
+  .back { white-space: nowrap; text-decoration: none; }
+  .back:hover { text-decoration: underline; }
+
+  .pane {
+    grid-column: 2;
+    align-self: stretch;
+    display: grid;
+    grid-template-columns: 240px minmax(0, 1fr);
+    min-height: 0;
+    overflow: hidden;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+  }
+
+  #tree {
+    overflow: auto;
+    padding: 8px 0;
+    font-size: 13px;
+    border-right: 1px solid var(--line);
+  }
+
+  #tree summary,
+  #tree a {
+    padding: 3px 12px 3px calc(12px + var(--depth) * 14px);
+    white-space: nowrap;
+  }
+
+  #tree summary { color: var(--muted); cursor: pointer; }
+
+  #tree a {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--ink-2);
+    text-decoration: none;
+  }
+
+  #tree a:hover { color: var(--accent); }
+
+  #tree a.selected {
     color: var(--ink);
-    font: inherit;
-    font-size: 12px;
+    font-weight: 600;
+    background: var(--bg);
+    box-shadow: inset 2px 0 var(--accent);
+  }
+
+  #view {
+    overflow: auto;
+    padding: 16px 24px;
+  }
+
+  #view .error { color: var(--critical); }
+
+  #view pre {
+    margin: 0 0 12px;
+    padding: 10px 12px;
+    overflow: auto;
     background: var(--bg);
     border: 1px solid var(--line);
-    border-radius: 4px;
+    border-radius: 6px;
+  }
+
+  #view code { font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+
+  .flow-button {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    float: right;
+    margin: 0 0 8px 12px;
+    padding: 4px 12px;
+    text-decoration: none;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+  }
+
+  .flow-button:hover { border-color: var(--accent); }
+
+  .graph {
+    --node-h: 42px;
+    --loop-w: 52px;
+    --edge: 2px solid var(--muted);
+    padding: 24px 0;
+    font-size: 15px;
+  }
+
+  .flow {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: max-content;
+    margin: 0 auto;
+  }
+
+  .edge,
+  .stub {
+    min-height: 24px;
+    border-left: var(--edge);
+  }
+
+  .stub { flex: 1; min-height: 18px; }
+
+  .node {
+    --tone: var(--ink-2);
+    position: relative;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    height: var(--node-h);
+    padding: 0 20px;
+    white-space: nowrap;
+    color: var(--ink);
+    text-decoration: none;
+    background: var(--surface);
+    border: 1px solid var(--tone);
+    border-radius: 6px;
+  }
+
+  a.node:hover { color: var(--accent); }
+
+  .node.current {
+    --tone: var(--accent);
+    font-weight: 600;
+    box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--tone);
+  }
+
+  .node.future {
+    --tone: var(--muted);
+    color: var(--muted);
+    border-style: dashed;
+  }
+
+  .node.waiting { --tone: var(--warning); }
+  .node.blocked { --tone: var(--critical); }
+  .node.done { --tone: var(--good); }
+
+  .branches {
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: 1fr;
+  }
+
+  .branch {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 0 10px;
+  }
+
+  .branch::before,
+  .fan-in > .branch::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    border-top: var(--edge);
+  }
+
+  .branch::before { top: 0; }
+  .fan-in > .branch::after { bottom: 0; }
+  .branch:first-child::before, .branch:first-child::after { left: calc(50% - 1px); }
+  .branch:last-child::before, .branch:last-child::after { right: calc(50% - 1px); }
+
+  .loop {
+    position: relative;
+    display: grid;
+    grid-template-columns: var(--loop-w) auto var(--loop-w);
+    grid-template-rows: var(--node-h) minmax(24px, auto) auto minmax(24px, auto) var(--node-h);
+    justify-items: center;
+  }
+
+  .loop > .node,
+  .loop > .edge,
+  .loop > .branches {
+    grid-column: 2;
+  }
+
+  .back-edge {
+    position: absolute;
+    top: calc(var(--node-h) / 2 - 1px);
+    bottom: calc(var(--node-h) / 2 - 1px);
+    left: 50%;
+    right: calc(var(--loop-w) / 2 - 1px);
+    border: var(--edge);
+    border-left: 0;
+    border-radius: 0 8px 8px 0;
+  }
+
+  .rounds {
+    position: relative;
+    z-index: 1;
+    grid-column: 3;
+    grid-row: 3 / 6;
+    align-self: center;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .rounds button {
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    font: inherit;
+    font-size: 13px;
+    color: var(--ink-2);
     cursor: pointer;
+    background: var(--surface);
+    border: 1px solid var(--muted);
+    border-radius: 50%;
   }
 
-  #files button.selected { border-color: var(--accent); }
+  .rounds button:hover { border-color: var(--accent); }
 
-  #content {
-    margin: 0;
-    max-height: 60vh;
-    overflow: auto;
-    white-space: pre-wrap;
-    font: 12px/1.5 ui-monospace, Menlo, monospace;
+  .rounds button.picked {
+    color: var(--surface);
+    background: var(--accent);
+    border-color: var(--accent);
   }
+
+  .markdown { line-height: 1.55; overflow-wrap: break-word; }
+  .markdown > :first-child { margin-top: 0; }
+
+  .markdown h1,
+  .markdown h2,
+  .markdown h3,
+  .markdown h4,
+  .markdown h5,
+  .markdown h6 {
+    margin: 24px 0 8px;
+    line-height: 1.25;
+  }
+
+  .markdown h1 { font-size: 22px; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+  .markdown h2 { font-size: 18px; padding-bottom: 4px; border-bottom: 1px solid var(--line); }
+  .markdown h3 { font-size: 15px; }
+  .markdown h4, .markdown h5, .markdown h6 { font-size: 14px; }
+
+  .markdown p,
+  .markdown ul,
+  .markdown ol,
+  .markdown table,
+  .markdown blockquote {
+    margin: 0 0 12px;
+  }
+
+  .markdown ul, .markdown ol { padding-left: 24px; }
+  .markdown li + li { margin-top: 2px; }
+  .markdown li > ul, .markdown li > ol { margin: 2px 0 0; }
+
+  .markdown li:has(> input[type="checkbox"]),
+  .markdown li:has(> p:first-child > input[type="checkbox"]:first-child) {
+    list-style: none;
+  }
+
+  .markdown input[type="checkbox"] { margin: 0 6px 0 -20px; vertical-align: middle; }
+
+  .markdown table { border-collapse: collapse; }
+
+  .markdown th,
+  .markdown td {
+    padding: 6px 10px;
+    text-align: left;
+    border: 1px solid var(--line);
+  }
+
+  .markdown th { background: var(--bg); }
+
+  .markdown :not(pre) > code {
+    padding: 1px 4px;
+    background: var(--bg);
+    border-radius: 4px;
+  }
+
+  .markdown blockquote {
+    margin-left: 0;
+    padding: 0 12px;
+    color: var(--ink-2);
+    border-left: 3px solid var(--line);
+  }
+
+  .markdown hr { border: 0; border-top: 1px solid var(--line); }
+  .markdown img { max-width: 100%; }
 
   @media (max-width: 640px) {
-    #board { grid-template-columns: 1fr; }
+    .column { max-width: none; margin: 16px; }
+    .row { grid-template-columns: auto minmax(0, 1fr); }
+    .row .name { grid-column: 1 / -1; }
+    .pane { grid-template-columns: 140px minmax(0, 1fr); }
   }
 </style>
 </head>
 <body>
 <header>
-  <h1>Factory</h1>
+  <h1>Octo Factory</h1>
   <span id="status">loading…</span>
 </header>
 <div id="problems"></div>
-<main id="board"></main>
-<section id="detail">
-  <h3 id="detail-title"></h3>
-  <div id="files"></div>
-  <pre id="content"></pre>
-</section>
+<main id="page"></main>
 
+<script src="marked.min.js"></script>
+<script src="purify.min.js"></script>
 <script>
 const POLL_MS = 2000
-const STAGES = ['spec', 'plan', 'implement', 'verify', 'triage', 'done', 'blocked']
-const STATUS = {
-  triage: { cls: 'waiting', icon: '●', label: 'waiting for you' },
-  blocked: { cls: 'blocked', icon: '■', label: 'blocked' },
-  done: { cls: 'done', icon: '✓', label: 'done' },
+const PHASES = ['spec', 'plan', 'impl', 'review', 'triage', 'done']
+const STAGE_PHASE = {
+  spec: 'spec',
+  plan: 'plan',
+  implement: 'impl',
+  verify: 'review',
+  triage: 'triage',
+  done: 'done',
 }
 
+const TOP_FILES = ['request.md', 'spec.md', 'plan.md', 'tasks.md', 'decisions.md', 'deferred.md']
+const ROUND_FILES = ['report.md', 'triage.md', 'extras.md']
+const ROUND_DIRS = ['reviews']
+
 const $ = (id) => document.getElementById(id)
-let openJob = null
-let openFile = null
+const state = { jobs: [], problems: [] }
+const collapsed = new Set()
+let listView = { html: '', el: null }
+let jobView = { dir: null, el: null, row: '', files: null }
+let lastView = { key: null, text: null }
+let pickedRound = null
+let renderSeq = 0
 
 function escape(text) {
   return String(text).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)
@@ -208,6 +498,15 @@ async function listDir(url) {
     .filter((href) => !href.startsWith('?') && !href.startsWith('/') && !href.startsWith('.'))
 }
 
+async function listFiles(dir, prefix = '') {
+  const files = []
+  for (const entry of await listDir(encodePath(dir + prefix))) {
+    if (entry.endsWith('/')) files.push(...(await listFiles(dir, prefix + entry)))
+    else files.push(prefix + entry)
+  }
+  return files
+}
+
 async function loadJobs() {
   const repos = (await listDir('./')).filter((e) => e.endsWith('/'))
   const jobs = []
@@ -220,11 +519,6 @@ async function loadJobs() {
       try {
         const job = JSON.parse(await fetchText(`${dir}job.json`))
         job.dir = dir
-        if (job.stage === 'verify' && job.round > 0) {
-          job.reviews = (await listDir(`${dir}round-${job.round}/reviews/`))
-            .filter((e) => e.endsWith('.md'))
-            .map((e) => e.replace(/\.md$/, ''))
-        }
         jobs.push(job)
       } catch (err) {
         problems.push(`${dir}: ${err.message}`)
@@ -234,125 +528,409 @@ async function loadJobs() {
   return { jobs, problems }
 }
 
-function tags(job) {
-  const out = []
-  const status = STATUS[job.stage]
-  if (status) {
-    out.push(`<span class="tag ${status.cls}"><span class="icon">${status.icon}</span>${status.label}</span>`)
+function decode(segment) {
+  try {
+    return decodeURIComponent(segment)
+  } catch {
+    return segment
   }
-
-  const c = {
-    tasksOpen: 0, tasksDone: 0, mustFix: 0, shouldFix: 0, nit: 0, dismissed: 0, deferred: 0, issued: 0,
-    ...job.counts,
-  }
-  if (job.stage === 'implement') out.push(`<span class="tag">${c.tasksDone}/${c.tasksDone + c.tasksOpen} tasks</span>`)
-  if (job.stage === 'triage') {
-    out.push(`<span class="tag">${c.mustFix} must-fix</span>`)
-    out.push(`<span class="tag">${c.shouldFix} should-fix</span>`)
-    out.push(`<span class="tag">${c.nit} nit</span>`)
-  }
-  if (job.stage === 'verify') {
-    for (const name of job.reviews || []) out.push(`<span class="tag review landed">${escape(name)}</span>`)
-    if (!job.reviews || job.reviews.length === 0) out.push('<span class="tag review pending">reviewers running</span>')
-  }
-  if (job.stage === 'done' && c.deferred > c.issued) {
-    out.push(`<span class="tag waiting"><span class="icon">●</span>${c.deferred - c.issued} deferred without issue</span>`)
-  }
-  if (job.stage === 'blocked' && job.blocked) {
-    out.push(`<div class="meta">${escape(job.blocked.stage)}: ${escape(job.blocked.reason)}</div>`)
-  }
-  return out.join('')
 }
 
-function card(job) {
-  const status = STATUS[job.stage]
-  const cls = status ? status.cls : ''
-  const round = job.round > 0 ? `round ${job.round}` : 'no round yet'
-  const last = job.lastRound ? ' · last round' : ''
+function parseRoute(hash) {
+  const segments = hash.replace(/^#\/?/, '').split('/').filter((s) => s !== '').map(decode)
+  if (segments.length === 0) return null
+
+  const [repo, id = '', ...rest] = segments
+  return { repo, id, path: rest.length > 0 ? rest.join('/') : null }
+}
+
+function jobHref(job) {
+  return `#/${encodeURIComponent(job.repo)}/${encodeURIComponent(job.id)}`
+}
+
+function encodePath(path) {
+  return path.split('/').map(encodeURIComponent).join('/')
+}
+
+function fileHref(job, path) {
+  return `${jobHref(job)}/${encodePath(path)}`
+}
+
+function shortPath(worktree) {
+  return String(worktree || '').split('/').filter((s) => s !== '').slice(-3).join('/')
+}
+
+// Returns the stage that sets the phase: `blocked.stage` for a blocked job.
+function phaseStage(job) {
+  return job.stage === 'blocked' ? job.blocked?.stage : job.stage
+}
+
+function currentPhase(job) {
+  const stage = phaseStage(job)
+  return Object.hasOwn(STAGE_PHASE, stage) ? STAGE_PHASE[stage] : null
+}
+
+function tint(job) {
+  if (job.stage === 'triage') return 'waiting'
+  if (job.stage === 'blocked') return 'blocked'
+  if (job.stage === 'done') return 'done'
+  return ''
+}
+
+function indicator(job) {
+  const current = PHASES.indexOf(currentPhase(job))
+  return PHASES.map((phase, i) => {
+    const step = i < current ? 'past' : i === current ? 'current' : 'future'
+    const color = i === current || job.stage === 'done' ? tint(job) : ''
+    const line = i > 0 ? '<span class="line"></span>' : ''
+    return `${line}<span class="dot ${step} ${color}" title="${phase}"></span>`
+  }).join('')
+}
+
+function stepLabel(job) {
+  const phase = currentPhase(job) || phaseStage(job) || 'unknown'
+  const parts = [escape(job.stage === 'blocked' ? `blocked at ${phase}` : phase)]
+  if (job.round > 0) parts.push(`round ${escape(job.round)}`)
+  if (job.lastRound === true) parts.push('last round')
+
+  const counts = { deferred: 0, issued: 0, ...job.counts }
+  if (job.stage === 'done' && counts.deferred > counts.issued) {
+    parts.push(`<span class="warn">${escape(counts.deferred - counts.issued)} deferred without issue</span>`)
+  }
+  return parts.join(' · ')
+}
+
+function rowContent(job) {
   return `
-    <button class="card ${cls}" data-dir="${escape(job.dir)}">
-      <div class="title"><span class="repo">${escape(job.repo)} /</span> ${escape(job.id)}</div>
-      <div class="meta">${round}${last} · ${escape(job.branch)} → ${escape(job.base)}</div>
-      ${tags(job)}
-    </button>`
+    <span class="name"><span class="id">${escape(job.id)}</span> <span class="path">${escape(shortPath(job.worktree))}</span></span>
+    <span class="steps">${indicator(job)}</span>
+    <span class="label">${stepLabel(job)}</span>`
 }
 
-function render(jobs) {
-  const byStage = Object.fromEntries(STAGES.map((s) => [s, []]))
-  const problems = []
-  for (const job of jobs) {
-    if (byStage[job.stage]) byStage[job.stage].push(job)
-    else problems.push(`${job.repo}/${job.id}: unknown stage "${job.stage}"`)
-  }
+function renderList() {
+  const jobs = [...state.jobs].sort((a, b) => String(b.updated || '').localeCompare(String(a.updated || '')))
+  const rows = jobs.map((job) => `<a class="row ${tint(job)}" href="${escape(jobHref(job))}">${rowContent(job)}</a>`).join('')
+  const html = `<div class="column rows">${rows || '<p class="empty">No jobs yet.</p>'}</div>`
+  if (listView.el === $('page').firstElementChild && listView.html === html) return
 
-  $('board').innerHTML = STAGES.map((stage) => `
-    <section class="column">
-      <h2>${stage} (${byStage[stage].length})</h2>
-      ${byStage[stage].sort((a, b) => (b.updated || '').localeCompare(a.updated || '')).map(card).join('')}
-    </section>`).join('')
-
-  for (const el of document.querySelectorAll('.card')) {
-    el.addEventListener('click', () => openDetail(jobs.find((j) => j.dir === el.dataset.dir)))
-  }
-  return problems
+  $('page').innerHTML = html
+  listView = { html, el: $('page').firstElementChild }
 }
 
-async function jobFiles(job) {
-  const entries = await listDir(job.dir)
-  const files = entries.filter((e) => e.endsWith('.md') || e === 'job.json')
-  const rounds = entries.filter((e) => /^round-\d+\/$/.test(e))
-  for (const round of rounds.sort((a, b) => parseInt(a.slice(6)) - parseInt(b.slice(6)))) {
-    for (const f of await listDir(job.dir + round)) if (f.endsWith('.md')) files.push(round + f)
-    for (const f of await listDir(`${job.dir}${round}reviews/`)) if (f.endsWith('.md')) files.push(`${round}reviews/${f}`)
-  }
-  return files
-}
-
-async function openDetail(job) {
-  if (!job) return
-  openJob = job
-  openFile = openFile && openFile.job === job.dir ? openFile : null
-  $('detail').classList.add('open')
-  $('detail-title').textContent = `${job.repo} / ${job.id} · ${job.stage}`
-
-  const files = await jobFiles(job)
-  const selected = openFile ? openFile.path : files.includes('spec.md') ? 'spec.md' : files[0]
-  $('files').innerHTML = files
-    .map((f) => `<button data-path="${escape(f)}" class="${f === selected ? 'selected' : ''}">${escape(f)}</button>`)
-    .join('')
-  for (const el of $('files').querySelectorAll('button')) {
-    el.addEventListener('click', () => {
-      openFile = { job: job.dir, path: el.dataset.path }
-      openDetail(job)
-    })
-  }
-
-  if (selected) {
-    try {
-      $('content').textContent = await fetchText(job.dir + selected)
-    } catch (err) {
-      $('content').textContent = err.message
+function buildTree(paths) {
+  const root = { files: [], dirs: new Map() }
+  for (const path of paths) {
+    const parts = path.split('/')
+    const name = parts.pop()
+    let node = root
+    for (const part of parts) {
+      if (!node.dirs.has(part)) node.dirs.set(part, { files: [], dirs: new Map() })
+      node = node.dirs.get(part)
     }
-  } else {
-    $('content').textContent = 'No files yet.'
+    node.files.push(name)
   }
+  return root
+}
+
+function rank(known, name) {
+  const i = known.indexOf(name)
+  return i === -1 ? known.length : i
+}
+
+function byKnown(known) {
+  return (a, b) => rank(known, a) - rank(known, b) || a.localeCompare(b)
+}
+
+function roundNumber(name) {
+  const match = /^round-(\d+)$/.exec(name)
+  return match ? Number(match[1]) : null
+}
+
+function byRound(a, b) {
+  const ra = roundNumber(a)
+  const rb = roundNumber(b)
+  if (ra !== null && rb !== null) return ra - rb || a.localeCompare(b)
+  if (ra !== null) return -1
+  if (rb !== null) return 1
+  return a.localeCompare(b)
+}
+
+function levelOrder(folder) {
+  if (folder === '') return { files: byKnown(TOP_FILES), dirs: byRound }
+  if (/^round-\d+\/$/.test(folder)) return { files: byKnown(ROUND_FILES), dirs: byKnown(ROUND_DIRS) }
+  return { files: byKnown([]), dirs: byKnown([]) }
+}
+
+function displayName(name) {
+  return name.endsWith('.md') ? name.slice(0, -3) : name
+}
+
+function treeHtml(job, node, folder = '') {
+  const order = levelOrder(folder)
+  const depth = folder.split('/').length - 1
+
+  const files = [...node.files].sort(order.files).map((name) => {
+    const path = folder + name
+    return `<a href="${escape(fileHref(job, path))}" data-path="${escape(path)}" style="--depth: ${depth}">${escape(displayName(name))}</a>`
+  })
+
+  const dirs = [...node.dirs.keys()].sort(order.dirs).map((name) => {
+    const path = `${folder}${name}/`
+    const key = job.dir + path
+    const open = collapsed.has(key) ? '' : ' open'
+    return `<details data-key="${escape(key)}"${open}>
+      <summary style="--depth: ${depth}">${escape(name)}</summary>
+      ${treeHtml(job, node.dirs.get(name), path)}
+    </details>`
+  })
+
+  return files.join('') + dirs.join('')
+}
+
+function onToggle(event) {
+  const key = event.target.dataset.key
+  if (event.target.open) collapsed.delete(key)
+  else collapsed.add(key)
+}
+
+function selectFile(path) {
+  for (const link of $('tree').querySelectorAll('a')) {
+    link.classList.toggle('selected', link.dataset.path === path)
+  }
+}
+
+function missingScripts() {
+  const missing = []
+  if (typeof marked === 'undefined') missing.push('marked.min.js not loaded')
+  if (typeof DOMPurify === 'undefined') missing.push('purify.min.js not loaded')
+  return missing
+}
+
+function codeBlock(text) {
+  return `<pre><code>${escape(text)}</code></pre>`
+}
+
+function prettyJson(text) {
+  try {
+    return JSON.stringify(JSON.parse(text), null, 2)
+  } catch {
+    return text
+  }
+}
+
+function fileHtml(path, text) {
+  if (path.endsWith('.md') && missingScripts().length === 0) {
+    const html = DOMPurify.sanitize(marked.parse(text, { gfm: true }), { FORBID_TAGS: ['style', 'form'] })
+    return `<div class="markdown">${html}</div>`
+  }
+  if (path.endsWith('.json')) return codeBlock(prettyJson(text))
+  return codeBlock(text)
+}
+
+function nodeState(job, phase) {
+  const current = PHASES.indexOf(currentPhase(job))
+  const i = PHASES.indexOf(phase)
+  if (i < current) return 'past'
+  if (i > current) return 'future'
+  return `current ${tint(job)}`
+}
+
+function graphNode(job, files, label, state, path = null) {
+  if (path !== null && files.includes(path)) {
+    return `<a class="node ${state}" href="${escape(fileHref(job, path))}">${escape(label)}</a>`
+  }
+  return `<span class="node ${state}">${escape(label)}</span>`
+}
+
+function reviewNames(files, round) {
+  const prefix = `round-${round}/reviews/`
+  return files
+    .filter((path) => path.startsWith(prefix) && path.endsWith('.md') && !path.slice(prefix.length).includes('/'))
+    .map((path) => path.slice(prefix.length, -3))
+    .sort((a, b) => a.localeCompare(b))
+}
+
+function reviewNodes(job, files, round, state) {
+  const names = round > 0 ? reviewNames(files, round) : []
+  if (names.length > 0) {
+    return names.map((name) => graphNode(job, files, name, state, `round-${round}/reviews/${name}.md`))
+  }
+
+  const running = round > 0 && round === job.round && job.stage === 'verify'
+  return [graphNode(job, files, running ? 'review · running' : 'review', state)]
+}
+
+function roundButtons(job) {
+  if (!(job.round > 0)) return ''
+
+  const shown = pickedRound ?? job.round
+  const buttons = []
+  for (let round = 1; round <= job.round; round += 1) {
+    const picked = round === shown ? ' class="picked"' : ''
+    buttons.push(`<button type="button" data-round="${round}" title="round ${round}"${picked}>${round}</button>`)
+  }
+  return `<div class="rounds">${buttons.join('')}</div>`
+}
+
+function graphHtml(job, files) {
+  const round = job.round > 0 ? (pickedRound ?? job.round) : 0
+  const phase = PHASES.indexOf(currentPhase(job))
+  const fixing = round > 0 && phase >= 0 && phase < PHASES.indexOf('review')
+  const finished = round < job.round || fixing
+  const reviewState = finished ? 'past' : nodeState(job, 'review')
+  const triageState = finished ? 'past' : nodeState(job, 'triage')
+  const doneState = job.stage === 'done' ? nodeState(job, 'done') : 'future'
+  const blockedState = job.stage === 'blocked' ? 'current blocked' : 'future'
+
+  const edge = '<span class="edge"></span>'
+  const stub = '<span class="stub"></span>'
+  const reviews = reviewNodes(job, files, round, reviewState)
+    .map((node) => `<div class="branch">${stub}${node}${stub}</div>`)
+    .join('')
+  const triagePath = round > 0 ? `round-${round}/report.md` : null
+
+  return `
+    <div class="graph">
+      <div class="flow">
+        ${graphNode(job, files, 'spec', nodeState(job, 'spec'), 'spec.md')}
+        ${edge}
+        ${graphNode(job, files, 'plan', nodeState(job, 'plan'), 'plan.md')}
+        ${edge}
+        <div class="loop">
+          ${graphNode(job, files, 'impl', nodeState(job, 'impl'), 'tasks.md')}
+          ${edge}
+          <div class="branches fan-in">${reviews}</div>
+          ${edge}
+          ${graphNode(job, files, 'triage', triageState, triagePath)}
+          <span class="back-edge"></span>
+          ${roundButtons(job)}
+        </div>
+        ${edge}
+        <div class="branches">
+          <div class="branch">${stub}${graphNode(job, files, 'done', doneState, 'deferred.md')}</div>
+          <div class="branch">${stub}${graphNode(job, files, 'blocked', blockedState, 'job.json')}</div>
+        </div>
+      </div>
+    </div>`
+}
+
+function showGraph(job, files) {
+  const html = graphHtml(job, files)
+  if (lastView.key === job.dir && lastView.text === html) return
+
+  lastView = { key: job.dir, text: html }
+  $('view').innerHTML = html
+}
+
+function onPickRound(event) {
+  const button = event.target.closest('button[data-round]')
+  if (!button) return
+
+  pickedRound = Number(button.dataset.round)
+  render()
+}
+
+async function showFile(job, path, seq) {
+  const key = job.dir + path
+  const flow = `<a class="flow-button" href="${escape(jobHref(job))}">Flow</a>`
+
+  let text
+  try {
+    text = await fetchText(encodePath(key))
+  } catch (err) {
+    if (seq !== renderSeq) return
+    lastView = { key: null, text: null }
+    $('view').innerHTML = `${flow}<p class="error">${escape(err.message)}</p>`
+    return
+  }
+
+  if (seq !== renderSeq) return
+  if (lastView.key === key && lastView.text === text) return
+
+  const sameFile = lastView.key === key
+  lastView = { key, text }
+  $('view').innerHTML = `${flow}${fileHtml(path, text)}`
+  if (!sameFile) $('view').scrollTop = 0
+}
+
+async function renderJobPage(job, path) {
+  const seq = renderSeq
+  const row = rowContent(job)
+
+  if (jobView.el !== $('page').firstElementChild || jobView.dir !== job.dir) {
+    $('page').innerHTML = `
+      <div class="column job-page">
+        <a class="back" href="#/">← Jobs</a>
+        <div class="row ${tint(job)}" id="job-row">${row}</div>
+        <div class="pane">
+          <nav id="tree"></nav>
+          <section id="view"></section>
+        </div>
+      </div>`
+    $('tree').addEventListener('toggle', onToggle, true)
+    $('view').addEventListener('click', onPickRound)
+    jobView = { dir: job.dir, el: $('page').firstElementChild, row, files: null }
+    lastView = { key: null, text: null }
+    pickedRound = null
+  } else if (jobView.row !== row) {
+    $('job-row').innerHTML = row
+    $('job-row').className = `row ${tint(job)}`
+    jobView.row = row
+  }
+
+  const files = await listFiles(job.dir)
+  if (seq !== renderSeq) return
+
+  const treeFiles = files.filter((f) => f !== 'job.json')
+  const filesKey = treeFiles.join('\n')
+  if (jobView.files !== filesKey) {
+    $('tree').innerHTML = treeHtml(job, buildTree(treeFiles))
+    jobView.files = filesKey
+  }
+  selectFile(path)
+
+  if (path === null) {
+    showGraph(job, files)
+    return
+  }
+
+  await showFile(job, path, seq)
+}
+
+function renderNotFound() {
+  $('page').innerHTML = '<div class="column"><p class="empty">job not found · <a href="#/">← Jobs</a></p></div>'
+}
+
+function render() {
+  renderSeq += 1
+  const route = parseRoute(location.hash)
+  if (!route) return renderList()
+
+  const job = state.jobs.find((j) => jobHref(j) === jobHref(route))
+  if (!job) return renderNotFound()
+
+  renderJobPage(job, route.path)
 }
 
 async function poll() {
   try {
     const { jobs, problems } = await loadJobs()
-    problems.push(...render(jobs))
-    $('problems').innerHTML = problems.map((p) => `<div>${escape(p)}</div>`).join('')
-    $('status').textContent = `${jobs.length} jobs · ${new Date().toLocaleTimeString()}`
-    if (openJob) {
-      const fresh = jobs.find((j) => j.dir === openJob.dir)
-      if (fresh) openJob = fresh
+    for (const job of jobs) {
+      if (!currentPhase(job)) problems.push(`${job.repo}/${job.id}: unknown stage "${phaseStage(job)}"`)
     }
+    problems.push(...missingScripts())
+
+    state.jobs = jobs
+    state.problems = problems
+    $('status').textContent = `${jobs.length} jobs`
+    $('problems').innerHTML = problems.map((p) => `<div>${escape(p)}</div>`).join('')
+    render()
   } catch (err) {
     $('status').textContent = `error: ${err.message}`
   }
 }
 
+window.addEventListener('hashchange', render)
 poll()
 setInterval(poll, POLL_MS)
 </script>

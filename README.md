@@ -158,6 +158,8 @@ The factory keeps its files outside git, in one directory per org: `<org>/.facto
 <org>/.factory/
   config.json                    { "port": 8731 }
   dashboard.html
+  marked.min.js                  vendored markdown renderer
+  purify.min.js                  vendored HTML sanitizer
   <repo>/jobs/<job id>/
     job.json                     the job's stage, round and counts
     request.md                   the description or issue the job started from
@@ -175,7 +177,7 @@ The factory keeps its files outside git, in one directory per org: `<org>/.facto
 
 Run `claude-plugin/skills/factory/serve.sh <org>/.factory` in a terminal. It serves the dashboard at `http://localhost:<port>/dashboard.html`, with the port from `config.json`. Run it outside a session, because the sandbox blocks the port.
 
-The dashboard shows one column per stage, and every job in the org. The dashboard highlights jobs in triage or blocked. It flags a done job that has deferred findings without an issue. Click a job to read its files. To try it, serve `claude-plugin/skills/factory/fixtures`.
+The dashboard lists every job in the org, one row per job. Each row shows the job's id, its path and where it is in the flow. Click a row to open the job's page. Each page has its own URL. The page holds a file tree and the open file, rendered from markdown. With no file open, the page shows the flow graph. Click a node to open its file. To try it, serve `claude-plugin/skills/factory/fixtures`.
 
 ## Local storage
 

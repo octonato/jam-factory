@@ -10,7 +10,7 @@ if [ ! -f "$config" ]; then
   printf '{ "port": 8731 }\n' > "$config"
 fi
 
-cp "$here/dashboard.html" "$root/dashboard.html"
+cp "$here/dashboard.html" "$here/marked.min.js" "$here/purify.min.js" "$root/"
 
 port="$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["port"])' "$config")"
 
