@@ -1,0 +1,6 @@
+description = "Independent, read-only code review of a PR, a commit range or the current branch. A fresh subagent reviews the change without being told how it was built, and writes the report to .nogit/verify-{timestamp}/independent-review.md. Add --report-in-chat to get the report in chat instead."
+prompt = '''
+Activate and follow the `independent-reviewer` skill. Treat the following text as the arguments supplied with the invocation:
+
+{{args}}
+'''

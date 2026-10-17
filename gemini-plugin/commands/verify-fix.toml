@@ -1,0 +1,6 @@
+description = "Fix the findings of a /jam:verify run, each in its own commit, autonomously by default or one at a time with -i. Pass --resume verify-{timestamp} to use a run on disk. Otherwise pick a run from a list, or run a new review. Never pushes."
+prompt = '''
+Activate and follow the `verify-fix` skill. Treat the following text as the arguments supplied with the invocation:
+
+{{args}}
+'''

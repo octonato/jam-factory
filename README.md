@@ -72,7 +72,7 @@ Commands and skills are invoked with the `jam:` prefix — `/jam:checks`, `/jam:
 | `/jam:check-inbox` | Check the code for TODO-AI / FIXME-AI / QUESTION-AI comments left for Claude — fix or answer each one, and remove the tag once the user approves |
 | `/jam:checks` | Run the session checks — comment-reviewer (comment rules) and proof-reader (plain-English rules) in parallel over the changed code — and report located findings. Changes nothing; /jam:checks-fix applies them. |
 | `/jam:checks-fix` | Run the session checks — comment-reviewer and proof-reader in parallel — then apply every finding through the fixer agent. Add -i/--interactive to pick which findings to apply. |
-| `/jam:gh.issue-create` | Create a GitHub issue from a natural language description. Opens in browser for review before submission. |
+| `/jam:gh-issue-create` | Create a GitHub issue from a natural language description. Opens in browser for review before submission. |
 | `/jam:proceed` | Implement what we discussed in this session, then run comment-reviewer and proof-reader in parallel and apply every finding through the fixer agent. |
 | `/jam:resolve-conflicts` | Resolve git merge conflicts — apply the clear ones with a brief rationale, ask about the ambiguous ones. Add -i/--interactive to get a report on why the conflicts exist and approve each chunk before it is applied. |
 | `/jam:retry` | Re-attempt the action the user just rejected, optionally with an adaptation |
@@ -153,7 +153,7 @@ spec ─► plan ─► implement ─► verify(N) ─► triage(N) ─┬─►
 | `/jam:take -r`, `/jam:take --resume` | Resumes the branch's job at the stage it reached. |
 | `/jam:take -v`, `/jam:take --verify` | Runs another verify round on a done job. |
 
-Without `-r` or `-v`, `/jam:take` refuses to run on a branch that already has a job. To track a deferred finding, open an issue with `/jam:gh.issue-create`. Then set the entry's `issue` to its URL.
+Without `-r` or `-v`, `/jam:take` refuses to run on a branch that already has a job. To track a deferred finding, open an issue with `/jam:gh-issue-create`. Then set the entry's `issue` to its URL.
 
 ### Modes
 

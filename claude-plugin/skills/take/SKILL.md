@@ -218,7 +218,7 @@ Show me:
 - the deferred findings without an issue, from `deferred.md`
 - the job folder
 
-If any deferred finding has no issue, tell me that `/jam:gh.issue-create` opens one. Tell me to run `/jam:take -v` for another verify round. Remind me that the branch is ready for me to push, merge or open a PR.
+If any deferred finding has no issue, tell me that `/jam:gh-issue-create` opens one. Tell me to run `/jam:take -v` for another verify round. Remind me that the branch is ready for me to push, merge or open a PR.
 
 ## Rules
 
