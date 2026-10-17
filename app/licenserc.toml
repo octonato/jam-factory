@@ -1,0 +1,7 @@
+headerPath = "header.txt"
+includes = ["**/*.rs", "**/*.ts", "**/*.tsx"]
+excludes = ["target/**", "ui/node_modules/**", "ui/dist/**"]
+
+[properties]
+inceptionYear = "2026"
+copyrightOwner = "Renato Cavalcanti"

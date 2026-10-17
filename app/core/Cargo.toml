@@ -1,0 +1,17 @@
+[package]
+name = "odeck-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "odeck_core"
+
+[dependencies]
+portable-pty = "0.9"
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+toml = "1"
+
+[dev-dependencies]
+tempfile = "3"

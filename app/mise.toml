@@ -1,0 +1,18 @@
+[tools]
+just = "1.58.0"
+
+[tasks.build]
+description = "Run the quality gates, then build"
+run = "just build"
+
+[tasks.test]
+description = "Run the test suite"
+run = "just test"
+
+[tasks.check]
+description = "Check formatting and lints"
+run = "just check"
+
+[tasks.fmt]
+description = "Format and auto-fix lints"
+run = "just format"

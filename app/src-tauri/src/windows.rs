@@ -1,0 +1,217 @@
+// Copyright 2026 Renato Cavalcanti
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! Project windows, the welcome window and the app menu.
+
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use tauri::menu::{Menu, MenuItem, MenuItemKind};
+use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, Wry};
+use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
+
+use odeck_core::project::PROJECT_FILE;
+use odeck_core::terminal::SessionHost;
+
+use crate::owners::TerminalOwners;
+use crate::session_store::ProjectStore;
+use crate::state::AppState;
+
+pub const OPEN_PROJECT: &str = "open-project";
+
+const WELCOME: &str = "welcome";
+
+/// Maps each project window label to its project path.
+#[derive(Default)]
+pub struct Windows {
+    projects: Mutex<HashMap<String, PathBuf>>,
+    next: AtomicU64,
+}
+
+impl Windows {
+    fn label_for(&self, path: &Path) -> Option<String> {
+        self.projects
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(_, p)| p.as_path() == path)
+            .map(|(label, _)| label.clone())
+    }
+
+    fn insert(&self, path: &Path) -> String {
+        let label = format!("project-{}", self.next.fetch_add(1, Ordering::Relaxed));
+        self.projects
+            .lock()
+            .unwrap()
+            .insert(label.clone(), path.to_path_buf());
+        label
+    }
+
+    fn remove(&self, label: &str) -> Option<PathBuf> {
+        self.projects.lock().unwrap().remove(label)
+    }
+
+    fn path_of(&self, label: &str) -> Option<PathBuf> {
+        self.projects.lock().unwrap().get(label).cloned()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.projects.lock().unwrap().is_empty()
+    }
+}
+
+/// Opens a window for the project in `path`, or focuses the one already open.
+pub fn open_project_window(app: &AppHandle, path: PathBuf) -> Result<(), String> {
+    if !path.join(PROJECT_FILE).is_file() {
+        return Err(format!("No {PROJECT_FILE} file in {}", path.display()));
+    }
+
+    let windows = app.state::<Windows>();
+    if let Some(window) = windows
+        .label_for(&path)
+        .and_then(|label| app.get_webview_window(&label))
+    {
+        let _ = window.set_focus();
+        return Ok(());
+    }
+
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string());
+    let label = windows.insert(&path);
+
+    let built = WebviewWindowBuilder::new(app, &label, WebviewUrl::App("index.html".into()))
+        .title(format!("octodeck — {name}"))
+        .inner_size(1200.0, 800.0)
+        .build();
+    if let Err(e) = built {
+        windows.remove(&label);
+        return Err(e.to_string());
+    }
+
+    app.state::<ProjectStore>().add(&path);
+    if let Some(welcome) = app.get_webview_window(WELCOME) {
+        let _ = welcome.close();
+    }
+
+    Ok(())
+}
+
+/// Opens the welcome window, or focuses it when it is already open.
+pub fn open_welcome_window(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window(WELCOME) {
+        let _ = window.set_focus();
+        return;
+    }
+
+    let built = WebviewWindowBuilder::new(app, WELCOME, WebviewUrl::App("index.html".into()))
+        .title("octodeck")
+        .inner_size(600.0, 400.0)
+        .build();
+    if let Err(e) = built {
+        eprintln!("octodeck: cannot open the welcome window: {e}");
+    }
+}
+
+/// Shows a folder picker and opens the picked project.
+pub fn pick_project(app: &AppHandle) {
+    let handle = app.clone();
+    app.dialog().file().pick_folder(move |folder| {
+        let Some(path) = folder.and_then(|f| f.into_path().ok()) else {
+            return;
+        };
+
+        if let Err(message) = open_project_window(&handle, path) {
+            handle
+                .dialog()
+                .message(message)
+                .kind(MessageDialogKind::Error)
+                .show(|_| {});
+        }
+    });
+}
+
+/// Reopens the stored projects, or the welcome window when none can open.
+pub fn restore(app: &AppHandle) {
+    let store = app.state::<ProjectStore>();
+    for path in store.paths() {
+        if let Err(e) = open_project_window(app, path.clone()) {
+            eprintln!("octodeck: {e}");
+            store.remove(&path);
+        }
+    }
+
+    if app.state::<Windows>().is_empty() {
+        open_welcome_window(app);
+    }
+}
+
+/// Detaches the closing window's terminals and forgets its project.
+pub fn on_close_requested(window: &tauri::Window) {
+    let app = window.app_handle();
+
+    let host = &app.state::<AppState>().host;
+    for id in app.state::<TerminalOwners>().take(window.label()) {
+        let _ = host.detach(id);
+    }
+
+    let windows = app.state::<Windows>();
+    let Some(path) = windows.remove(window.label()) else {
+        return;
+    };
+
+    app.state::<ProjectStore>().remove(&path);
+    if windows.is_empty() {
+        open_welcome_window(app);
+    }
+}
+
+/// Builds the default menu with an Open Project… item in File.
+pub fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
+    let menu = Menu::default(app)?;
+    let open = MenuItem::with_id(
+        app,
+        OPEN_PROJECT,
+        "Open Project…",
+        true,
+        Some("CmdOrCtrl+O"),
+    )?;
+
+    for item in menu.items()? {
+        if let MenuItemKind::Submenu(submenu) = item
+            && submenu.text()? == "File"
+        {
+            submenu.insert(&open, 0)?;
+        }
+    }
+
+    Ok(menu)
+}
+
+#[tauri::command]
+pub fn current_project(window: WebviewWindow) -> Option<String> {
+    window
+        .app_handle()
+        .state::<Windows>()
+        .path_of(window.label())
+        .map(|p| p.display().to_string())
+}
+
+#[tauri::command]
+pub async fn open_project_folder(app: AppHandle) {
+    pick_project(&app);
+}
