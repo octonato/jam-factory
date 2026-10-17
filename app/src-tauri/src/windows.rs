@@ -15,29 +15,29 @@
 //! Project windows, the welcome window and the app menu.
 
 use std::collections::HashMap;
+use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use tauri::menu::{Menu, MenuItem, MenuItemKind};
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, Wry};
+use tauri::{AppHandle, Manager, Url, WebviewUrl, WebviewWindowBuilder, Wry};
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 
-use odeck_core::project::PROJECT_FILE;
-use odeck_core::terminal::SessionHost;
+use odeck_core::factory::{self, FactoryError};
+use odeck_core::server::Server;
 
-use crate::owners::TerminalOwners;
+use crate::navigation::{self, Navigation};
 use crate::session_store::ProjectStore;
-use crate::state::AppState;
 
 pub const OPEN_PROJECT: &str = "open-project";
 
 const WELCOME: &str = "welcome";
 
-/// Maps each project window label to its project path.
+/// Maps each project window label to its project path and its server.
 #[derive(Default)]
 pub struct Windows {
-    projects: Mutex<HashMap<String, PathBuf>>,
+    projects: Mutex<HashMap<String, (PathBuf, Server)>>,
     next: AtomicU64,
 }
 
@@ -47,25 +47,23 @@ impl Windows {
             .lock()
             .unwrap()
             .iter()
-            .find(|(_, p)| p.as_path() == path)
+            .find(|(_, (p, _))| p.as_path() == path)
             .map(|(label, _)| label.clone())
     }
 
-    fn insert(&self, path: &Path) -> String {
+    fn insert(&self, path: &Path, server: Server) -> String {
         let label = format!("project-{}", self.next.fetch_add(1, Ordering::Relaxed));
         self.projects
             .lock()
             .unwrap()
-            .insert(label.clone(), path.to_path_buf());
+            .insert(label.clone(), (path.to_path_buf(), server));
         label
     }
 
+    /// Forgets the window `label` and stops its server.
     fn remove(&self, label: &str) -> Option<PathBuf> {
-        self.projects.lock().unwrap().remove(label)
-    }
-
-    fn path_of(&self, label: &str) -> Option<PathBuf> {
-        self.projects.lock().unwrap().get(label).cloned()
+        let (path, _server) = self.projects.lock().unwrap().remove(label)?;
+        Some(path)
     }
 
     fn is_empty(&self) -> bool {
@@ -73,37 +71,72 @@ impl Windows {
     }
 }
 
-/// Opens a window for the project in `path`, or focuses the one already open.
-pub fn open_project_window(app: &AppHandle, path: PathBuf) -> Result<(), String> {
-    if !path.join(PROJECT_FILE).is_file() {
-        return Err(format!("No {PROJECT_FILE} file in {}", path.display()));
+/// A failure to open a project window.
+#[derive(Debug)]
+pub enum OpenError {
+    /// The picked folder is not a usable project.
+    Factory(FactoryError),
+    /// The project's server cannot start.
+    Server(String),
+    /// The project window cannot be built.
+    Window(String),
+}
+
+impl fmt::Display for OpenError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            OpenError::Factory(e) => write!(f, "{e}"),
+            OpenError::Server(message) | OpenError::Window(message) => f.write_str(message),
+        }
     }
+}
+
+/// Opens a window for the project at `picked`, or focuses the one already open.
+pub fn open_project_window(app: &AppHandle, picked: PathBuf) -> Result<(), OpenError> {
+    let factory = factory::open(&picked).map_err(OpenError::Factory)?;
 
     let windows = app.state::<Windows>();
     if let Some(window) = windows
-        .label_for(&path)
+        .label_for(&factory.project)
         .and_then(|label| app.get_webview_window(&label))
     {
         let _ = window.set_focus();
         return Ok(());
     }
 
-    let name = path
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| path.display().to_string());
-    let label = windows.insert(&path);
+    let server = Server::start(factory.root.clone(), factory.port).map_err(|e| {
+        OpenError::Server(format!(
+            "Cannot serve {} on port {}: {}. Change the port in {}.",
+            factory.root.display(),
+            factory.port,
+            e,
+            factory.config_file().display()
+        ))
+    })?;
 
-    let built = WebviewWindowBuilder::new(app, &label, WebviewUrl::App("index.html".into()))
-        .title(format!("octodeck — {name}"))
+    let port = server.port();
+    let url = Url::parse(&format!("http://127.0.0.1:{port}/dashboard.html"))
+        .map_err(|e| OpenError::Window(e.to_string()))?;
+    let label = windows.insert(&factory.project, server);
+
+    let built = WebviewWindowBuilder::new(app, &label, WebviewUrl::External(url))
+        .title(format!("octodeck — {}", factory.name()))
         .inner_size(1200.0, 800.0)
+        .on_navigation(move |url| match navigation::decide(url, port) {
+            Navigation::Stay => true,
+            Navigation::Browser => {
+                navigation::open_in_browser(url);
+                false
+            }
+            Navigation::Block => false,
+        })
         .build();
     if let Err(e) = built {
         windows.remove(&label);
-        return Err(e.to_string());
+        return Err(OpenError::Window(e.to_string()));
     }
 
-    app.state::<ProjectStore>().add(&path);
+    app.state::<ProjectStore>().add(&factory.project);
     if let Some(welcome) = app.get_webview_window(WELCOME) {
         let _ = welcome.close();
     }
@@ -135,23 +168,31 @@ pub fn pick_project(app: &AppHandle) {
             return;
         };
 
-        if let Err(message) = open_project_window(&handle, path) {
-            handle
-                .dialog()
-                .message(message)
-                .kind(MessageDialogKind::Error)
-                .show(|_| {});
+        if let Err(e) = open_project_window(&handle, path) {
+            show_error(&handle, e.to_string());
         }
     });
+}
+
+/// Shows `message` in a native error dialog.
+fn show_error(app: &AppHandle, message: String) {
+    app.dialog()
+        .message(message)
+        .kind(MessageDialogKind::Error)
+        .show(|_| {});
 }
 
 /// Reopens the stored projects, or the welcome window when none can open.
 pub fn restore(app: &AppHandle) {
     let store = app.state::<ProjectStore>();
     for path in store.paths() {
-        if let Err(e) = open_project_window(app, path.clone()) {
-            eprintln!("octodeck: {e}");
-            store.remove(&path);
+        match open_project_window(app, path.clone()) {
+            Ok(()) => {}
+            Err(OpenError::Server(message)) => show_error(app, message),
+            Err(e) => {
+                eprintln!("octodeck: {e}");
+                store.remove(&path);
+            }
         }
     }
 
@@ -160,14 +201,9 @@ pub fn restore(app: &AppHandle) {
     }
 }
 
-/// Detaches the closing window's terminals and forgets its project.
+/// Stops the closing window's server and forgets its project.
 pub fn on_close_requested(window: &tauri::Window) {
     let app = window.app_handle();
-
-    let host = &app.state::<AppState>().host;
-    for id in app.state::<TerminalOwners>().take(window.label()) {
-        let _ = host.detach(id);
-    }
 
     let windows = app.state::<Windows>();
     let Some(path) = windows.remove(window.label()) else {
@@ -200,15 +236,6 @@ pub fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     }
 
     Ok(menu)
-}
-
-#[tauri::command]
-pub fn current_project(window: WebviewWindow) -> Option<String> {
-    window
-        .app_handle()
-        .state::<Windows>()
-        .path_of(window.label())
-        .map(|p| p.display().to_string())
 }
 
 #[tauri::command]

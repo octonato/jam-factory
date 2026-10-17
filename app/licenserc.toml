@@ -1,6 +1,6 @@
 headerPath = "header.txt"
-includes = ["**/*.rs", "**/*.ts", "**/*.tsx"]
-excludes = ["target/**", "ui/node_modules/**", "ui/dist/**"]
+includes = ["**/*.rs"]
+excludes = ["target/**"]
 
 [properties]
 inceptionYear = "2026"

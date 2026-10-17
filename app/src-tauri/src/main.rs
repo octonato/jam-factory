@@ -14,11 +14,8 @@
 
 //! Tauri entry point for the octodeck desktop app.
 
-mod commands;
-mod dto;
-mod owners;
+mod navigation;
 mod session_store;
-mod state;
 mod windows;
 
 use tauri::{Manager, RunEvent, WindowEvent};
@@ -28,9 +25,7 @@ use session_store::ProjectStore;
 fn main() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .manage(state::AppState::load())
         .manage(windows::Windows::default())
-        .manage(owners::TerminalOwners::default())
         .setup(|app| {
             let store_file = app.path().app_data_dir()?.join("open-projects.json");
             app.manage(ProjectStore::load(store_file));
@@ -50,20 +45,7 @@ fn main() {
                 windows::on_close_requested(window);
             }
         })
-        .invoke_handler(tauri::generate_handler![
-            commands::app_info,
-            commands::open_project,
-            commands::list_editors,
-            commands::open_in_editor,
-            commands::open_terminal,
-            commands::write_terminal,
-            commands::resize_terminal,
-            commands::close_terminal,
-            commands::kill_session,
-            commands::list_live_sessions,
-            windows::current_project,
-            windows::open_project_folder,
-        ])
+        .invoke_handler(tauri::generate_handler![windows::open_project_folder])
         .build(tauri::generate_context!())
         .expect("error while building octodeck");
 

@@ -14,9 +14,5 @@
 
 //! Core logic for the octodeck desktop app.
 
-pub mod checkouts;
-pub mod config;
-pub mod env;
-pub mod launcher;
-pub mod project;
-pub mod terminal;
+pub mod factory;
+pub mod server;

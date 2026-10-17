@@ -2,35 +2,23 @@
 default:
     @just --list --unsorted
 
-# install the UI dependencies
-ui-install:
-    pnpm --dir ui install --frozen-lockfile
-
 # format and lint the codebase (auto-fix)
 format:
     cargo fmt --all
     cargo clippy --fix --all-targets --allow-dirty
 
-# type-check the UI
-ui-check: ui-install
-    pnpm --dir ui typecheck
-
 # check formatting and lints (no mutation)
-check: ui-check
+check:
     cargo fmt --all -- --check
     cargo clippy --all-targets --locked -- -D warnings
 
 # run tests (cargo test compiles everything it needs)
-test: ui-build
+test:
     cargo test --locked --all-targets
-
-# build the UI bundle that the Tauri crate embeds
-ui-build: ui-install
-    pnpm --dir ui build
 
 # Run the full CI quality-gate set: fmt, clippy, test.
 build: check test
 
-# Run the app in dev mode with hot reload.
-dev: ui-install
-    cd src-tauri && ../ui/node_modules/.bin/tauri dev
+# Run the app in dev mode.
+dev:
+    cargo run -p odeck-app

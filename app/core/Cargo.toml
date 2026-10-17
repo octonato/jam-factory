@@ -8,10 +8,11 @@ license.workspace = true
 name = "odeck_core"
 
 [dependencies]
-portable-pty = "0.9"
-serde = { version = "1", features = ["derive"] }
+chrono = "0.4"
+httparse = "1"
+percent-encoding = "2"
+serde_json = { version = "1", features = ["preserve_order"] }
 thiserror = "2"
-toml = "1"
 
 [dev-dependencies]
 tempfile = "3"

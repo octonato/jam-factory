@@ -1,12 +1,72 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>octodeck</title>
-  </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
-  </body>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>octodeck</title>
+<style>
+  :root {
+    --bg: #f7f7f5;
+    --surface: #ffffff;
+    --ink: #1a1a19;
+    --ink-2: #55554f;
+    --line: #e2e2dc;
+    --accent: #2f6fdb;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #121211;
+      --surface: #1a1a19;
+      --ink: #ededea;
+      --ink-2: #b5b5ae;
+      --line: #2e2e2b;
+      --accent: #6c9cf0;
+    }
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    height: 100vh;
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+
+  h1 { margin: 0; font-size: 28px; }
+
+  p { margin: 0; color: var(--ink-2); }
+
+  button {
+    margin-top: 8px;
+    padding: 6px 16px;
+    color: var(--ink);
+    font: inherit;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    cursor: pointer;
+  }
+
+  button:hover { color: var(--accent); border-color: var(--accent); }
+</style>
+</head>
+<body>
+  <h1>octodeck</h1>
+  <p>Open a folder that holds a .factory folder.</p>
+  <button id="open" type="button">Open Project…</button>
+
+  <script>
+    document.getElementById('open').addEventListener('click', () => {
+      window.__TAURI__.core.invoke('open_project_folder');
+    });
+  </script>
+</body>
 </html>
