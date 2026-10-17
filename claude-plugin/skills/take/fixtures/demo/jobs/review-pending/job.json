@@ -1,0 +1,23 @@
+{
+  "id": "review-pending",
+  "repo": "demo",
+  "worktree": "/Users/you/Sources/org/demo/review-pending",
+  "branch": "review-pending",
+  "base": "main",
+  "mode": "default",
+  "stage": "verify",
+  "round": 1,
+  "lastRound": false,
+  "counts": {
+    "tasksOpen": 0,
+    "tasksDone": 2,
+    "mustFix": 0,
+    "shouldFix": 0,
+    "nit": 0,
+    "dismissed": 0,
+    "deferred": 0,
+    "issued": 0
+  },
+  "blocked": null,
+  "updated": "2026-10-15T14:07:00Z"
+}

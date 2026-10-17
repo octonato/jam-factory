@@ -1,0 +1,23 @@
+{
+  "id": "metrics-export",
+  "repo": "demo",
+  "worktree": "/Users/you/Sources/org/demo/metrics-export",
+  "branch": "metrics-export",
+  "base": "main",
+  "mode": "default",
+  "stage": "verify",
+  "round": 1,
+  "lastRound": false,
+  "counts": {
+    "tasksOpen": 0,
+    "tasksDone": 4,
+    "mustFix": 0,
+    "shouldFix": 0,
+    "nit": 0,
+    "dismissed": 0,
+    "deferred": 0,
+    "issued": 0
+  },
+  "blocked": null,
+  "updated": "2026-10-15T14:03:00Z"
+}

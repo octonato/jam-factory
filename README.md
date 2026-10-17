@@ -81,7 +81,7 @@ Commands and skills are invoked with the `oc:` prefix — `/oc:checks`, `/oc:ver
 
 | Skill | Description |
 |---|---|
-| `/oc:factory` | Runs one job through the factory: spec, plan, implement, verify and triage. It tracks the job in files under $FACTORY_ROOT. Run it on a feature branch, in the main checkout or in a worktree. Pass a description or a GitHub issue to start the branch's job, or nothing to resume it. Pass `issues` to open GitHub issues for deferred findings. It never merges or pushes. |
+| `/oc:take` | Runs one job through the factory: spec, plan, implement, verify and triage. It tracks the job in files under $FACTORY_ROOT. Run it on a feature branch, in the main checkout or in a worktree. Pass a description or a GitHub issue to start the branch's job. Pass nothing to start it from the session. Add `-r` to resume the job, or `-v` to run another verify round on a done job. It runs on its own and asks only when the request is unclear. Add `-a` to never ask, or `-i` to approve every step. It never merges or pushes. |
 | `/oc:verify` | Read-only review of a PR, a commit range or the current branch. Under 300 changed lines, it runs oc:independent-reviewer or superpowers:requesting-code-review, picked at random. From 300 lines, it runs both. Then it offers the pr-review-toolkit reviewers the diff calls for as extras. It checks each finding against the code. It writes one report to .nogit/verify-{timestamp}/, or to the directory --out names. Use /oc:submit-review to turn the report into a PR comment. |
 | `/oc:submit-review` | Turns an /oc:verify report into a PR comment. The comment holds only the findings and their severity. It drops findings that comments on the PR already report. Pass verify-{timestamp} to use a run on disk. Pass a target to run /oc:verify first. Pass nothing to pick a run from a list. It offers to open the comment on GitHub. It never posts the comment. |
 | `/oc:independent-reviewer` | Independent, read-only code review of a PR, a commit range or the current branch. A fresh subagent reviews the change and never learns how it was built. It writes the report to .nogit/verify-{timestamp}/independent-review.md. Add --report-in-chat to get the report in chat instead. |
@@ -124,25 +124,45 @@ Each run writes to its own `.nogit/verify-{timestamp}/` directory. No reviewer r
 
 ## Factory workflow
 
-`/oc:factory` takes one change from spec to a branch ready for review. Each job belongs to one feature branch, in the main checkout or in a worktree. The last segment of the branch name is the job id: `octonato/rate-limit` gives `rate-limit`. You create the branch; the factory never does. It refuses to run on the base branch.
+`/oc:take` takes one change from spec to a branch ready for review. Each job belongs to one feature branch, in the main checkout or in a worktree. The last segment of the branch name is the job id: `octonato/rate-limit` gives `rate-limit`. You create the branch; the factory never does. It refuses to run on the base branch.
 
 ```
 spec ─► plan ─► implement ─► verify(N) ─► triage(N) ─┬─► implement ─► verify(N+1) ...
                                                      └─► finalize ─► done
 ```
 
-- **spec** and **plan**: `superpowers:brainstorming` and `superpowers:writing-plans` write `spec.md` and `plan.md` to the job folder. You approve both.
+- **spec** and **plan**: the factory writes `spec.md` and `plan.md` to the job folder. It brainstorms the spec with you through `superpowers:brainstorming` when the mode asks for it. It writes the plan with `superpowers:writing-plans`.
 - **implement**: a fresh `oc:implementer` agent makes each task's change. The factory then commits it. In each git repository, the job's first commit is phase 0: a Conventional Commit that describes the whole job, ready to keep when you squash. Later commits are `phase N:`.
 - **verify**: runs one `/oc:verify` round over the branch. A round never sees earlier rounds.
-- **triage**: the factory hides findings you dismissed or deferred in earlier rounds. You mark each remaining finding as fix, dismiss or defer. Then you pick `next round`, `last round` or `finalize`.
+- **triage**: the factory hides findings dismissed or deferred in earlier rounds. In `interactive` mode, you mark each remaining finding as fix, dismiss or defer. Then you pick `next round`, `last round` or `finalize`. In the other modes, the factory checks each finding against the code:
+  - A valid must-fix or should-fix finding becomes a fix task.
+  - A valid nit or an open question is deferred.
+  - An invalid finding is dismissed, with the reason in `decisions.md`.
+
+  It then picks `last round` when it added fix tasks, and `finalize` otherwise. So these modes run one verify round per call.
 - **done**: the branch is yours to push, merge or open as a PR. The factory never does.
 
 | Call | What it does |
 |---|---|
-| `/oc:factory <description>` | Starts the branch's job from a description. |
-| `/oc:factory <issue>` | Starts the branch's job from a GitHub issue number or URL. |
-| `/oc:factory` | Resumes the branch's job at the stage it reached. Without a job, it asks what to build. |
-| `/oc:factory issues` | Opens a GitHub issue for each deferred finding that has none, and records its URL. |
+| `/oc:take <description>` | Starts the branch's job from a description. |
+| `/oc:take <issue>` | Starts the branch's job from a GitHub issue number or URL. |
+| `/oc:take` | Starts the branch's job from what you discussed in the session. |
+| `/oc:take -r`, `/oc:take --resume` | Resumes the branch's job at the stage it reached. |
+| `/oc:take -v`, `/oc:take --verify` | Runs another verify round on a done job. |
+
+Without `-r` or `-v`, `/oc:take` refuses to run on a branch that already has a job. To track a deferred finding, open an issue with `/oc:gh.issue-create`. Then set the entry's `issue` to its URL.
+
+### Modes
+
+The job's `mode` in `job.json` sets when the factory asks you something. Pick it with a flag when you start or resume the job. You can also edit `mode` by hand at any time. The factory reads it before each stage and before each step that may ask you something.
+
+| Mode | Flag | Spec | Plan | Extra reviewers | Triage |
+|---|---|---|---|---|---|
+| `default` | none | only when the request is unclear | never | never | never |
+| `autonomous` | `-a`, `--autonomously` | never | never | never | never |
+| `interactive` | `-i`, `--interactive` | always | always | always | always |
+
+In `default` mode, the factory judges whether the request is clear. If it is, the factory writes the spec alone, short for a small task. If it is not, the factory brainstorms the spec with you. In `autonomous` mode, the factory always writes the spec alone and lists the choices it made under **Assumptions**.
 
 ### Setup
 
@@ -161,7 +181,7 @@ The factory keeps its files outside git, in one directory per org: `<org>/.facto
   marked.min.js                  vendored markdown renderer
   purify.min.js                  vendored HTML sanitizer
   <repo>/jobs/<job id>/
-    job.json                     the job's stage, round and counts
+    job.json                     the job's mode, stage, round and counts
     request.md                   the description or issue the job started from
     spec.md, plan.md, tasks.md
     decisions.md                 dismissed findings, never shown again
@@ -175,9 +195,9 @@ The factory keeps its files outside git, in one directory per org: `<org>/.facto
 
 ### Dashboard
 
-Run `claude-plugin/skills/factory/serve.sh <org>/.factory` in a terminal. It serves the dashboard at `http://localhost:<port>/dashboard.html`, with the port from `config.json`. Run it outside a session, because the sandbox blocks the port.
+Run `claude-plugin/skills/take/serve.sh <org>/.factory` in a terminal. It serves the dashboard at `http://localhost:<port>/dashboard.html`, with the port from `config.json`. Run it outside a session, because the sandbox blocks the port.
 
-The dashboard lists every job in the org, one row per job. Each row shows the job's id, its path and where it is in the flow. Click a row to open the job's page. Each page has its own URL. The page holds a file tree and the open file, rendered from markdown. With no file open, the page shows the flow graph. Click a node to open its file. Click Archive on a job's row or on its page to set `archived: true` in its `job.json`. The dashboard hides archived jobs. To bring a job back, set `archived` to `false` by hand. To try it, serve `claude-plugin/skills/factory/fixtures`.
+The dashboard lists every job in the org, one row per job. Each row shows the job's id, its path, its mode and where it is in the flow. A row turns amber only when the job waits for you at triage, in `interactive` mode. Click a row to open the job's page. Each page has its own URL. The page holds a file tree and the open file, rendered from markdown. With no file open, the page shows the flow graph. Click a node to open its file. Click Archive on a job's row or on its page to set `archived: true` in its `job.json`. The dashboard hides archived jobs. To bring a job back, set `archived` to `false` by hand. To try it, serve `claude-plugin/skills/take/fixtures`.
 
 ## Local storage
 
