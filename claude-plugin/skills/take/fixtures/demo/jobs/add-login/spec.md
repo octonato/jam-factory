@@ -1,3 +1,0 @@
-# Add login
-
-Draft spec.

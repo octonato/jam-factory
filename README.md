@@ -196,12 +196,6 @@ The factory keeps its files outside git, in one directory per org: `<org>/.facto
       triage.md
 ```
 
-### Dashboard
-
-Run `claude-plugin/skills/take/serve.sh <org>/.factory` in a terminal. It serves the dashboard at `http://localhost:<port>/dashboard.html`, with the port from `config.json`. Run it outside a session, because the sandbox blocks the port.
-
-The dashboard lists every job in the org, one row per job. Each row shows the job's id, its path, its mode and where it is in the flow. A row turns amber only when the job waits for you at triage, in `interactive` mode. Click a row to open the job's page. Each page has its own URL. The page holds a file tree and the open file, rendered from markdown. With no file open, the page shows the flow graph. Click a node to open its file. Click Archive on a job's row or on its page to set `archived: true` in its `job.json`. The dashboard hides archived jobs. To bring a job back, set `archived` to `false` by hand. To try it, serve `claude-plugin/skills/take/fixtures`.
-
 ## Local storage
 
 The plugin keeps its files in `.nogit/`, in the current working directory:
