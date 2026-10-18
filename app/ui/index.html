@@ -33,8 +33,9 @@
     align-items: center;
     justify-content: center;
     gap: 12px;
-    height: 100vh;
+    min-height: 100vh;
     margin: 0;
+    padding: 24px;
     background: var(--bg);
     color: var(--ink);
     font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -56,17 +57,85 @@
   }
 
   button:hover { color: var(--accent); border-color: var(--accent); }
+
+  #recent { width: 100%; max-width: 480px; }
+
+  h2 { margin: 0 0 8px; color: var(--ink-2); font-size: 13px; font-weight: 600; }
+
+  #recent-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 60vh;
+    margin: 0;
+    padding: 0;
+    overflow-y: auto;
+    list-style: none;
+  }
+
+  button.recent {
+    display: block;
+    width: 100%;
+    margin: 0;
+    padding: 8px 12px;
+    text-align: left;
+  }
+
+  .recent span { display: block; overflow-wrap: anywhere; }
+
+  .recent .path { color: var(--ink-2); font-size: 12px; }
 </style>
 </head>
 <body>
   <h1>octodeck</h1>
   <p>Open a folder that holds a .factory folder.</p>
+
+  <section id="recent" hidden>
+    <h2>Recent</h2>
+    <ul id="recent-list"></ul>
+  </section>
+
   <button id="open" type="button">Open Project…</button>
 
   <script>
+    const { invoke } = window.__TAURI__.core;
+    const recent = document.getElementById('recent');
+    const list = document.getElementById('recent-list');
+
+    function row(entry) {
+      const name = document.createElement('span');
+      name.className = 'name';
+      name.textContent = entry.name;
+
+      const path = document.createElement('span');
+      path.className = 'path';
+      path.textContent = entry.display;
+
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'recent';
+      button.append(name, path);
+      button.addEventListener('click', () => {
+        invoke('open_recent_factory', { path: entry.path }).finally(render);
+      });
+
+      const item = document.createElement('li');
+      item.append(button);
+      return item;
+    }
+
+    function render() {
+      return invoke('recent_factories').then((entries) => {
+        list.replaceChildren(...entries.map(row));
+        recent.hidden = entries.length === 0;
+      });
+    }
+
     document.getElementById('open').addEventListener('click', () => {
-      window.__TAURI__.core.invoke('open_project_folder');
+      invoke('open_project_folder');
     });
+
+    render();
   </script>
 </body>
 </html>

@@ -15,11 +15,13 @@
 //! Tauri entry point for the octodeck desktop app.
 
 mod navigation;
+mod recent_store;
 mod session_store;
 mod windows;
 
 use tauri::{Manager, RunEvent, WindowEvent};
 
+use recent_store::RecentStore;
 use session_store::ProjectStore;
 
 fn main() {
@@ -29,6 +31,13 @@ fn main() {
         .setup(|app| {
             let store_file = app.path().app_data_dir()?.join("open-projects.json");
             app.manage(ProjectStore::load(store_file));
+
+            let recent_file = app
+                .path()
+                .home_dir()?
+                .join(".jam-factory")
+                .join("recent-factories.json");
+            app.manage(RecentStore::load(recent_file));
 
             app.set_menu(windows::build_menu(app.handle())?)?;
             app.on_menu_event(|app, event| {
@@ -45,7 +54,11 @@ fn main() {
                 windows::on_close_requested(window);
             }
         })
-        .invoke_handler(tauri::generate_handler![windows::open_project_folder])
+        .invoke_handler(tauri::generate_handler![
+            windows::open_project_folder,
+            windows::recent_factories,
+            windows::open_recent_factory
+        ])
         .build(tauri::generate_context!())
         .expect("error while building octodeck");
 

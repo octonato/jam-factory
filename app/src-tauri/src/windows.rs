@@ -28,6 +28,7 @@ use odeck_core::factory::{self, FactoryError};
 use odeck_core::server::Server;
 
 use crate::navigation::{self, Navigation};
+use crate::recent_store::{RecentStore, display_path};
 use crate::session_store::ProjectStore;
 
 pub const OPEN_PROJECT: &str = "open-project";
@@ -101,6 +102,7 @@ pub fn open_project_window(app: &AppHandle, picked: PathBuf) -> Result<(), OpenE
         .and_then(|label| app.get_webview_window(&label))
     {
         let _ = window.set_focus();
+        app.state::<RecentStore>().touch(&factory.project);
         return Ok(());
     }
 
@@ -137,6 +139,7 @@ pub fn open_project_window(app: &AppHandle, picked: PathBuf) -> Result<(), OpenE
     }
 
     app.state::<ProjectStore>().add(&factory.project);
+    app.state::<RecentStore>().touch(&factory.project);
     if let Some(welcome) = app.get_webview_window(WELCOME) {
         let _ = welcome.close();
     }
@@ -153,7 +156,7 @@ pub fn open_welcome_window(app: &AppHandle) {
 
     let built = WebviewWindowBuilder::new(app, WELCOME, WebviewUrl::App("index.html".into()))
         .title("octodeck")
-        .inner_size(600.0, 400.0)
+        .inner_size(600.0, 560.0)
         .build();
     if let Err(e) = built {
         eprintln!("octodeck: cannot open the welcome window: {e}");
@@ -241,4 +244,74 @@ pub fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
 #[tauri::command]
 pub async fn open_project_folder(app: AppHandle) {
     pick_project(&app);
+}
+
+/// Lists the recent projects as `path`, `name` and `display` entries, most recent first.
+#[tauri::command]
+pub fn recent_factories(app: AppHandle) -> Vec<serde_json::Value> {
+    let home = app.path().home_dir().ok();
+
+    app.state::<RecentStore>()
+        .paths()
+        .iter()
+        .map(|path| {
+            let full = path.display().to_string();
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| full.clone());
+            let display = match &home {
+                Some(home) => display_path(path, home),
+                None => full.clone(),
+            };
+
+            serde_json::json!({ "path": full, "name": name, "display": display })
+        })
+        .collect()
+}
+
+/// Opens the recent project at `path`, and drops it from the list when it has no `.factory` folder.
+#[tauri::command]
+pub async fn open_recent_factory(app: AppHandle, path: String) {
+    let path = PathBuf::from(&path);
+
+    if let Err(e) = open_project_window(&app, path.clone()) {
+        if drops_recent(&e) {
+            app.state::<RecentStore>().remove(&path);
+        }
+        show_error(&app, e.to_string());
+    }
+}
+
+/// Tells whether `e` removes the project from the recent list.
+fn drops_recent(e: &OpenError) -> bool {
+    matches!(e, OpenError::Factory(FactoryError::NoFactory(_)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_missing_factory_drops_the_entry() {
+        let e = OpenError::Factory(FactoryError::NoFactory(PathBuf::from("/src/a")));
+
+        assert!(drops_recent(&e));
+    }
+
+    #[test]
+    fn other_errors_keep_the_entry() {
+        let errors = [
+            OpenError::Factory(FactoryError::Config {
+                path: PathBuf::from("/src/a/.factory/config.json"),
+                reason: "bad port".into(),
+            }),
+            OpenError::Server("port in use".into()),
+            OpenError::Window("no window".into()),
+        ];
+
+        for e in errors {
+            assert!(!drops_recent(&e), "{e:?}");
+        }
+    }
 }
