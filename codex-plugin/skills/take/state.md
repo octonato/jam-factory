@@ -22,9 +22,12 @@ Write every file in the job folder with the **Write** or **Edit** tool, never wi
     report.md
     extras.md
     triage.md
+    submit.md
 ```
 
 `round-N/extras.md` lists the extra reviewer candidates and my decision on them. `skills/verify/review.md` defines its format.
+
+A review job writes only `job.json`, `request.md` and the round folders. Its round folders add `submit.md`, the PR comment, and hold no `triage.md`. `skills/submit-review/submit.md` defines its format.
 
 ## job.json
 
@@ -38,6 +41,7 @@ Only the factory skill writes it, with two exceptions. The dashboard's Archive b
   "branch": "feature-1",
   "base": "main",
   "mode": "default",
+  "flow": "build",
   "stage": "triage",
   "round": 2,
   "lastRound": false,
@@ -56,7 +60,9 @@ Only the factory skill writes it, with two exceptions. The dashboard's Archive b
 - `repo`: the name of the worktree's parent folder.
 - `worktree`: an absolute path.
 - `mode`: `default`, `autonomous` or `interactive`. The skill's **Modes** section says when each one asks me something. A missing field means `default`.
-- `stage`: `spec`, `plan`, `implement`, `verify`, `triage`, `done` or `blocked`.
+- `flow`: `build` or `review`. A missing field means `build`.
+- `pr`: the PR number. Only review jobs set it.
+- `stage`: `spec`, `plan`, `implement`, `verify`, `triage`, `done` or `blocked`. A review job uses `verify`, `submit`, `done` and `blocked`.
 - `round`: the last verify round, `0` before the first.
 - `lastRound`: `true` when triage picked `last round`. `-r` sets it back to `false`.
 - `tasksOpen`, `tasksDone`: counted from `tasks.md`.
@@ -71,9 +77,9 @@ Only the factory skill writes it, with two exceptions. The dashboard's Archive b
 ```markdown
 # Request: {id}
 
-- source: {description | issue URL | session}
+- source: {description | issue URL | PR URL | session}
 
-{My description verbatim, the issue's title and body, or the summary of the session's discussion.}
+{My description verbatim, the issue's title and body, the PR's title and body, or the summary of the session's discussion.}
 ```
 
 ## tasks.md

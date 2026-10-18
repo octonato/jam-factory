@@ -161,6 +161,8 @@ spec ─► plan ─► implement ─► verify(N) ─► triage(N) ─┬─►
 | `/jam:take <description>` | Starts the branch's job from a description. |
 | `/jam:take <issue>` | Starts the branch's job from a GitHub issue number or URL. |
 | `/jam:take` | Starts the branch's job from what you discussed in the session. |
+| `/jam:take <PR URL>` | Starts a review job for that PR. Run it on the PR's branch. |
+| `/jam:take -p [number]`, `/jam:take --pr [number]` | Starts a review job for the PR with that number, or for the current branch's PR. |
 | `/jam:take -r`, `/jam:take --resume` | Resumes the branch's job at the stage it reached. |
 | `/jam:take -v`, `/jam:take --verify` | Runs another verify round on a done job. |
 
@@ -178,6 +180,36 @@ The job's `mode` in `job.json` sets when the factory asks you something. Pick it
 
 In `default` mode, the factory judges whether the request is clear. If it is, the factory writes the spec alone, short for a small task. If it is not, the factory brainstorms the spec with you. In `autonomous` mode, the factory always writes the spec alone and lists the choices it made under **Assumptions**.
 
+### Review jobs
+
+A review job reviews a coworker's PR. It runs one verify round over the whole PR diff, then writes the PR comment. It changes no code and makes no commits. The factory never posts the comment: you open it on GitHub and submit it yourself.
+
+Check out the PR first:
+
+```sh
+gh pr checkout <pr>
+```
+
+Then run `/jam:take <PR URL>`, or `/jam:take -p` for the current branch's PR. Add a number to name the PR: `/jam:take -p 42`. The factory stops when the PR is not open, or when the current branch is not the PR's head branch. It never checks out a branch. A PR URL always starts a review job. An issue number or URL still starts a build job.
+
+```
+verify(N) ─► submit(N) ─► done
+```
+
+- **verify**: pulls the PR's new commits, then runs one `/jam:verify` round over the PR.
+- **submit**: writes the PR comment, drops the findings already on the PR, then offers to open the comment.
+- **done**: shows the PR URL, the comment's path and its number of findings.
+
+The job's `mode` sets when a review job asks you something:
+
+| Mode | Flag | Extra reviewers | Open the comment |
+|---|---|---|---|
+| `default` | none | never | ask |
+| `autonomous` | `-a`, `--autonomously` | never | never |
+| `interactive` | `-i`, `--interactive` | always | ask |
+
+After the coworker pushes new commits, run `/jam:take -v`. The factory pulls the commits and reviews the whole PR diff again in a new round. The new comment leaves out the findings that PR comments already report. If the PR is closed or merged, the job blocks. `-p` does not combine with `-r` or `-v`.
+
 ### Files
 
 ```
@@ -188,7 +220,7 @@ In `default` mode, the factory judges whether the request is clear. If it is, th
   purify.min.js                  vendored HTML sanitizer
   <repo>/jobs/<job id>/
     job.json                     the job's mode, stage, round and counts
-    request.md                   the description or issue the job started from
+    request.md                   the description, issue or PR the job started from
     spec.md, plan.md, tasks.md
     decisions.md                 dismissed findings, never shown again
     deferred.md                  deferred findings, with their issue URLs
@@ -197,6 +229,7 @@ In `default` mode, the factory judges whether the request is clear. If it is, th
       report.md
       extras.md                  extra reviewer candidates and your pick
       triage.md
+      submit.md                  the PR comment, review jobs only
 ```
 
 ## Commands
@@ -221,9 +254,9 @@ The examples below use Claude Code syntax: `/jam:take`, `/jam:verify`, and so on
 
 | Skill | Description |
 |---|---|
-| `/jam:take` | Runs one job through the factory: spec, plan, implement, verify and triage. It tracks the job in files under $FACTORY_ROOT. Run it on a feature branch, in the main checkout or in a worktree. Pass a description or a GitHub issue to start the branch's job. Pass nothing to start it from the session. Add `-r` to resume the job, or `-v` to run another verify round on a done job. It runs on its own and asks only when the request is unclear. Add `-a` to never ask, or `-i` to approve every step. It never merges or pushes. |
+| `/jam:take` | Runs one job through the factory: spec, plan, implement, verify and triage. It tracks the job in files under $FACTORY_ROOT. Run it on a feature branch, in the main checkout or in a worktree. Pass a description or a GitHub issue to start the branch's job. Pass nothing to start it from the session. Pass a PR URL, or `-p`, to review a coworker's PR as a job. Add `-r` to resume the job, or `-v` to run another verify round on a done job. It runs on its own and asks only when the request is unclear. Add `-a` to never ask, or `-i` to approve every step. It never merges or pushes. |
 | `/jam:verify` | Read-only review of a PR, a commit range or the current branch. Under 300 changed lines, it runs jam:independent-reviewer or superpowers:requesting-code-review, picked at random. From 300 lines, it runs both. Then it offers extra reviewers suited to the diff (from `pr-review-toolkit` in Claude Code). It checks each finding against the code. It writes one report to .nogit/verify-{timestamp}/, or to the directory --out names. Use /jam:submit-review to turn the report into a PR comment. |
-| `/jam:submit-review` | Turns a /jam:verify report into a PR comment. The comment holds only the findings and their severity. It drops findings that comments on the PR already report. Pass verify-{timestamp} to use a run on disk. Pass a target to run /jam:verify first. Pass nothing to pick a run from a list. It offers to open the comment on GitHub. It never posts the comment. |
+| `/jam:submit-review` | Turns a /jam:verify report into a PR comment. The comment holds only the findings and their severity. Pass verify-{timestamp} to use a run on disk. Pass a target to run /jam:verify first. Pass nothing to pick a run from a list. It drops the findings that comments on the PR already report, then offers to open the comment on GitHub. It never posts the comment. |
 | `/jam:independent-reviewer` | Independent, read-only code review of a PR, a commit range or the current branch. A fresh subagent reviews the change and never learns how it was built. It writes the report to .nogit/verify-{timestamp}/independent-review.md. Add --report-in-chat to get the report in chat instead. |
 | `/jam:verify-fix` | Fix the findings of a /jam:verify run, each in its own commit. Runs on its own by default; add -i to fix one at a time. Pass --resume verify-{timestamp} to use a run on disk. Otherwise pick a run from a list, or run a new review. Never pushes. |
 | `/jam:walk-through` | Walk-through of a code path or a set of changes, broken into logical steps. By default it saves the whole walk to .nogit/walk-through/ to read later; add -i/--interactive to walk through it one step at a time instead. Add -r/--review to run /jam:verify plus the comment and plain-English checks. It folds their findings into each step. |
@@ -251,7 +284,7 @@ Extra reviewers are optional. Claude Code uses the `pr-review-toolkit` plugin; C
 |---|---|
 | `/jam:verify [target]` | Reviews and writes a report. Changes no code. |
 | `/jam:verify --out <dir> [target]` | Same, with the run directory set to `<dir>`. |
-| `/jam:submit-review verify-{timestamp}` | Writes the findings of that run as a comment for the PR author, and offers to open it on GitHub. |
+| `/jam:submit-review verify-{timestamp}` | Writes the findings of that run as a comment for the PR author. It drops the findings already on the PR, then offers to open the comment on GitHub. |
 | `/jam:submit-review <target>` | Runs `/jam:verify` first, then writes the comment. |
 | `/jam:submit-review` | Lists the three newest runs on disk. Pick one, or run a new verify on the current branch. |
 | `/jam:verify-fix [target]` | Lists the three newest runs on disk. Pick one, or run a new review of the target. Then fixes and commits each finding without stopping. It asks its questions at the end. It never pushes. |

@@ -446,6 +446,8 @@
     border-bottom-right-radius: 8px;
   }
 
+  .loop-end > .branches { margin: -0.4em 0; }
+
   .loop > .back-edge {
     grid-row: 2;
     grid-column: 2 / 5;
@@ -607,14 +609,26 @@
 <script src="purify.min.js"></script>
 <script>
 const POLL_MS = 2000
-const PHASES = ['spec', 'plan', 'impl', 'review', 'triage', 'done']
-const STAGE_PHASE = {
-  spec: 'spec',
-  plan: 'plan',
-  implement: 'impl',
-  verify: 'review',
-  triage: 'triage',
-  done: 'done',
+const FLOWS = {
+  build: {
+    phases: ['spec', 'plan', 'impl', 'review', 'triage', 'done'],
+    stagePhase: {
+      spec: 'spec',
+      plan: 'plan',
+      implement: 'impl',
+      verify: 'review',
+      triage: 'triage',
+      done: 'done',
+    },
+  },
+  review: {
+    phases: ['review', 'submit', 'done'],
+    stagePhase: {
+      verify: 'review',
+      submit: 'submit',
+      done: 'done',
+    },
+  },
 }
 const STAGE_FILE = {
   spec: 'spec.md',
@@ -747,14 +761,32 @@ function shortPath(worktree) {
   return String(worktree || '').split('/').filter((s) => s !== '').slice(-3).join('/')
 }
 
+function jobFlow(job) {
+  return job.flow || 'build'
+}
+
+// Returns the phases and stage map of the job's flow, or null for an unknown flow.
+function flowOf(job) {
+  const flow = jobFlow(job)
+  return Object.hasOwn(FLOWS, flow) ? FLOWS[flow] : null
+}
+
 // Returns the stage that sets the phase: `blocked.stage` for a blocked job.
 function phaseStage(job) {
   return job.stage === 'blocked' ? job.blocked?.stage : job.stage
 }
 
 function currentPhase(job) {
+  const flow = flowOf(job)
   const stage = phaseStage(job)
-  return Object.hasOwn(STAGE_PHASE, stage) ? STAGE_PHASE[stage] : null
+  return flow !== null && Object.hasOwn(flow.stagePhase, stage) ? flow.stagePhase[stage] : null
+}
+
+// Returns the problem with the job's flow or stage, or null when both are known.
+function jobProblem(job) {
+  if (flowOf(job) === null) return `unknown flow "${jobFlow(job)}"`
+  if (!currentPhase(job)) return `unknown stage "${phaseStage(job)}"`
+  return null
 }
 
 function jobMode(job) {
@@ -769,8 +801,9 @@ function tint(job) {
 }
 
 function indicator(job) {
-  const current = PHASES.indexOf(currentPhase(job))
-  return PHASES.map((phase, i) => {
+  const phases = flowOf(job)?.phases ?? []
+  const current = phases.indexOf(currentPhase(job))
+  return phases.map((phase, i) => {
     const step = i < current ? 'past' : i === current ? 'current' : 'future'
     const color = i === current || job.stage === 'done' ? tint(job) : ''
     const line = i > 0 ? '<span class="line"></span>' : ''
@@ -780,7 +813,9 @@ function indicator(job) {
 
 function stepLabel(job) {
   const phase = currentPhase(job) || phaseStage(job) || 'unknown'
-  const parts = [escape(jobMode(job)), escape(job.stage === 'blocked' ? `blocked at ${phase}` : phase)]
+  const parts = [escape(jobMode(job))]
+  if (jobFlow(job) === 'review') parts.push('review')
+  parts.push(escape(job.stage === 'blocked' ? `blocked at ${phase}` : phase))
   if (job.round > 0) parts.push(`round ${escape(job.round)}`)
   if (job.lastRound === true) parts.push('last round')
 
@@ -886,10 +921,11 @@ function fileHtml(path, text) {
 }
 
 function nodeState(job, phase) {
-  const current = PHASES.indexOf(currentPhase(job))
-  const i = PHASES.indexOf(phase)
+  const phases = flowOf(job)?.phases ?? []
+  const current = phases.indexOf(currentPhase(job))
+  const i = phases.indexOf(phase)
   if (i < current) return 'past'
-  if (i > current) return 'future'
+  if (i > current || current < 0) return 'future'
   return `current ${tint(job)}`
 }
 
@@ -933,6 +969,7 @@ function chips(files, round) {
     ]
     const covered = new Set([
       `${prefix}report.md`,
+      `${prefix}submit.md`,
       ...named.map((chip) => chip.path),
       ...reviewNames(files, round).map((name) => `${prefix}reviews/${name}.md`),
     ])
@@ -974,6 +1011,7 @@ function shownRound(job) {
 
 // Returns the file the pane shows when the route names none.
 function defaultFile(job, files, round) {
+  if (jobFlow(job) === 'review') return reviewDefaultFile(job, files, round)
   if (job.stage === 'blocked') return 'job.json'
 
   const stage = phaseStage(job)
@@ -983,9 +1021,23 @@ function defaultFile(job, files, round) {
   return Object.hasOwn(STAGE_FILE, stage) ? STAGE_FILE[stage] : null
 }
 
+// Returns the file the pane shows for a review job when the route names none.
+function reviewDefaultFile(job, files, round) {
+  if (job.stage === 'blocked') return 'job.json'
+
+  const report = `round-${round}/report.md`
+  const submit = `round-${round}/submit.md`
+  if (job.stage === 'verify') return files.includes(report) ? report : 'request.md'
+  if (job.stage === 'submit' || job.stage === 'done') return files.includes(submit) ? submit : report
+  return null
+}
+
 function graphHtml(job, files, round, open) {
-  const phase = PHASES.indexOf(currentPhase(job))
-  const fixing = round > 0 && phase >= 0 && phase < PHASES.indexOf('review')
+  if (jobFlow(job) === 'review') return reviewGraphHtml(job, files, round, open)
+
+  const phases = FLOWS.build.phases
+  const phase = phases.indexOf(currentPhase(job))
+  const fixing = round > 0 && phase >= 0 && phase < phases.indexOf('review')
   const finished = round < job.round || fixing
   const reviewState = finished ? 'past' : nodeState(job, 'review')
   const triageState = finished ? 'past' : nodeState(job, 'triage')
@@ -1020,6 +1072,44 @@ function graphHtml(job, files, round, open) {
       ${edge}
       <div class="branches ends">
         <div class="branch">${stub}${graphNode(job, open, 'done', doneState, 'deferred.md')}</div>
+        <div class="branch">${stub}${graphNode(job, open, 'blocked', blockedState, 'job.json')}</div>
+      </div>
+    </div>`
+}
+
+function reviewGraphHtml(job, files, round, open) {
+  const finished = round < job.round
+  const reviewState = finished ? 'past' : nodeState(job, 'review')
+  const commentState = finished ? 'past' : nodeState(job, 'submit')
+  const doneState = job.stage === 'done' ? nodeState(job, 'done') : 'future'
+  const blockedState = job.stage === 'blocked' ? 'current blocked' : 'future'
+
+  const edge = '<span class="edge"></span>'
+  const stub = '<span class="stub"></span>'
+  const reviews = reviewNodes(job, files, round, reviewState, open)
+    .map((node) => `<div class="branch">${stub}${node}${stub}</div>`)
+    .join('')
+  const reportPath = round > 0 ? `round-${round}/report.md` : null
+  const commentPath = round > 0 ? `round-${round}/submit.md` : null
+  const donePath = job.round > 0 ? `round-${job.round}/submit.md` : null
+
+  return `
+    <div class="flow">
+      ${graphNode(job, open, 'request', 'past', 'request.md')}
+      ${edge}
+      <div class="loop">
+        <div class="loop-end start"><div class="branches fan-in">${reviews}</div></div>
+        ${edge}
+        ${graphNode(job, open, 'report', reviewState, reportPath)}
+        ${edge}
+        <div class="loop-end finish">${graphNode(job, open, 'comment', commentState, commentPath)}</div>
+        <span class="back-edge"></span>
+        ${chipsHtml(job, files, round, open)}
+        ${roundButtons(job)}
+      </div>
+      ${edge}
+      <div class="branches ends">
+        <div class="branch">${stub}${graphNode(job, open, 'done', doneState, donePath)}</div>
         <div class="branch">${stub}${graphNode(job, open, 'blocked', blockedState, 'job.json')}</div>
       </div>
     </div>`
@@ -1288,7 +1378,8 @@ async function poll() {
   try {
     const { jobs, problems } = await loadJobs()
     for (const job of jobs) {
-      if (!currentPhase(job)) problems.push(`${job.repo}/${job.id}: unknown stage "${phaseStage(job)}"`)
+      const problem = jobProblem(job)
+      if (problem !== null) problems.push(`${job.repo}/${job.id}: ${problem}`)
     }
     problems.push(...missingScripts())
 

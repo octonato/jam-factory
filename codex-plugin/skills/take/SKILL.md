@@ -1,6 +1,6 @@
 ---
 name: take
-description: Run one job through the Jam Factory — spec, plan, implement, verify and triage — tracked in files under $FACTORY_ROOT. Run it on a feature branch, in the main checkout or in a worktree. Pass a description or a GitHub issue to start the branch's job. Pass nothing to start it from the session. Add -r/--resume to resume the job, or -v/--verify to run another verify round on a done job. It runs on its own and asks only when the request is unclear. Add -a/--autonomously to never ask, or -i/--interactive to approve every step. Never merges or pushes.
+description: Run one job through the Jam Factory — spec, plan, implement, verify and triage — tracked in files under $FACTORY_ROOT. Run it on a feature branch, in the main checkout or in a worktree. Pass a description or a GitHub issue to start the branch's job. Pass nothing to start it from the session. Pass a PR URL, or -p/--pr, to review a coworker's PR as a job. Add -r/--resume to resume the job, or -v/--verify to run another verify round on a done job. It runs on its own and asks only when the request is unclear. Add -a/--autonomously to never ask, or -i/--interactive to approve every step. Never merges or pushes.
 allowed-tools: Bash(echo *), Bash(git rev-parse *), Bash(git branch --show-current), Bash(date *)
 ---
 
@@ -49,14 +49,16 @@ Take the flags out of what I gave you:
 - `-i` or `--interactive`: the mode is `interactive`.
 - `-r` or `--resume`: resume the job.
 - `-v` or `--verify`: run another verify round on a done job.
+- `-p` or `--pr`, with an optional PR number right after it: start a review job for that PR.
 
-If I passed both mode flags, tell me they conflict and stop. The rest is the argument.
+If I passed both mode flags, tell me they conflict and stop. If I passed `-p` with `-r` or `-v`, tell me they conflict and stop. The rest is the argument.
 
 - **The job folder holds `job.json` with `archived: true`**: tell me the job is archived and stop.
 - **The job folder holds `job.json`, and I passed `-v`**: if its `stage` is `done`, set `lastRound: false` and `stage: verify`, then go to **Resume**. Otherwise tell me the job is not done and stop.
 - **The job folder holds `job.json`, and I passed `-r`**: go to **Resume**.
 - **The job folder holds `job.json`**: tell me the job already exists, and to pass `-r` to resume it. Stop.
 - **I passed `-r` or `-v`**: tell me the branch has no job. Stop.
+- **I passed `-p`, or the argument is a PR URL**: read the plugin root's `skills/take/review.md` and go to its **New review job** section. A PR URL holds `/pull/`.
 - **Anything else**: go to **New job**.
 
 When you go to **Resume** and the argument is not empty, tell me the job already exists and ignore the argument.
@@ -67,6 +69,7 @@ Show this list when a step says to show the usage:
 
 - `$jam:take <description | issue>`: start the branch's job from a description or a GitHub issue.
 - `$jam:take`: start the branch's job from what we discussed in this session.
+- `$jam:take <PR URL>` or `$jam:take -p [number]`: start a review job for a coworker's PR. Without a number, `-p` takes the current branch's PR.
 - `$jam:take -r`: resume the branch's job.
 - `$jam:take -v`: run another verify round on the branch's done job.
 - `-a` or `-i` on any call: set the job's mode to `autonomous` or `interactive`.
@@ -84,14 +87,16 @@ Show this list when a step says to show the usage:
    - **An issue number, `#n` or an issue URL**: run `gh issue view {issue} --json number,title,body,url`. The request is the issue's title, URL and body.
    - **Anything else**: the request is the argument, verbatim.
 6. Write `{job folder}/request.md` with the request, as `state.md` shows.
-7. Write `{job folder}/job.json` with this worktree, the current branch and the base. Set `mode` from the flag, or `default` without one. Set `stage: spec`, `round: 0`, `lastRound: false`, every count `0`, `blocked: null` and `archived: false`. The Write tool creates the folders.
+7. Write `{job folder}/job.json` with this worktree, the current branch and the base. Set `mode` from the flag, or `default` without one. Set `flow: build`, `stage: spec`, `round: 0`, `lastRound: false`, every count `0`, `blocked: null` and `archived: false`. The Write tool creates the folders.
 8. Go to **Spec**.
 
 ## Resume
 
 Read `job.json`. If I passed a mode flag, set `mode` to it.
 
-Go to the section for its `stage`:
+If its `flow` is `review`, read the plugin root's `skills/take/review.md`. Go to its section for the `stage`: `verify`, `submit`, `done` or `blocked`.
+
+Otherwise, go to the section for its `stage`:
 
 - `spec`: **Spec**
 - `plan`: **Plan**
@@ -220,6 +225,7 @@ If any deferred finding has no issue, tell me that `$jam:gh-issue-create` opens 
 ## Rules
 
 - You never merge, push or open a PR.
+- A review job never commits, never checks out a branch and never posts the comment.
 - Update `job.json` on every stage change, as `state.md` says.
 - Ask me only where the job's mode allows it. A blocked job is the one exception.
 - Keep me posted with one short line per stage change. For example: `feature-1: round 2 verify done, 1 must-fix, 2 should-fix → triage`.

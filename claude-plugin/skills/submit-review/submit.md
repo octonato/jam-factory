@@ -47,14 +47,9 @@ Give a file's full path the first time you mention it. After that, give the file
 
 If step 1 picks no finding, write no file. Tell me there are no findings and stop.
 
-## 3. Offer to publish
+## 3. Drop the findings already on the PR
 
-Give me the path of the file and the number of findings.
-If the report's `pr` is `none`, stop here.
-Otherwise, ask whether to open it as a PR comment on GitHub.
-If I decline, stop here.
-
-## 4. Drop the findings already on the PR
+If the report's `pr` is `none`, skip this step.
 
 Run this command with the report's `repo` and `pr`, with `dangerouslyDisableSandbox: true`:
 
@@ -75,6 +70,13 @@ List the removed findings for me. For each one, give its title and the link of t
 If you removed at least one finding, make `(duplicates removed)` the first line of `submit.md`, followed by a blank line. Add it only once.
 
 If no finding is left, tell me the PR comments already cover every finding and stop.
+
+## 4. Offer to open
+
+Give me the path of the file and the number of findings left.
+If the report's `pr` is `none`, stop here.
+Otherwise, ask whether to open it as a PR comment on GitHub.
+If I decline, stop here.
 
 ## 5. Open the comment
 
