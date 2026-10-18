@@ -54,7 +54,7 @@ Take the flags out of what I gave you:
 If I passed both mode flags, tell me they conflict and stop. If I passed `-p` with `-r` or `-v`, tell me they conflict and stop. The rest is the argument.
 
 - **The session folder holds `session.json` with `archived: true`**: tell me the session is archived and stop.
-- **The session folder holds `session.json`, and I passed `-v`**: if its `stage` is `done`, set `lastRound: false` and `stage: verify`, then go to **Resume**. Otherwise tell me the session is not done and stop.
+- **The session folder holds `session.json`, and I passed `-v`**: if its `flow` is `vibe`, tell me a vibe session has no verify round, and that `$jam:verify` reviews the branch. Stop. If its `stage` is `done`, set `lastRound: false` and `stage: verify`, then go to **Resume**. Otherwise tell me the session is not done and stop.
 - **The session folder holds `session.json`, and I passed `-r`**: go to **Resume**.
 - **The session folder holds `session.json`**: tell me the session already exists, and to pass `-r` to resume it. Stop.
 - **I passed `-r` or `-v`**: tell me the branch has no session. Stop.
@@ -95,6 +95,8 @@ Show this list when a step says to show the usage:
 Read `session.json`. If I passed a mode flag, set `mode` to it.
 
 If its `flow` is `review`, read the plugin root's `skills/take/review.md`. Go to its section for the `stage`: `verify`, `submit`, `done` or `blocked`.
+
+If its `flow` is `vibe`, read the plugin root's `skills/take/vibe.md`. Go to its section for the `stage`: `implement`, `done` or `blocked`.
 
 Otherwise, go to the section for its `stage`:
 

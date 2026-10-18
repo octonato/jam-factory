@@ -629,6 +629,13 @@ const FLOWS = {
       done: 'done',
     },
   },
+  vibe: {
+    phases: ['impl', 'done'],
+    stagePhase: {
+      implement: 'impl',
+      done: 'done',
+    },
+  },
 }
 const STAGE_FILE = {
   spec: 'spec.md',
@@ -814,7 +821,7 @@ function indicator(session) {
 function stepLabel(session) {
   const phase = currentPhase(session) || phaseStage(session) || 'unknown'
   const parts = [escape(sessionMode(session))]
-  if (sessionFlow(session) === 'review') parts.push('review')
+  if (sessionFlow(session) !== 'build') parts.push(escape(sessionFlow(session)))
   parts.push(escape(session.stage === 'blocked' ? `blocked at ${phase}` : phase))
   if (session.round > 0) parts.push(`round ${escape(session.round)}`)
   if (session.lastRound === true) parts.push('last round')
@@ -1012,6 +1019,7 @@ function shownRound(session) {
 // Returns the file the pane shows when the route names none.
 function defaultFile(session, files, round) {
   if (sessionFlow(session) === 'review') return reviewDefaultFile(session, files, round)
+  if (sessionFlow(session) === 'vibe') return vibeDefaultFile(session)
   if (session.stage === 'blocked') return 'session.json'
 
   const stage = phaseStage(session)
@@ -1032,8 +1040,17 @@ function reviewDefaultFile(session, files, round) {
   return null
 }
 
+// Returns the file the pane shows for a vibe session when the route names none.
+function vibeDefaultFile(session) {
+  if (session.stage === 'blocked') return 'session.json'
+  if (session.stage === 'implement') return 'request.md'
+  if (session.stage === 'done') return 'tasks.md'
+  return null
+}
+
 function graphHtml(session, files, round, open) {
   if (sessionFlow(session) === 'review') return reviewGraphHtml(session, files, round, open)
+  if (sessionFlow(session) === 'vibe') return vibeGraphHtml(session, open)
 
   const phases = FLOWS.build.phases
   const phase = phases.indexOf(currentPhase(session))
@@ -1110,6 +1127,26 @@ function reviewGraphHtml(session, files, round, open) {
       ${edge}
       <div class="branches ends">
         <div class="branch">${stub}${graphNode(session, open, 'done', doneState, donePath)}</div>
+        <div class="branch">${stub}${graphNode(session, open, 'blocked', blockedState, 'session.json')}</div>
+      </div>
+    </div>`
+}
+
+function vibeGraphHtml(session, open) {
+  const doneState = session.stage === 'done' ? nodeState(session, 'done') : 'future'
+  const blockedState = session.stage === 'blocked' ? 'current blocked' : 'future'
+
+  const edge = '<span class="edge"></span>'
+  const stub = '<span class="stub"></span>'
+
+  return `
+    <div class="flow">
+      ${graphNode(session, open, 'request', 'past', 'request.md')}
+      ${edge}
+      ${graphNode(session, open, 'impl', nodeState(session, 'impl'), 'tasks.md')}
+      ${edge}
+      <div class="branches ends">
+        <div class="branch">${stub}${graphNode(session, open, 'done', doneState)}</div>
         <div class="branch">${stub}${graphNode(session, open, 'blocked', blockedState, 'session.json')}</div>
       </div>
     </div>`

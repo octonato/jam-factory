@@ -29,6 +29,8 @@ Write every file in the session folder with the **Write** or **Edit** tool, neve
 
 A review session writes only `session.json`, `request.md` and the round folders. Its round folders add `submit.md`, the PR comment, and hold no `triage.md`. `skills/submit-review/submit.md` defines its format.
 
+A vibe session writes only `session.json`, `request.md` and `tasks.md`.
+
 ## session.json
 
 Only the factory skill writes it, with two exceptions. The dashboard's Archive button sets `archived` and `updated`. I may edit `mode` by hand. Rewrite the whole file on every change, and set `updated` to the current UTC time.
@@ -60,11 +62,12 @@ Only the factory skill writes it, with two exceptions. The dashboard's Archive b
 - `repo`: the name of the worktree's parent folder.
 - `worktree`: an absolute path.
 - `mode`: `default`, `autonomous` or `interactive`. The skill's **Modes** section says when each one asks me something. A missing field means `default`.
-- `flow`: `build` or `review`. A missing field means `build`.
+- `flow`: `build`, `review` or `vibe`. A missing field means `build`.
 - `pr`: the PR number. Only review sessions set it.
-- `stage`: `spec`, `plan`, `implement`, `verify`, `triage`, `done` or `blocked`. A review session uses `verify`, `submit`, `done` and `blocked`.
+- `stage`: `spec`, `plan`, `implement`, `verify`, `triage`, `done` or `blocked`. A review session uses `verify`, `submit`, `done` and `blocked`. A vibe session uses `implement`, `done` and `blocked`.
 - `round`: the last verify round, `0` before the first.
 - `lastRound`: `true` when triage picked `last round`. `-r` sets it back to `false`.
+- `clarified`: `true` once a vibe session's Clarify step ran in `default` or `interactive` mode. Only vibe sessions set it. A missing field means `false`.
 - `tasksOpen`, `tasksDone`: counted from `tasks.md`.
 - `mustFix`, `shouldFix`, `nit`: the current round, after the triage filter. `0` before the first round.
 - `dismissed`, `deferred`: the entries in `decisions.md` and `deferred.md`.
@@ -82,13 +85,18 @@ Only the factory skill writes it, with two exceptions. The dashboard's Archive b
 {My description verbatim, the issue's title and body, the PR's title and body, or the summary of the conversation.}
 ```
 
+A vibe session may append two sections:
+
+- `## Clarifications`: the questions it asked me and my answers.
+- `## Assumptions`: each choice the request left open that it made alone.
+
 ## tasks.md
 
 ```markdown
 # Tasks: {id}
 
 ### T1: {title}
-- source: {plan task 1 | round 1 F2}
+- source: {plan task 1 | round 1 F2 | request}
 - status: {open | done | failed}
 - commit: {none | {path}@{short hash}, one per git repository the task changed}
 
@@ -96,6 +104,8 @@ Only the factory skill writes it, with two exceptions. The dashboard's Archive b
 ```
 
 Task IDs never change. New tasks get the next free number.
+
+A vibe session holds one task, `T1`, with the source `request`. Its text points to `request.md`.
 
 `{path}` is the git repository's path relative to the worktree, and `.` for the worktree itself. For example: `commit: .@a1b2c3d, sdk@9f8e7d6`.
 
