@@ -71,6 +71,19 @@
   }
 
   header h1 { margin: 0; font-size: 1.286rem; }
+
+  .tabs { display: flex; gap: 4px; }
+
+  .tab {
+    padding: 0 6px;
+    color: var(--ink-2);
+    text-decoration: none;
+    border-bottom: 2px solid transparent;
+  }
+
+  .tab:hover { color: var(--accent); }
+  .tab[aria-current="page"] { color: var(--ink); border-bottom-color: var(--accent); }
+
   #status { color: var(--muted); font-size: 0.857rem; }
   #problems { color: var(--critical); padding: 0 16px; }
 
@@ -205,16 +218,6 @@
     gap: 12px;
     height: calc(100% - 32px);
   }
-
-  .job-head {
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr);
-    align-items: center;
-    gap: 12px;
-  }
-
-  .back { white-space: nowrap; text-decoration: none; }
-  .back:hover { text-decoration: underline; }
 
   #modal {
     max-width: 480px;
@@ -575,6 +578,7 @@
 <body>
 <header>
   <h1>Jam Board</h1>
+  <nav class="tabs"><a class="tab" href="#/" aria-current="page">Jobs</a></nav>
   <span id="status">loading…</span>
   <div class="font-size">
     <button type="button" id="font-down" title="Smaller text">A−</button>
@@ -1072,12 +1076,9 @@ async function renderJobPage(job, path) {
   if (jobView.el !== $('page').firstElementChild || jobView.dir !== job.dir) {
     $('page').innerHTML = `
       <div class="column job-page">
-        <div class="job-head">
-          <a class="back" href="#/">← Jobs</a>
-          <div class="row card ${tint(job)}" id="job-row" data-dir="${escape(job.dir)}">
-            <div class="body">${row}</div>
-            <span class="actions">${cardActions(job)}</span>
-          </div>
+        <div class="row card ${tint(job)}" id="job-row" data-dir="${escape(job.dir)}">
+          <div class="body">${row}</div>
+          <span class="actions">${cardActions(job)}</span>
         </div>
         <section class="flow-pane" id="flow-pane">
           <button type="button" class="icon flow-toggle" id="flow-toggle">
@@ -1118,7 +1119,7 @@ async function renderJobPage(job, path) {
 }
 
 function renderNotFound() {
-  $('page').innerHTML = '<div class="column"><p class="empty">job not found · <a href="#/">← Jobs</a></p></div>'
+  $('page').innerHTML = '<div class="column"><p class="empty">job not found</p></div>'
 }
 
 function render() {

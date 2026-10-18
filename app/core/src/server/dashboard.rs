@@ -70,4 +70,26 @@ mod tests {
         assert!(!html.contains("id=\"tree\""));
         assert!(!html.contains("flow-button"));
     }
+
+    #[test]
+    fn dashboard_header_has_a_jobs_tab() {
+        let html = std::str::from_utf8(embedded("/dashboard.html").unwrap().bytes).unwrap();
+        let start = html.find("<header>").unwrap();
+        let end = html.find("</header>").unwrap();
+        let header = &html[start..end];
+
+        let title = header.find("<h1>Jam Board</h1>").unwrap();
+        let tabs = header.find("<nav class=\"tabs\">").unwrap();
+        assert!(tabs > title);
+        assert!(header.contains("<a class=\"tab\" href=\"#/\" aria-current=\"page\">Jobs</a>"));
+    }
+
+    #[test]
+    fn dashboard_has_no_back_link() {
+        let html = std::str::from_utf8(embedded("/dashboard.html").unwrap().bytes).unwrap();
+
+        assert!(!html.contains("← Jobs"));
+        assert!(!html.contains("class=\"back\""));
+        assert!(!html.contains("job-head"));
+    }
 }
