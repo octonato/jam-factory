@@ -23,111 +23,120 @@ For example:
 
 ## Requirements
 
-- [Claude Code](https://docs.claude.com/en/docs/claude-code) installed and working. The review skills need v2.1.292 or later.
-- The `superpowers` plugin. `/jam:verify`, `/jam:verify-fix`, `/jam:submit-review` and `/jam:walk-through -r` need it.
-- The `pr-review-toolkit` plugin. `/jam:verify` offers its reviewers as extras.
+- One supported assistant installed and working: Claude Code, Codex, or Gemini CLI.
+- [Superpowers](https://github.com/obra/superpowers), installed for your chosen assistant. The factory uses it for specs and plans; the review workflows use it for code review. Follow its installation instructions for your assistant.
+- **Claude Code only:** Claude Code v2.1.292 or later for the review skills, and the `pr-review-toolkit` plugin for the extra reviewers offered by `/jam:verify`. Codex and Gemini do not require Claude Code or its `pr-review-toolkit` plugin.
+- Git for branch and commit operations. GitHub workflows also need the [GitHub CLI](https://cli.github.com/) (`gh`), authenticated with `gh auth login`.
 
 ## Install
 
-The plugin is distributed through a Claude Code marketplace. From inside Claude Code:
+Choose your assistant below, then complete the shared [factory setup](#factory-setup).
 
-```
+### Claude Code
+
+From inside Claude Code:
+
+```text
 /plugin marketplace add octonato/jam-factory
 /plugin install jam@jam-factory
 ```
 
-The first command registers the marketplace; the second installs the `jam` plugin from it. Run `/plugin` at any time to manage installed plugins.
+The first command registers the marketplace; the second installs `jam` from `claude-plugin/`. Run `/plugin` to manage installed plugins, or `/plugin uninstall jam@jam-factory` to remove it.
 
-The marketplace lives at the root of the `jam-factory` repository, in `.claude-plugin/marketplace.json`. It points at the `claude-plugin/` folder.
+For development, clone the repository and register its absolute path instead of `octonato/jam-factory`:
 
-## Install from a local clone (development)
-
-If you are working on the plugin itself, point Claude Code at your local checkout instead:
-
-```
+```sh
 git clone https://github.com/octonato/jam-factory
-cd jam-factory
 ```
 
 Then, from inside Claude Code:
 
-```
+```text
 /plugin marketplace add /absolute/path/to/jam-factory
 /plugin install jam@jam-factory
 ```
 
-Claude Code picks up changes under `claude-plugin/commands/`, `claude-plugin/skills/` and `claude-plugin/agents/` the next time it loads the plugin.
+### Codex
 
-## Uninstall
+Clone the repository:
 
+```sh
+git clone https://github.com/octonato/jam-factory
 ```
-/plugin uninstall jam@jam-factory
+
+Register `codex-plugin/` in your personal marketplace at `~/.agents/plugins/marketplace.json`. Create the parent directories if needed. If you already have a marketplace, add the `jam` entry to its `plugins` array; otherwise use:
+
+```json
+{
+  "name": "local",
+  "plugins": [
+    {
+      "name": "jam",
+      "source": {
+        "source": "local",
+        "path": "/absolute/path/to/jam-factory/codex-plugin"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}
 ```
 
-## Commands
+Replace the example path with your checkout's absolute path. Restart your client, open the plugin browser (`/plugins` in Codex CLI), install `jam` from your local marketplace, and start a new session. See the [official local plugin instructions](https://developers.openai.com/plugins/build/plugins#install-a-local-plugin-manually).
 
-Commands and skills are invoked with the `jam:` prefix — `/jam:checks`, `/jam:verify-fix`, and so on.
+Codex invokes these skills with `$jam:take`, `$jam:verify`, and so on.
 
-| Command | Description |
+### Gemini CLI
+
+Clone the repository and link its Gemini extension:
+
+```sh
+git clone https://github.com/octonato/jam-factory
+gemini extensions link /absolute/path/to/jam-factory/gemini-plugin
+```
+
+Replace the example path with your checkout's absolute path, then start a new Gemini session. The link uses the files in your checkout, so it also works for development. See the [Gemini extension reference](https://geminicli.com/docs/extensions/reference/#link-a-local-extension).
+
+The current extension stores commands directly under `commands/`, so Gemini exposes `/take`, `/verify`, and so on. Check `/help` for the loaded commands. Gemini derives command names from their [paths within the extension](https://geminicli.com/docs/extensions/reference/#custom-commands).
+
+### Factory setup
+
+The factory needs a directory for job state outside your Git repositories. Set `FACTORY_ROOT` to its absolute path and use the same value in every session that should share those jobs.
+
+In this README, `<org>` means a local directory that groups your repositories, such as `$HOME/Sources/my-team`. It is a path placeholder, not a GitHub organization name or an assistant setting. With that layout, `<org>/.factory` could be `$HOME/Sources/my-team/.factory`. You can also choose another directory outside your repositories.
+
+```sh
+export FACTORY_ROOT="$HOME/Sources/my-team/.factory"
+mkdir -p "$FACTORY_ROOT"
+```
+
+Use your own path. Put the export in your shell profile or a launcher if you want it available in future sessions. From the repository or worktree you want to work on, start your assistant with access to that directory:
+
+| Assistant | Launch command |
 |---|---|
-| `/jam:autonomously` | Delegate a task for autonomous execution — work through phases, committing each, without waiting for review |
-| `/jam:check-inbox` | Check the code for TODO-AI / FIXME-AI / QUESTION-AI comments left for Claude — fix or answer each one, and remove the tag once the user approves |
-| `/jam:checks` | Run the session checks — comment-reviewer (comment rules) and proof-reader (plain-English rules) in parallel over the changed code — and report located findings. Changes nothing; /jam:checks-fix applies them. |
-| `/jam:checks-fix` | Run the session checks — comment-reviewer and proof-reader in parallel — then apply every finding through the fixer agent. Add -i/--interactive to pick which findings to apply. |
-| `/jam:gh-issue-create` | Create a GitHub issue from a natural language description. Opens in browser for review before submission. |
-| `/jam:proceed` | Implement what we discussed in this session, then run comment-reviewer and proof-reader in parallel and apply every finding through the fixer agent. |
-| `/jam:resolve-conflicts` | Resolve git merge conflicts — apply the clear ones with a brief rationale, ask about the ambiguous ones. Add -i/--interactive to get a report on why the conflicts exist and approve each chunk before it is applied. |
-| `/jam:retry` | Re-attempt the action the user just rejected, optionally with an adaptation |
-| `/jam:save` | Summarize the research/analysis from this session into .nogit/ |
-| `/jam:subagent` | Spawn a background agent to run a task in parallel while the user keeps working — it stays alive and accessible for the user to open, read, and interact with; the main thread gets only a short launch/finish note, never the agent's report. Pass a plain task, or another slash command (e.g. /jam:subagent /jam:walk-through 247 -r) to run that command in the background. |
-| `/jam:walk-replay` | Replay a walk-through saved by /jam:walk-through — present each step verbatim in the terminal, one at a time, advancing when the user says "go ahead". Presents the steps as written; it does not summarize them. |
+| Claude Code | `claude --add-dir "$FACTORY_ROOT"` |
+| Codex | `codex --sandbox workspace-write --add-dir "$FACTORY_ROOT"` |
+| Gemini CLI | `gemini --include-directories "$FACTORY_ROOT"` |
 
-## Skills
+Codex's `--add-dir` grants the directory write access in its workspace sandbox; see the [CLI reference](https://developers.openai.com/codex/cli/reference/). Gemini's flag adds it to the workspace; see the [Gemini CLI reference](https://geminicli.com/docs/cli/cli-reference/).
 
-| Skill | Description |
-|---|---|
-| `/jam:take` | Runs one job through the factory: spec, plan, implement, verify and triage. It tracks the job in files under $FACTORY_ROOT. Run it on a feature branch, in the main checkout or in a worktree. Pass a description or a GitHub issue to start the branch's job. Pass nothing to start it from the session. Add `-r` to resume the job, or `-v` to run another verify round on a done job. It runs on its own and asks only when the request is unclear. Add `-a` to never ask, or `-i` to approve every step. It never merges or pushes. |
-| `/jam:verify` | Read-only review of a PR, a commit range or the current branch. Under 300 changed lines, it runs jam:independent-reviewer or superpowers:requesting-code-review, picked at random. From 300 lines, it runs both. Then it offers the pr-review-toolkit reviewers the diff calls for as extras. It checks each finding against the code. It writes one report to .nogit/verify-{timestamp}/, or to the directory --out names. Use /jam:submit-review to turn the report into a PR comment. |
-| `/jam:submit-review` | Turns a /jam:verify report into a PR comment. The comment holds only the findings and their severity. It drops findings that comments on the PR already report. Pass verify-{timestamp} to use a run on disk. Pass a target to run /jam:verify first. Pass nothing to pick a run from a list. It offers to open the comment on GitHub. It never posts the comment. |
-| `/jam:independent-reviewer` | Independent, read-only code review of a PR, a commit range or the current branch. A fresh subagent reviews the change and never learns how it was built. It writes the report to .nogit/verify-{timestamp}/independent-review.md. Add --report-in-chat to get the report in chat instead. |
-| `/jam:verify-fix` | Fix the findings of a /jam:verify run, each in its own commit. Runs on its own by default; add -i to fix one at a time. Pass --resume verify-{timestamp} to use a run on disk. Otherwise pick a run from a list, or run a new review. Never pushes. |
-| `/jam:walk-through` | Walk-through of a code path or a set of changes, broken into logical steps. By default it saves the whole walk to .nogit/walk-through/ to read later; add -i/--interactive to walk through it one step at a time instead. Add -r/--review to run /jam:verify plus the comment and plain-English checks. It folds their findings into each step. |
+If you use Claude Code's sandbox, also add the absolute factory path to `sandbox.filesystem.allowWrite` in your settings. For a sandboxed Gemini session, make that path writable through your sandbox configuration or mount it into the container; see [Gemini sandboxing](https://geminicli.com/docs/cli/sandbox/). The session needs both file editing and shell write access to the factory directory.
 
-## Agents
+The factory shares this directory across repositories and worktrees. Create a feature branch before starting a job:
 
-| Agent | Description |
-|---|---|
-| `comment-reviewer` | Checks every code comment added or edited in a diff — inline, javadoc, scaladoc, docstrings — against the comment rules in CLAUDE.md. Reports located findings; never edits. |
-| `implementer` | Implements one factory task in a worktree. Changes the code, then runs the build, the tests and the formatter check. Never commits. Ends with READY or FAILED. |
-| `independent-reviewer` | Independent, read-only code review of a change. Gets the target, the commands to read it and the original problem. It never learns how the change was built. Writes the report to .nogit/verify-{timestamp}/independent-review.md, or returns it in chat. |
-| `fixer` | Applies a list of located findings from comment-reviewer and proof-reader — edits comments and prose only, with the smallest change that satisfies the rule. Never touches code, never commits. |
-| `report-writer` | Merges the reviews of one /jam:verify run into report.md. Reads only the run's reviews/ folder and the code. Checks each finding against the code and the finding rules. Drops the ones that fail. |
-| `proof-reader` | Checks the English in prose added or edited in a diff — comments, doc comments, Markdown and other documentation — against the plain-English rules in CLAUDE.md. Reports located findings; never edits. |
+```sh
+git switch -c my-feature
+```
 
-## Verify workflow
+Then invoke the factory with a description: `/jam:take Add rate limiting` in Claude Code, `$jam:take Add rate limiting` in Codex, or `/take Add rate limiting` in Gemini.
 
-`/jam:verify` runs its base reviewers at xhigh effort. Under 300 changed lines, it runs one, picked at random: `jam:independent-reviewer` or `superpowers:requesting-code-review`. From 300 lines, it runs both. The report lists each reviewer and why it ran, so you can compare the two over time.
+## Factory workflow: `/jam:take`
 
-The `pr-review-toolkit` reviewers are extras. Verify lists the ones the diff calls for in `extras.md`. For example, a diff that changes tests lists `pr-test-analyzer`. After the report, it asks which extras to run, records your choice in `extras.md`, and rebuilds the report with their reviews.
-
-`/jam:verify-fix`, `/jam:walk-through -r` and `/jam:submit-review` (when it runs a new verify) run the base reviewers only.
-
-| Call | What it does |
-|---|---|
-| `/jam:verify [target]` | Reviews and writes a report. Changes no code. |
-| `/jam:verify --out <dir> [target]` | Same, with the run directory set to `<dir>`. |
-| `/jam:submit-review verify-{timestamp}` | Writes the findings of that run as a comment for the PR author, and offers to open it on GitHub. |
-| `/jam:submit-review <target>` | Runs `/jam:verify` first, then writes the comment. |
-| `/jam:submit-review` | Lists the three newest runs on disk. Pick one, or run a new verify on the current branch. |
-| `/jam:verify-fix [target]` | Lists the three newest runs on disk. Pick one, or run a new review of the target. Then fixes and commits each finding without stopping. It asks its questions at the end. It never pushes. |
-| `/jam:verify-fix -i [target]` | Goes through the findings one at a time. For each one, it gives its assessment and waits for your decision. Then it shows the fix with its commit message, and commits it when you approve. |
-| `/jam:verify-fix --resume verify-{timestamp}` | Fixes the findings of that run. Continues its fixes if the run already has them. |
-
-The target is a PR number or URL, a commit hash, a range `a..b`, or nothing for the current branch. A commit hash is inclusive.
-
-Each run writes to its own `.nogit/verify-{timestamp}/` directory. No reviewer reads `.nogit/`. So reviewers never see each other's findings, and runs never see each other's reports. Start each run in a new session.
-
-## Factory workflow
+`/jam:take` is the main command in Jam Factory. The examples here use Claude Code syntax; use `$jam:take` in Codex or `/take` in Gemini. Complete the [factory setup](#factory-setup) before starting.
 
 `/jam:take` takes one change from spec to a branch ready for review. Each job belongs to one feature branch, in the main checkout or in a worktree. The last segment of the branch name is the job id: `octonato/rate-limit` gives `rate-limit`. You create the branch; the factory never does. It refuses to run on the base branch.
 
@@ -169,14 +178,6 @@ The job's `mode` in `job.json` sets when the factory asks you something. Pick it
 
 In `default` mode, the factory judges whether the request is clear. If it is, the factory writes the spec alone, short for a small task. If it is not, the factory brainstorms the spec with you. In `autonomous` mode, the factory always writes the spec alone and lists the choices it made under **Assumptions**.
 
-### Setup
-
-The factory keeps its files outside git, in one directory per org: `<org>/.factory/`. Every worktree of every repo in the org shares it. Make the script that starts Claude do three things:
-
-1. Export `FACTORY_ROOT=<org>/.factory`.
-2. Pass `--add-dir "$FACTORY_ROOT"`, so the Write and Edit tools can reach it without a prompt.
-3. Allow sandbox writes to it, with a `sandbox.filesystem.allowWrite` entry in your user settings.
-
 ### Files
 
 ```
@@ -197,6 +198,69 @@ The factory keeps its files outside git, in one directory per org: `<org>/.facto
       extras.md                  extra reviewer candidates and your pick
       triage.md
 ```
+
+## Commands
+
+The examples below use Claude Code syntax: `/jam:take`, `/jam:verify`, and so on. In Codex, use `$jam:take` and `$jam:verify`; in Gemini, use `/take` and `/verify`. The same arguments and flags apply.
+
+| Command | Description |
+|---|---|
+| `/jam:autonomously` | Delegate a task for autonomous execution — work through phases, committing each, without waiting for review |
+| `/jam:check-inbox` | Check the code for TODO-AI / FIXME-AI / QUESTION-AI comments left for the assistant — fix or answer each one, and remove the tag once the user approves |
+| `/jam:checks` | Run the session checks — comment-reviewer (comment rules) and proof-reader (plain-English rules) in parallel over the changed code — and report located findings. Changes nothing; /jam:checks-fix applies them. |
+| `/jam:checks-fix` | Run the session checks — comment-reviewer and proof-reader in parallel — then apply every finding through the fixer agent. Add -i/--interactive to pick which findings to apply. |
+| `/jam:gh-issue-create` | Create a GitHub issue from a natural language description. Opens in browser for review before submission. |
+| `/jam:proceed` | Implement what we discussed in this session, then run comment-reviewer and proof-reader in parallel and apply every finding through the fixer agent. |
+| `/jam:resolve-conflicts` | Resolve git merge conflicts — apply the clear ones with a brief rationale, ask about the ambiguous ones. Add -i/--interactive to get a report on why the conflicts exist and approve each chunk before it is applied. |
+| `/jam:retry` | Re-attempt the action the user just rejected, optionally with an adaptation |
+| `/jam:save` | Summarize the research/analysis from this session into .nogit/ |
+| `/jam:subagent` | Spawn a background agent to run a task in parallel while the user keeps working — it stays alive and accessible for the user to open, read, and interact with; the main thread gets only a short launch/finish note, never the agent's report. Pass a plain task, or another slash command (e.g. /jam:subagent /jam:walk-through 247 -r) to run that command in the background. |
+| `/jam:walk-replay` | Replay a walk-through saved by /jam:walk-through — present each step verbatim in the terminal, one at a time, advancing when the user says "go ahead". Presents the steps as written; it does not summarize them. |
+
+## Skills
+
+| Skill | Description |
+|---|---|
+| `/jam:take` | Runs one job through the factory: spec, plan, implement, verify and triage. It tracks the job in files under $FACTORY_ROOT. Run it on a feature branch, in the main checkout or in a worktree. Pass a description or a GitHub issue to start the branch's job. Pass nothing to start it from the session. Add `-r` to resume the job, or `-v` to run another verify round on a done job. It runs on its own and asks only when the request is unclear. Add `-a` to never ask, or `-i` to approve every step. It never merges or pushes. |
+| `/jam:verify` | Read-only review of a PR, a commit range or the current branch. Under 300 changed lines, it runs jam:independent-reviewer or superpowers:requesting-code-review, picked at random. From 300 lines, it runs both. Then it offers extra reviewers suited to the diff (from `pr-review-toolkit` in Claude Code). It checks each finding against the code. It writes one report to .nogit/verify-{timestamp}/, or to the directory --out names. Use /jam:submit-review to turn the report into a PR comment. |
+| `/jam:submit-review` | Turns a /jam:verify report into a PR comment. The comment holds only the findings and their severity. It drops findings that comments on the PR already report. Pass verify-{timestamp} to use a run on disk. Pass a target to run /jam:verify first. Pass nothing to pick a run from a list. It offers to open the comment on GitHub. It never posts the comment. |
+| `/jam:independent-reviewer` | Independent, read-only code review of a PR, a commit range or the current branch. A fresh subagent reviews the change and never learns how it was built. It writes the report to .nogit/verify-{timestamp}/independent-review.md. Add --report-in-chat to get the report in chat instead. |
+| `/jam:verify-fix` | Fix the findings of a /jam:verify run, each in its own commit. Runs on its own by default; add -i to fix one at a time. Pass --resume verify-{timestamp} to use a run on disk. Otherwise pick a run from a list, or run a new review. Never pushes. |
+| `/jam:walk-through` | Walk-through of a code path or a set of changes, broken into logical steps. By default it saves the whole walk to .nogit/walk-through/ to read later; add -i/--interactive to walk through it one step at a time instead. Add -r/--review to run /jam:verify plus the comment and plain-English checks. It folds their findings into each step. |
+
+## Agents
+
+| Agent | Description |
+|---|---|
+| `comment-reviewer` | Checks every code comment added or edited in a diff — inline, javadoc, scaladoc, docstrings — against the comment rules in CLAUDE.md. Reports located findings; never edits. |
+| `implementer` | Implements one factory task in a worktree. Changes the code, then runs the build, the tests and the formatter check. Never commits. Ends with READY or FAILED. |
+| `independent-reviewer` | Independent, read-only code review of a change. Gets the target, the commands to read it and the original problem. It never learns how the change was built. Writes the report to .nogit/verify-{timestamp}/independent-review.md, or returns it in chat. |
+| `fixer` | Applies a list of located findings from comment-reviewer and proof-reader — edits comments and prose only, with the smallest change that satisfies the rule. Never touches code, never commits. |
+| `report-writer` | Merges the reviews of one /jam:verify run into report.md. Reads only the run's reviews/ folder and the code. Checks each finding against the code and the finding rules. Drops the ones that fail. |
+| `proof-reader` | Checks the English in prose added or edited in a diff — comments, doc comments, Markdown and other documentation — against the plain-English rules in CLAUDE.md. Reports located findings; never edits. |
+
+## Verify workflow
+
+`/jam:verify` runs its base reviewers at xhigh effort. Under 300 changed lines, it runs one, picked at random: `jam:independent-reviewer` or `superpowers:requesting-code-review`. From 300 lines, it runs both. The report lists each reviewer and why it ran, so you can compare the two over time.
+
+Extra reviewers are optional. Claude Code uses the `pr-review-toolkit` plugin; Codex and Gemini can use general-purpose agents with the same review focus. Verify lists the ones the diff calls for in `extras.md`. For example, a diff that changes tests lists `pr-test-analyzer`. After the report, it asks which extras to run, records your choice in `extras.md`, and rebuilds the report with their reviews.
+
+`/jam:verify-fix`, `/jam:walk-through -r` and `/jam:submit-review` (when it runs a new verify) run the base reviewers only.
+
+| Call | What it does |
+|---|---|
+| `/jam:verify [target]` | Reviews and writes a report. Changes no code. |
+| `/jam:verify --out <dir> [target]` | Same, with the run directory set to `<dir>`. |
+| `/jam:submit-review verify-{timestamp}` | Writes the findings of that run as a comment for the PR author, and offers to open it on GitHub. |
+| `/jam:submit-review <target>` | Runs `/jam:verify` first, then writes the comment. |
+| `/jam:submit-review` | Lists the three newest runs on disk. Pick one, or run a new verify on the current branch. |
+| `/jam:verify-fix [target]` | Lists the three newest runs on disk. Pick one, or run a new review of the target. Then fixes and commits each finding without stopping. It asks its questions at the end. It never pushes. |
+| `/jam:verify-fix -i [target]` | Goes through the findings one at a time. For each one, it gives its assessment and waits for your decision. Then it shows the fix with its commit message, and commits it when you approve. |
+| `/jam:verify-fix --resume verify-{timestamp}` | Fixes the findings of that run. Continues its fixes if the run already has them. |
+
+The target is a PR number or URL, a commit hash, a range `a..b`, or nothing for the current branch. A commit hash is inclusive.
+
+Each run writes to its own `.nogit/verify-{timestamp}/` directory. No reviewer reads `.nogit/`. So reviewers never see each other's findings, and runs never see each other's reports. Start each run in a new session.
 
 ## Local storage
 
