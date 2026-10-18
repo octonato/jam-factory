@@ -53,4 +53,21 @@ mod tests {
         let main_end = html.find("</main>").unwrap();
         assert!(dialog > main_end);
     }
+
+    #[test]
+    fn dashboard_is_titled_jam_board() {
+        let html = std::str::from_utf8(embedded("/dashboard.html").unwrap().bytes).unwrap();
+
+        assert!(html.contains("<title>Jam Board</title>"));
+        assert!(html.contains("<h1>Jam Board</h1>"));
+        assert!(!html.contains("Octo Factory"));
+    }
+
+    #[test]
+    fn dashboard_has_no_file_tree() {
+        let html = std::str::from_utf8(embedded("/dashboard.html").unwrap().bytes).unwrap();
+
+        assert!(!html.contains("id=\"tree\""));
+        assert!(!html.contains("flow-button"));
+    }
 }

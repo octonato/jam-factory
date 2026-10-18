@@ -40,7 +40,7 @@ pub fn post(root: &Path, request: &Request) -> Response {
 }
 
 /// Whether the request has no `Origin`, or one equal to `http://<Host>`.
-fn same_origin(request: &Request) -> bool {
+pub(super) fn same_origin(request: &Request) -> bool {
     let Some(origin) = request.header("Origin") else {
         return true;
     };
@@ -66,7 +66,7 @@ fn job_file(root: &Path, target: &str) -> Option<PathBuf> {
 }
 
 /// The percent-decoded `segment`, if it is a single safe folder name.
-fn name(segment: &str) -> Option<String> {
+pub(super) fn name(segment: &str) -> Option<String> {
     let name = percent_decode_str(segment).decode_utf8().ok()?;
 
     match name.as_ref() {

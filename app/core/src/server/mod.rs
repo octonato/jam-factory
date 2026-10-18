@@ -18,6 +18,7 @@ pub mod archive;
 pub mod dashboard;
 pub mod files;
 pub mod http;
+pub mod open;
 
 use std::io;
 use std::net::{SocketAddr, TcpListener, TcpStream};
@@ -48,9 +49,10 @@ impl Server {
 
         let accept = {
             let stop = Arc::clone(&stop);
+            let port = address.port();
             thread::Builder::new()
-                .name(format!("odeck-server-{}", address.port()))
-                .spawn(move || accept_loop(listener, root.into(), &stop))?
+                .name(format!("odeck-server-{port}"))
+                .spawn(move || accept_loop(listener, root.into(), port, &stop))?
         };
 
         Ok(Server {
@@ -78,16 +80,29 @@ impl Drop for Server {
     }
 }
 
-/// Answers one request for the factory root `root`.
-pub fn handle(root: &Path, request: &Request) -> Response {
+/// Answers one request for the factory root `root`, served on `port`.
+pub fn handle(root: &Path, port: u16, request: &Request) -> Response {
+    if !local_host(request, port) {
+        return Response::error(403);
+    }
+
     match request.method.as_str() {
         "GET" => files::get(root, &request.target),
-        "POST" => archive::post(root, request),
+        "POST" if request.target.starts_with("/archive/") => archive::post(root, request),
+        "POST" if request.target.starts_with("/open/") => open::post(root, request),
+        "POST" => Response::error(404),
         _ => Response::error(405),
     }
 }
 
-fn accept_loop(listener: TcpListener, root: Arc<Path>, stop: &AtomicBool) {
+/// Whether the `Host` header is `127.0.0.1:<port>` or `localhost:<port>`.
+fn local_host(request: &Request, port: u16) -> bool {
+    request.header("Host").is_some_and(|host| {
+        host == format!("127.0.0.1:{port}") || host == format!("localhost:{port}")
+    })
+}
+
+fn accept_loop(listener: TcpListener, root: Arc<Path>, port: u16, stop: &AtomicBool) {
     for stream in listener.incoming() {
         if stop.load(Ordering::SeqCst) {
             break;
@@ -99,17 +114,17 @@ fn accept_loop(listener: TcpListener, root: Arc<Path>, stop: &AtomicBool) {
         };
 
         let root = Arc::clone(&root);
-        let _ = thread::Builder::new().spawn(move || serve(&root, stream));
+        let _ = thread::Builder::new().spawn(move || serve(&root, port, stream));
     }
 }
 
-fn serve(root: &Path, mut stream: TcpStream) {
+fn serve(root: &Path, port: u16, mut stream: TcpStream) {
     if stream.set_read_timeout(Some(READ_TIMEOUT)).is_err() {
         return;
     }
 
     let response = match read_request(&mut stream) {
-        Ok(request) => handle(root, &request),
+        Ok(request) => handle(root, port, &request),
         Err(ReadError::Status(status)) => Response::error(status),
         Err(ReadError::Closed) => return,
     };

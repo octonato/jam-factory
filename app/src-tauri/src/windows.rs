@@ -120,7 +120,7 @@ pub fn open_project_window(app: &AppHandle, picked: PathBuf) -> Result<(), OpenE
     let label = windows.insert(&factory.project, server);
 
     let built = WebviewWindowBuilder::new(app, &label, WebviewUrl::External(url))
-        .title(format!("octodeck — {}", factory.name()))
+        .title(format!("Jam Board — {}", factory.name()))
         .inner_size(1200.0, 800.0)
         .on_navigation(move |url| match navigation::decide(url, port) {
             Navigation::Stay => true,

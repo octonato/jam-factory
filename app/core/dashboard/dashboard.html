@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Octo Factory</title>
+<title>Jam Board</title>
 <style>
   :root {
     --bg: #f7f7f5;
@@ -42,6 +42,8 @@
 
   * { box-sizing: border-box; }
 
+  html { font-size: 18px; }
+
   body {
     display: flex;
     flex-direction: column;
@@ -49,7 +51,7 @@
     margin: 0;
     background: var(--bg);
     color: var(--ink);
-    font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+    font: 1rem/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
   }
 
   #page {
@@ -68,9 +70,33 @@
     border-bottom: 1px solid var(--line);
   }
 
-  header h1 { margin: 0; font-size: 18px; }
-  #status { color: var(--muted); font-size: 12px; }
+  header h1 { margin: 0; font-size: 1.286rem; }
+  #status { color: var(--muted); font-size: 0.857rem; }
   #problems { color: var(--critical); padding: 0 16px; }
+
+  .font-size {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    margin-left: auto;
+    color: var(--ink-2);
+    font-size: 0.857rem;
+  }
+
+  #font-value { min-width: 3em; text-align: center; }
+
+  .font-size button {
+    padding: 2px 8px;
+    color: var(--ink-2);
+    font: inherit;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    cursor: pointer;
+  }
+
+  .font-size button:hover:enabled { border-color: var(--accent); }
+  .font-size button:disabled { color: var(--muted); cursor: default; }
 
   .column {
     max-width: 80%;
@@ -82,12 +108,7 @@
 
   .row {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
-    align-items: center;
-    gap: 8px 16px;
-    padding: 10px 14px;
-    color: inherit;
-    text-decoration: none;
+    grid-template-columns: minmax(0, 1fr) auto;
     background: var(--surface);
     border: 1px solid var(--line);
     border-left: 3px solid var(--tone, var(--accent));
@@ -98,12 +119,53 @@
   .row.blocked { --tone: var(--critical); }
   .row.done { --tone: var(--good); }
 
-  a.row:hover { border-color: var(--accent); border-left-color: var(--tone, var(--accent)); }
+  .row:has(> a.body:hover) { border-color: var(--accent); border-left-color: var(--tone, var(--accent)); }
+
+  .row .body {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    align-items: center;
+    gap: 8px 16px;
+    padding: 10px 14px;
+    color: inherit;
+    text-decoration: none;
+  }
+
+  .row .actions {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    padding-right: 8px;
+  }
+
+  .icon {
+    display: flex;
+    padding: 4px;
+    color: var(--ink-2);
+    font: inherit;
+    background: none;
+    border: 0;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+
+  .icon svg {
+    width: 1.1em;
+    height: 1.1em;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.5;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .icon:hover { color: var(--accent); }
+  .icon[data-action="archive"]:hover { color: var(--critical); }
 
   .row .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .row .id { font-weight: 600; }
   .row .path { color: var(--muted); }
-  .row .label { color: var(--ink-2); font-size: 12px; }
+  .row .label { color: var(--ink-2); font-size: 0.857rem; }
   .row .warn { color: var(--warning); }
 
   .steps { display: flex; align-items: center; }
@@ -135,38 +197,24 @@
   .steps .dot.blocked { --dot: var(--critical); border-radius: 2px; }
   .steps .dot.done { --dot: var(--good); }
 
+  #page:has(> .job-page) { overflow: hidden; }
+
   .job-page {
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr);
-    grid-template-rows: auto minmax(0, 1fr);
-    align-items: center;
+    display: flex;
+    flex-direction: column;
     gap: 12px;
     height: calc(100% - 32px);
   }
 
+  .job-head {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+    gap: 12px;
+  }
+
   .back { white-space: nowrap; text-decoration: none; }
   .back:hover { text-decoration: underline; }
-
-  .list-row {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    align-items: center;
-    gap: 8px;
-  }
-
-  .job-page .archive { align-self: start; }
-
-  .archive {
-    padding: 4px 12px;
-    color: var(--ink-2);
-    font: inherit;
-    background: var(--surface);
-    border: 1px solid var(--line);
-    border-radius: 6px;
-    cursor: pointer;
-  }
-
-  .archive:hover { color: var(--critical); border-color: var(--critical); }
 
   #modal {
     max-width: 480px;
@@ -195,56 +243,50 @@
 
   #modal button:hover { border-color: var(--accent); }
 
-  .pane {
-    grid-column: 2;
-    align-self: stretch;
-    display: grid;
-    grid-template-columns: 240px minmax(0, 1fr);
-    min-height: 0;
-    overflow: hidden;
+  .flow-pane,
+  #view {
     background: var(--surface);
     border: 1px solid var(--line);
     border-radius: 6px;
   }
 
-  #tree {
-    overflow: auto;
-    padding: 8px 0;
-    font-size: 13px;
-    border-right: 1px solid var(--line);
+  .flow-pane {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    flex: none;
   }
 
-  #tree summary,
-  #tree a {
-    padding: 3px 12px 3px calc(12px + var(--depth) * 14px);
-    white-space: nowrap;
+  .flow-pane > * { grid-area: 1 / 1; }
+
+  .flow-toggle {
+    z-index: 2;
+    align-self: start;
+    justify-self: end;
+    margin: 4px;
+    background: var(--surface);
   }
 
-  #tree summary { color: var(--muted); cursor: pointer; }
+  .flow-pane.collapsed .flow-toggle svg { transform: rotate(180deg); }
 
-  #tree a {
-    display: block;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    color: var(--ink-2);
-    text-decoration: none;
+  .flow-strip {
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
   }
 
-  #tree a:hover { color: var(--accent); }
+  .flow-strip::-webkit-scrollbar { display: none; }
 
-  #tree a.selected {
-    color: var(--ink);
-    font-weight: 600;
-    background: var(--bg);
-    box-shadow: inset 2px 0 var(--accent);
+  .flow-pane.collapsed > .flow-strip {
+    height: 0;
+    visibility: hidden;
   }
 
   #view {
+    flex: 1;
+    min-height: 0;
     overflow: auto;
     padding: 16px 24px;
   }
-
-  #view .error { color: var(--critical); }
 
   #view pre {
     margin: 0 0 12px;
@@ -255,46 +297,34 @@
     border-radius: 6px;
   }
 
-  #view code { font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-
-  .flow-button {
-    position: sticky;
-    top: 0;
-    z-index: 1;
-    float: right;
-    margin: 0 0 8px 12px;
-    padding: 4px 12px;
-    text-decoration: none;
-    background: var(--surface);
-    border: 1px solid var(--line);
-    border-radius: 6px;
-  }
-
-  .flow-button:hover { border-color: var(--accent); }
-
-  .graph {
-    --node-h: 42px;
-    --loop-w: 52px;
-    --edge: 2px solid var(--muted);
-    padding: 24px 0;
-    font-size: 15px;
-  }
+  #view code { font: 0.857rem/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 
   .flow {
-    display: flex;
-    flex-direction: column;
+    --node-h: 3em;
+    --back-h: 1.25em;
+    --edge: 2px solid var(--muted);
+    display: grid;
+    grid-template-rows: auto var(--back-h) auto auto;
     align-items: center;
     width: max-content;
     margin: 0 auto;
+    padding: 1.5em 1em;
+    font-size: 1.071rem;
   }
 
-  .edge,
+  .flow > * { grid-row: 1; }
+  .flow > .loop { grid-row: 1 / -1; }
+
+  .edge {
+    width: 2em;
+    border-top: var(--edge);
+  }
+
   .stub {
-    min-height: 24px;
-    border-left: var(--edge);
+    flex: 1;
+    min-width: 1em;
+    border-top: var(--edge);
   }
-
-  .stub { flex: 1; min-height: 18px; }
 
   .node {
     --tone: var(--ink-2);
@@ -303,7 +333,7 @@
     display: flex;
     align-items: center;
     height: var(--node-h);
-    padding: 0 20px;
+    padding: 0 1.5em;
     white-space: nowrap;
     color: var(--ink);
     text-decoration: none;
@@ -330,76 +360,132 @@
   .node.blocked { --tone: var(--critical); }
   .node.done { --tone: var(--good); }
 
+  .node.selected,
+  .chip.selected {
+    outline: 2px solid var(--ink-2);
+  }
+
+  .node.selected { outline-offset: 6px; }
+  .chip.selected { outline-offset: 3px; }
+
   .branches {
     display: grid;
-    grid-auto-flow: column;
-    grid-auto-columns: 1fr;
+    grid-auto-rows: 1fr;
   }
+
+  .branches.ends { justify-items: start; }
 
   .branch {
     position: relative;
     display: flex;
-    flex-direction: column;
     align-items: center;
-    padding: 0 10px;
+    padding: 0.4em 0;
   }
 
   .branch::before,
   .fan-in > .branch::after {
     content: '';
     position: absolute;
-    left: 0;
-    right: 0;
-    border-top: var(--edge);
+    top: 0;
+    bottom: 0;
+    border-left: var(--edge);
   }
 
-  .branch::before { top: 0; }
-  .fan-in > .branch::after { bottom: 0; }
-  .branch:first-child::before, .branch:first-child::after { left: calc(50% - 1px); }
-  .branch:last-child::before, .branch:last-child::after { right: calc(50% - 1px); }
+  .branch::before { left: 0; }
+  .fan-in > .branch::after { right: 0; }
+  .branch:first-child::before, .branch:first-child::after { top: calc(50% - 1px); }
+  .branch:last-child::before, .branch:last-child::after { bottom: calc(50% - 1px); }
 
   .loop {
-    position: relative;
     display: grid;
-    grid-template-columns: var(--loop-w) auto var(--loop-w);
-    grid-template-rows: var(--node-h) minmax(24px, auto) auto minmax(24px, auto) var(--node-h);
-    justify-items: center;
+    grid-template-columns: repeat(5, auto);
+    grid-template-rows: subgrid;
+    align-items: center;
   }
 
-  .loop > .node,
-  .loop > .edge,
-  .loop > .branches {
-    grid-column: 2;
-  }
+  .loop > * { grid-row: 1; }
 
-  .back-edge {
-    position: absolute;
-    top: calc(var(--node-h) / 2 - 1px);
-    bottom: calc(var(--node-h) / 2 - 1px);
-    left: 50%;
-    right: calc(var(--loop-w) / 2 - 1px);
-    border: var(--edge);
-    border-left: 0;
-    border-radius: 0 8px 8px 0;
-  }
-
-  .rounds {
-    position: relative;
-    z-index: 1;
-    grid-column: 3;
-    grid-row: 3 / 6;
-    align-self: center;
+  .loop > .loop-end {
+    grid-row: 1 / 3;
+    align-self: stretch;
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    align-items: center;
   }
 
+  .loop-end::before,
+  .loop-end::after {
+    content: '';
+    flex: 1 0 0;
+    box-sizing: border-box;
+  }
+
+  .loop-end::after {
+    flex-basis: var(--back-h);
+    align-self: stretch;
+    border-bottom: var(--edge);
+  }
+
+  .loop-end.start::after {
+    margin-left: calc(50% - 1px);
+    border-left: var(--edge);
+    border-bottom-left-radius: 8px;
+  }
+
+  .loop-end.finish::after {
+    margin-right: calc(50% - 1px);
+    border-right: var(--edge);
+    border-bottom-right-radius: 8px;
+  }
+
+  .loop > .back-edge {
+    grid-row: 2;
+    grid-column: 2 / 5;
+    align-self: end;
+    border-bottom: var(--edge);
+  }
+
+  .loop > .chips,
+  .loop > .rounds {
+    grid-column: 1 / -1;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    width: 0;
+    min-width: 100%;
+  }
+
+  .loop > .chips {
+    grid-row: 3;
+    gap: 0.5em 0.75em;
+    margin-top: 1em;
+  }
+
+  .loop > .rounds {
+    grid-row: 4;
+    gap: 6px;
+    margin-top: 0.75em;
+  }
+
+  .chip {
+    padding: 0.2em 0.75em;
+    color: var(--ink-2);
+    font-size: 0.8em;
+    white-space: nowrap;
+    text-decoration: none;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+  }
+
+  .chip:hover { color: var(--accent); border-color: var(--accent); }
+
   .rounds button {
-    width: 28px;
-    height: 28px;
+    width: 2em;
+    height: 2em;
     padding: 0;
     font: inherit;
-    font-size: 13px;
+    font-size: 0.929rem;
     color: var(--ink-2);
     cursor: pointer;
     background: var(--surface);
@@ -428,10 +514,10 @@
     line-height: 1.25;
   }
 
-  .markdown h1 { font-size: 22px; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
-  .markdown h2 { font-size: 18px; padding-bottom: 4px; border-bottom: 1px solid var(--line); }
-  .markdown h3 { font-size: 15px; }
-  .markdown h4, .markdown h5, .markdown h6 { font-size: 14px; }
+  .markdown h1 { font-size: 1.571rem; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+  .markdown h2 { font-size: 1.286rem; padding-bottom: 4px; border-bottom: 1px solid var(--line); }
+  .markdown h3 { font-size: 1.071rem; }
+  .markdown h4, .markdown h5, .markdown h6 { font-size: 1rem; }
 
   .markdown p,
   .markdown ul,
@@ -481,16 +567,20 @@
 
   @media (max-width: 640px) {
     .column { max-width: none; margin: 16px; }
-    .row { grid-template-columns: auto minmax(0, 1fr); }
+    .row .body { grid-template-columns: auto minmax(0, 1fr); }
     .row .name { grid-column: 1 / -1; }
-    .pane { grid-template-columns: 140px minmax(0, 1fr); }
   }
 </style>
 </head>
 <body>
 <header>
-  <h1>Octo Factory</h1>
+  <h1>Jam Board</h1>
   <span id="status">loading…</span>
+  <div class="font-size">
+    <button type="button" id="font-down" title="Smaller text">A−</button>
+    <span id="font-value">18px</span>
+    <button type="button" id="font-up" title="Larger text">A+</button>
+  </div>
 </header>
 <div id="problems"></div>
 <main id="page"></main>
@@ -517,19 +607,46 @@ const STAGE_PHASE = {
   triage: 'triage',
   done: 'done',
 }
+const STAGE_FILE = {
+  spec: 'spec.md',
+  plan: 'plan.md',
+  implement: 'tasks.md',
+  done: 'deferred.md',
+}
 
-const TOP_FILES = ['request.md', 'spec.md', 'plan.md', 'tasks.md', 'decisions.md', 'deferred.md']
-const ROUND_FILES = ['report.md', 'triage.md', 'extras.md']
-const ROUND_DIRS = ['reviews']
+const FONT_KEY = 'jam-board-font-size'
+const FONT_MIN = 12
+const FONT_MAX = 24
+const FONT_DEFAULT = 18
+
+const FLOW_KEY = 'jam-board-flow-collapsed'
+const FLOW_ICON = '<path d="M8 12.5v-9M4 7.5l4-4 4 4"/>'
+
+const CARD_ACTIONS = [
+  {
+    action: 'intellij',
+    title: 'Open in IntelliJ',
+    icon: '<rect x="1.75" y="1.75" width="12.5" height="12.5" rx="1.5"/><path d="M5 4.75v6.5M11 4.75v4.5a1.75 1.75 0 0 1-3.5 0"/>',
+  },
+  { action: 'zed', title: 'Open in Zed', icon: '<path d="M3.5 3.5h9l-9 9h9"/>' },
+  { action: 'iterm', title: 'Open in iTerm', icon: '<path d="M3 4.5 6.5 8 3 11.5M8.5 11.5H13"/>' },
+  {
+    action: 'archive',
+    title: 'Archive',
+    icon: '<path d="M2.5 4.5h11M6.5 4.5V2.75h3V4.5M4 4.5l.75 9h6.5l.75-9M6.75 7v4M9.25 7v4"/>',
+  },
+]
+const TOOL_LABELS = { intellij: 'IntelliJ', zed: 'Zed', iterm: 'iTerm' }
 
 const $ = (id) => document.getElementById(id)
 const state = { jobs: [], problems: [] }
-const collapsed = new Set()
 let listView = { html: '', el: null }
-let jobView = { dir: null, el: null, row: '', files: null }
+let jobView = { dir: null, el: null, row: '', graph: null }
 let lastView = { key: null, text: null }
 let pickedRound = null
 let renderSeq = 0
+let fontSize = FONT_DEFAULT
+let flowCollapsed = false
 
 function escape(text) {
   return String(text).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)
@@ -670,109 +787,38 @@ function rowContent(job) {
     <span class="label">${stepLabel(job)}</span>`
 }
 
+function cardActions(job) {
+  return CARD_ACTIONS.map(({ action, title, icon }) => `
+    <button type="button" class="icon" data-action="${action}" title="${title}">
+      <svg viewBox="0 0 16 16" aria-hidden="true">${icon}</svg>
+    </button>`).join('')
+}
+
 function renderList() {
   const jobs = [...state.jobs].sort((a, b) => String(b.updated || '').localeCompare(String(a.updated || '')))
   const rows = jobs.map((job) => `
-    <div class="list-row">
-      <a class="row ${tint(job)}" href="${escape(jobHref(job))}">${rowContent(job)}</a>
-      <button type="button" class="archive" data-dir="${escape(job.dir)}">Archive</button>
+    <div class="row card ${tint(job)}" data-dir="${escape(job.dir)}">
+      <a class="body" href="${escape(jobHref(job))}">${rowContent(job)}</a>
+      <span class="actions">${cardActions(job)}</span>
     </div>`).join('')
   const html = `<div class="column rows">${rows || '<p class="empty">No jobs yet.</p>'}</div>`
   if (listView.el === $('page').firstElementChild && listView.html === html) return
 
   $('page').innerHTML = html
   listView = { html, el: $('page').firstElementChild }
-  listView.el.addEventListener('click', onArchiveRow)
+  listView.el.addEventListener('click', onCardAction)
 }
 
-function onArchiveRow(event) {
-  const button = event.target.closest('button.archive')
+function onCardAction(event) {
+  const button = event.target.closest('button[data-action]')
   if (!button) return
 
-  const job = state.jobs.find((j) => j.dir === button.dataset.dir)
-  if (job) archiveJob(job)
-}
+  const dir = button.closest('.card')?.dataset.dir
+  const job = state.jobs.find((j) => j.dir === dir)
+  if (!job) return
 
-function buildTree(paths) {
-  const root = { files: [], dirs: new Map() }
-  for (const path of paths) {
-    const parts = path.split('/')
-    const name = parts.pop()
-    let node = root
-    for (const part of parts) {
-      if (!node.dirs.has(part)) node.dirs.set(part, { files: [], dirs: new Map() })
-      node = node.dirs.get(part)
-    }
-    node.files.push(name)
-  }
-  return root
-}
-
-function rank(known, name) {
-  const i = known.indexOf(name)
-  return i === -1 ? known.length : i
-}
-
-function byKnown(known) {
-  return (a, b) => rank(known, a) - rank(known, b) || a.localeCompare(b)
-}
-
-function roundNumber(name) {
-  const match = /^round-(\d+)$/.exec(name)
-  return match ? Number(match[1]) : null
-}
-
-function byRound(a, b) {
-  const ra = roundNumber(a)
-  const rb = roundNumber(b)
-  if (ra !== null && rb !== null) return ra - rb || a.localeCompare(b)
-  if (ra !== null) return -1
-  if (rb !== null) return 1
-  return a.localeCompare(b)
-}
-
-function levelOrder(folder) {
-  if (folder === '') return { files: byKnown(TOP_FILES), dirs: byRound }
-  if (/^round-\d+\/$/.test(folder)) return { files: byKnown(ROUND_FILES), dirs: byKnown(ROUND_DIRS) }
-  return { files: byKnown([]), dirs: byKnown([]) }
-}
-
-function displayName(name) {
-  return name.endsWith('.md') ? name.slice(0, -3) : name
-}
-
-function treeHtml(job, node, folder = '') {
-  const order = levelOrder(folder)
-  const depth = folder.split('/').length - 1
-
-  const files = [...node.files].sort(order.files).map((name) => {
-    const path = folder + name
-    return `<a href="${escape(fileHref(job, path))}" data-path="${escape(path)}" style="--depth: ${depth}">${escape(displayName(name))}</a>`
-  })
-
-  const dirs = [...node.dirs.keys()].sort(order.dirs).map((name) => {
-    const path = `${folder}${name}/`
-    const key = job.dir + path
-    const open = collapsed.has(key) ? '' : ' open'
-    return `<details data-key="${escape(key)}"${open}>
-      <summary style="--depth: ${depth}">${escape(name)}</summary>
-      ${treeHtml(job, node.dirs.get(name), path)}
-    </details>`
-  })
-
-  return files.join('') + dirs.join('')
-}
-
-function onToggle(event) {
-  const key = event.target.dataset.key
-  if (event.target.open) collapsed.delete(key)
-  else collapsed.add(key)
-}
-
-function selectFile(path) {
-  for (const link of $('tree').querySelectorAll('a')) {
-    link.classList.toggle('selected', link.dataset.path === path)
-  }
+  if (button.dataset.action === 'archive') archiveJob(job)
+  else openTool(job, button.dataset.action)
 }
 
 function missingScripts() {
@@ -811,11 +857,11 @@ function nodeState(job, phase) {
   return `current ${tint(job)}`
 }
 
-function graphNode(job, files, label, state, path = null) {
-  if (path !== null && files.includes(path)) {
-    return `<a class="node ${state}" href="${escape(fileHref(job, path))}">${escape(label)}</a>`
-  }
-  return `<span class="node ${state}">${escape(label)}</span>`
+function graphNode(job, open, label, state, path = null) {
+  if (path === null) return `<span class="node ${state}">${escape(label)}</span>`
+
+  const selected = path === open ? ' selected' : ''
+  return `<a class="node ${state}${selected}" href="${escape(fileHref(job, path))}">${escape(label)}</a>`
 }
 
 function reviewNames(files, round) {
@@ -826,14 +872,51 @@ function reviewNames(files, round) {
     .sort((a, b) => a.localeCompare(b))
 }
 
-function reviewNodes(job, files, round, state) {
+function reviewNodes(job, files, round, state, open) {
   const names = round > 0 ? reviewNames(files, round) : []
   if (names.length > 0) {
-    return names.map((name) => graphNode(job, files, name, state, `round-${round}/reviews/${name}.md`))
+    return names.map((name) => graphNode(job, open, name, state, `round-${round}/reviews/${name}.md`))
   }
 
   const running = round > 0 && round === job.round && job.stage === 'verify'
-  return [graphNode(job, files, running ? 'review · running' : 'review', state)]
+  return [graphNode(job, open, running ? 'review · running' : 'review', state)]
+}
+
+function displayName(path) {
+  return path.endsWith('.md') ? path.slice(0, -3) : path
+}
+
+// Returns the chips whose file exists: triage, extras, the other files of round `round` without a node, then decisions.
+function chips(files, round) {
+  const list = []
+  if (round > 0) {
+    const prefix = `round-${round}/`
+    const named = [
+      { label: 'triage', path: `${prefix}triage.md` },
+      { label: 'extras', path: `${prefix}extras.md` },
+    ]
+    const covered = new Set([
+      `${prefix}report.md`,
+      ...named.map((chip) => chip.path),
+      ...reviewNames(files, round).map((name) => `${prefix}reviews/${name}.md`),
+    ])
+    const others = files
+      .filter((path) => path.startsWith(prefix) && !covered.has(path))
+      .sort((a, b) => a.localeCompare(b))
+      .map((path) => ({ label: displayName(path.slice(prefix.length)), path }))
+    list.push(...named, ...others)
+  }
+
+  list.push({ label: 'decisions', path: 'decisions.md' })
+  return list.filter((chip) => files.includes(chip.path))
+}
+
+function chipsHtml(job, files, round, open) {
+  const links = chips(files, round).map(({ label, path }) => {
+    const selected = path === open ? ' selected' : ''
+    return `<a class="chip${selected}" href="${escape(fileHref(job, path))}">${escape(label)}</a>`
+  })
+  return links.length > 0 ? `<div class="chips">${links.join('')}</div>` : ''
 }
 
 function roundButtons(job) {
@@ -848,8 +931,23 @@ function roundButtons(job) {
   return `<div class="rounds">${buttons.join('')}</div>`
 }
 
-function graphHtml(job, files) {
-  const round = job.round > 0 ? (pickedRound ?? job.round) : 0
+// Returns the round the graph shows: the picked one, else the last one, or 0 before the first round.
+function shownRound(job) {
+  return job.round > 0 ? (pickedRound ?? job.round) : 0
+}
+
+// Returns the file the pane shows when the route names none.
+function defaultFile(job, files, round) {
+  if (job.stage === 'blocked') return 'job.json'
+
+  const stage = phaseStage(job)
+  const report = `round-${round}/report.md`
+  if (stage === 'verify') return files.includes(report) ? report : 'tasks.md'
+  if (stage === 'triage') return report
+  return Object.hasOwn(STAGE_FILE, stage) ? STAGE_FILE[stage] : null
+}
+
+function graphHtml(job, files, round, open) {
   const phase = PHASES.indexOf(currentPhase(job))
   const fixing = round > 0 && phase >= 0 && phase < PHASES.indexOf('review')
   const finished = round < job.round || fixing
@@ -860,42 +958,35 @@ function graphHtml(job, files) {
 
   const edge = '<span class="edge"></span>'
   const stub = '<span class="stub"></span>'
-  const reviews = reviewNodes(job, files, round, reviewState)
+  const reviews = reviewNodes(job, files, round, reviewState, open)
     .map((node) => `<div class="branch">${stub}${node}${stub}</div>`)
     .join('')
   const triagePath = round > 0 ? `round-${round}/report.md` : null
 
   return `
-    <div class="graph">
-      <div class="flow">
-        ${graphNode(job, files, 'spec', nodeState(job, 'spec'), 'spec.md')}
+    <div class="flow">
+      ${graphNode(job, open, 'request', 'past', 'request.md')}
+      ${edge}
+      ${graphNode(job, open, 'spec', nodeState(job, 'spec'), 'spec.md')}
+      ${edge}
+      ${graphNode(job, open, 'plan', nodeState(job, 'plan'), 'plan.md')}
+      ${edge}
+      <div class="loop">
+        <div class="loop-end start">${graphNode(job, open, 'impl', nodeState(job, 'impl'), 'tasks.md')}</div>
         ${edge}
-        ${graphNode(job, files, 'plan', nodeState(job, 'plan'), 'plan.md')}
+        <div class="branches fan-in">${reviews}</div>
         ${edge}
-        <div class="loop">
-          ${graphNode(job, files, 'impl', nodeState(job, 'impl'), 'tasks.md')}
-          ${edge}
-          <div class="branches fan-in">${reviews}</div>
-          ${edge}
-          ${graphNode(job, files, 'triage', triageState, triagePath)}
-          <span class="back-edge"></span>
-          ${roundButtons(job)}
-        </div>
-        ${edge}
-        <div class="branches">
-          <div class="branch">${stub}${graphNode(job, files, 'done', doneState, 'deferred.md')}</div>
-          <div class="branch">${stub}${graphNode(job, files, 'blocked', blockedState, 'job.json')}</div>
-        </div>
+        <div class="loop-end finish">${graphNode(job, open, 'triage', triageState, triagePath)}</div>
+        <span class="back-edge"></span>
+        ${chipsHtml(job, files, round, open)}
+        ${roundButtons(job)}
+      </div>
+      ${edge}
+      <div class="branches ends">
+        <div class="branch">${stub}${graphNode(job, open, 'done', doneState, 'deferred.md')}</div>
+        <div class="branch">${stub}${graphNode(job, open, 'blocked', blockedState, 'job.json')}</div>
       </div>
     </div>`
-}
-
-function showGraph(job, files) {
-  const html = graphHtml(job, files)
-  if (lastView.key === job.dir && lastView.text === html) return
-
-  lastView = { key: job.dir, text: html }
-  $('view').innerHTML = html
 }
 
 function onPickRound(event) {
@@ -903,29 +994,26 @@ function onPickRound(event) {
   if (!button) return
 
   pickedRound = Number(button.dataset.round)
+
+  const route = parseRoute(location.hash)
+  const match = /^round-\d+\/(.+)$/.exec(route.path ?? '')
+  if (match) location.hash = fileHref(route, `round-${pickedRound}/${match[1]}`)
   render()
 }
 
-async function showFile(job, path, seq) {
-  const key = job.dir + path
-  const flow = `<a class="flow-button" href="${escape(jobHref(job))}">Flow</a>`
+// Shows `path` in the pane, or a blank pane when it is null or missing.
+async function showFile(job, files, path, seq) {
+  const key = path === null ? null : job.dir + path
 
-  let text
-  try {
-    text = await fetchText(encodePath(key))
-  } catch (err) {
-    if (seq !== renderSeq) return
-    lastView = { key: null, text: null }
-    $('view').innerHTML = `${flow}<p class="error">${escape(err.message)}</p>`
-    return
-  }
+  let text = null
+  if (path !== null && files.includes(path)) text = await fetchText(encodePath(key)).catch(() => null)
 
   if (seq !== renderSeq) return
   if (lastView.key === key && lastView.text === text) return
 
   const sameFile = lastView.key === key
   lastView = { key, text }
-  $('view').innerHTML = `${flow}${fileHtml(path, text)}`
+  $('view').innerHTML = text === null ? '' : fileHtml(path, text)
   if (!sameFile) $('view').scrollTop = 0
 }
 
@@ -966,6 +1054,17 @@ async function archiveJob(job) {
   poll()
 }
 
+async function openTool(job, tool) {
+  const label = TOOL_LABELS[tool]
+
+  try {
+    const res = await fetch(`open/${tool}/${encodeURIComponent(job.repo)}/${encodeURIComponent(job.id)}`, { method: 'POST' })
+    if (!res.ok) throw new Error((await res.text()).trim() || `${res.status} ${res.statusText}`)
+  } catch (err) {
+    await tell(`Could not open ${job.repo}/${job.id} in ${label}: ${err.message}`)
+  }
+}
+
 async function renderJobPage(job, path) {
   const seq = renderSeq
   const row = rowContent(job)
@@ -973,43 +1072,49 @@ async function renderJobPage(job, path) {
   if (jobView.el !== $('page').firstElementChild || jobView.dir !== job.dir) {
     $('page').innerHTML = `
       <div class="column job-page">
-        <a class="back" href="#/">← Jobs</a>
-        <div class="row ${tint(job)}" id="job-row">${row}</div>
-        <button type="button" class="archive" id="archive">Archive</button>
-        <div class="pane">
-          <nav id="tree"></nav>
-          <section id="view"></section>
+        <div class="job-head">
+          <a class="back" href="#/">← Jobs</a>
+          <div class="row card ${tint(job)}" id="job-row" data-dir="${escape(job.dir)}">
+            <div class="body">${row}</div>
+            <span class="actions">${cardActions(job)}</span>
+          </div>
         </div>
+        <section class="flow-pane" id="flow-pane">
+          <button type="button" class="icon flow-toggle" id="flow-toggle">
+            <svg viewBox="0 0 16 16" aria-hidden="true">${FLOW_ICON}</svg>
+          </button>
+          <div class="flow-strip" id="flow"></div>
+        </section>
+        <section id="view"></section>
       </div>`
-    $('tree').addEventListener('toggle', onToggle, true)
-    $('view').addEventListener('click', onPickRound)
-    $('archive').addEventListener('click', () => archiveJob(job))
-    jobView = { dir: job.dir, el: $('page').firstElementChild, row, files: null }
+    $('flow').addEventListener('click', onPickRound)
+    $('flow-toggle').addEventListener('click', toggleFlow)
+    $('job-row').addEventListener('click', onCardAction)
+    showFlowCollapsed()
+    jobView = { dir: job.dir, el: $('page').firstElementChild, row, graph: null }
     lastView = { key: null, text: null }
     pickedRound = null
   } else if (jobView.row !== row) {
-    $('job-row').innerHTML = row
-    $('job-row').className = `row ${tint(job)}`
+    $('job-row').querySelector('.body').innerHTML = row
+    $('job-row').className = `row card ${tint(job)}`
     jobView.row = row
   }
 
   const files = await listFiles(job.dir)
   if (seq !== renderSeq) return
 
-  const treeFiles = files.filter((f) => f !== 'job.json')
-  const filesKey = treeFiles.join('\n')
-  if (jobView.files !== filesKey) {
-    $('tree').innerHTML = treeHtml(job, buildTree(treeFiles))
-    jobView.files = filesKey
-  }
-  selectFile(path)
+  const round = shownRound(job)
+  const open = path ?? defaultFile(job, files, round)
 
-  if (path === null) {
-    showGraph(job, files)
-    return
+  const graph = graphHtml(job, files, round, open)
+  if (jobView.graph !== graph) {
+    const first = jobView.graph === null
+    $('flow').innerHTML = graph
+    if (first) $('flow').scrollLeft = $('flow').scrollWidth
+    jobView.graph = graph
   }
 
-  await showFile(job, path, seq)
+  await showFile(job, files, open, seq)
 }
 
 function renderNotFound() {
@@ -1025,6 +1130,62 @@ function render() {
   if (!job) return renderNotFound()
 
   renderJobPage(job, route.path)
+}
+
+// Returns the stored font size, or the default when it is missing or out of range.
+function readFontSize() {
+  try {
+    const size = Number(localStorage.getItem(FONT_KEY))
+    return Number.isInteger(size) && size >= FONT_MIN && size <= FONT_MAX ? size : FONT_DEFAULT
+  } catch {
+    return FONT_DEFAULT
+  }
+}
+
+function writeFontSize(size) {
+  try {
+    localStorage.setItem(FONT_KEY, String(size))
+  } catch {}
+}
+
+function showFontSize(size) {
+  fontSize = size
+  document.documentElement.style.fontSize = `${size}px`
+  $('font-value').textContent = `${size}px`
+  $('font-down').disabled = size <= FONT_MIN
+  $('font-up').disabled = size >= FONT_MAX
+}
+
+function stepFontSize(step) {
+  const size = Math.min(FONT_MAX, Math.max(FONT_MIN, fontSize + step))
+  showFontSize(size)
+  writeFontSize(size)
+}
+
+// Returns true when the stored flow state is collapsed.
+function readFlowCollapsed() {
+  try {
+    return localStorage.getItem(FLOW_KEY) === 'true'
+  } catch {
+    return false
+  }
+}
+
+function writeFlowCollapsed(collapsed) {
+  try {
+    localStorage.setItem(FLOW_KEY, String(collapsed))
+  } catch {}
+}
+
+function showFlowCollapsed() {
+  $('flow-pane').classList.toggle('collapsed', flowCollapsed)
+  $('flow-toggle').title = flowCollapsed ? 'Expand flow' : 'Collapse flow'
+}
+
+function toggleFlow() {
+  flowCollapsed = !flowCollapsed
+  showFlowCollapsed()
+  writeFlowCollapsed(flowCollapsed)
 }
 
 async function poll() {
@@ -1044,6 +1205,11 @@ async function poll() {
     $('status').textContent = `error: ${err.message}`
   }
 }
+
+$('font-down').addEventListener('click', () => stepFontSize(-1))
+$('font-up').addEventListener('click', () => stepFontSize(1))
+showFontSize(readFontSize())
+flowCollapsed = readFlowCollapsed()
 
 window.addEventListener('hashchange', render)
 poll()

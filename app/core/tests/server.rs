@@ -81,13 +81,23 @@ impl Reply {
     }
 }
 
+/// Sends a request with `Host: 127.0.0.1:<port>` and `headers`.
 fn request(port: u16, method: &str, target: &str, headers: &[(&str, &str)]) -> Reply {
+    let host = format!("127.0.0.1:{port}");
+    let mut all = vec![("Host", host.as_str())];
+    all.extend_from_slice(headers);
+
+    send(port, method, target, &all)
+}
+
+/// Sends a request with exactly `headers`.
+fn send(port: u16, method: &str, target: &str, headers: &[(&str, &str)]) -> Reply {
     let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
     stream
         .set_read_timeout(Some(Duration::from_secs(5)))
         .unwrap();
 
-    let mut head = format!("{method} {target} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n");
+    let mut head = format!("{method} {target} HTTP/1.1\r\n");
     for (name, value) in headers {
         head.push_str(&format!("{name}: {value}\r\n"));
     }
@@ -268,6 +278,61 @@ fn wrong_method_is_405() {
 }
 
 #[test]
+fn foreign_host_is_403() {
+    let f = job_fixture();
+    f.write("config.json", r#"{ "port": 8731 }"#);
+
+    for host in [
+        format!("evil.example:{}", f.port()),
+        format!("127.0.0.1:{}", f.port().wrapping_add(1)),
+        "localhost".to_string(),
+    ] {
+        let headers = [("Host", host.as_str())];
+
+        let get = send(f.port(), "GET", "/config.json", &headers);
+        let post = send(f.port(), "POST", "/archive/stack/a", &headers);
+
+        assert_eq!(get.status, 403, "{host}");
+        assert_eq!(post.status, 403, "{host}");
+        assert_eq!(f.read(JOB_FILE), JOB, "{host}");
+    }
+}
+
+#[test]
+fn missing_host_is_403() {
+    let f = job_fixture();
+    f.write("config.json", r#"{ "port": 8731 }"#);
+
+    let get = send(f.port(), "GET", "/config.json", &[]);
+    let post = send(f.port(), "POST", "/archive/stack/a", &[]);
+
+    assert_eq!(get.status, 403);
+    assert_eq!(post.status, 403);
+    assert_eq!(f.read(JOB_FILE), JOB);
+}
+
+#[test]
+fn local_hosts_are_served() {
+    for name in ["localhost", "127.0.0.1"] {
+        let f = job_fixture();
+        f.write("config.json", r#"{ "port": 8731 }"#);
+        let host = format!("{name}:{}", f.port());
+        let origin = format!("http://{host}");
+
+        let get = send(f.port(), "GET", "/config.json", &[("Host", &host)]);
+        let post = send(
+            f.port(),
+            "POST",
+            "/archive/stack/a",
+            &[("Host", &host), ("Origin", &origin)],
+        );
+
+        assert_eq!(get.status, 200, "{host}");
+        assert_eq!(post.status, 204, "{host}");
+    }
+}
+
+#[test]
 fn taken_port_is_an_error() {
     let f = fixture();
     let taken = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -427,6 +492,29 @@ fn archive_bad_json_is_500() {
 
     assert_eq!(reply.status, 500);
     assert_eq!(f.read(JOB_FILE), "not json");
+}
+
+#[test]
+fn open_rejects_foreign_origin() {
+    let f = job_fixture();
+
+    let reply = request(
+        f.port(),
+        "POST",
+        "/open/zed/stack/a",
+        &[("Origin", "http://evil.example")],
+    );
+
+    assert_eq!(reply.status, 403);
+}
+
+#[test]
+fn open_missing_job_is_404() {
+    let f = job_fixture();
+
+    let reply = post(f.port(), "/open/zed/nope/nope");
+
+    assert_eq!(reply.status, 404);
 }
 
 #[test]
