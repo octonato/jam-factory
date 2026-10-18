@@ -134,6 +134,11 @@
 
   .row:has(> a.body:hover) { border-color: var(--accent); border-left-color: var(--tone, var(--accent)); }
 
+  .row.card.selected {
+    outline: 2px solid var(--ink-2);
+    outline-offset: 3px;
+  }
+
   .row .body {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
@@ -629,18 +634,19 @@ const FLOW_ICON = '<path d="M8 12.5v-9M4 7.5l4-4 4 4"/>'
 const CARD_ACTIONS = [
   {
     action: 'intellij',
-    title: 'Open in IntelliJ',
+    title: 'Open in IntelliJ (i)',
     icon: '<rect x="1.75" y="1.75" width="12.5" height="12.5" rx="1.5"/><path d="M5 4.75v6.5M11 4.75v4.5a1.75 1.75 0 0 1-3.5 0"/>',
   },
-  { action: 'zed', title: 'Open in Zed', icon: '<path d="M3.5 3.5h9l-9 9h9"/>' },
-  { action: 'iterm', title: 'Open in iTerm', icon: '<path d="M3 4.5 6.5 8 3 11.5M8.5 11.5H13"/>' },
+  { action: 'zed', title: 'Open in Zed (e)', icon: '<path d="M3.5 3.5h9l-9 9h9"/>' },
+  { action: 'iterm', title: 'Open in iTerm (t)', icon: '<path d="M3 4.5 6.5 8 3 11.5M8.5 11.5H13"/>' },
   {
     action: 'archive',
-    title: 'Archive',
+    title: 'Archive (a)',
     icon: '<path d="M2.5 4.5h11M6.5 4.5V2.75h3V4.5M4 4.5l.75 9h6.5l.75-9M6.75 7v4M9.25 7v4"/>',
   },
 ]
-const TOOL_LABELS = { intellij: 'IntelliJ', zed: 'Zed', iterm: 'iTerm' }
+const TOOL_LABELS = { intellij: 'IntelliJ', zed: 'Zed', iterm: 'iTerm', github: 'GitHub' }
+const ACTION_KEYS = { a: 'archive', t: 'iterm', e: 'zed', i: 'intellij', o: 'github' }
 
 const $ = (id) => document.getElementById(id)
 const state = { jobs: [], problems: [] }
@@ -651,6 +657,7 @@ let pickedRound = null
 let renderSeq = 0
 let fontSize = FONT_DEFAULT
 let flowCollapsed = false
+let selectedDir = null
 
 function escape(text) {
   return String(text).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)
@@ -806,11 +813,36 @@ function renderList() {
       <span class="actions">${cardActions(job)}</span>
     </div>`).join('')
   const html = `<div class="column rows">${rows || '<p class="empty">No jobs yet.</p>'}</div>`
-  if (listView.el === $('page').firstElementChild && listView.html === html) return
+  if (listView.el === $('page').firstElementChild && listView.html === html) return showSelection()
 
   $('page').innerHTML = html
   listView = { html, el: $('page').firstElementChild }
   listView.el.addEventListener('click', onCardAction)
+  showSelection()
+}
+
+// Clears the selection when its job is gone and outlines the selected row.
+function showSelection() {
+  if (!state.jobs.some((job) => job.dir === selectedDir)) selectedDir = null
+
+  for (const row of $('page').querySelectorAll('.row.card')) {
+    row.classList.toggle('selected', row.dataset.dir === selectedDir)
+  }
+}
+
+// Moves the selection by `step` rows in display order and stops at the first and last rows.
+function moveSelection(step) {
+  const rows = [...$('page').querySelectorAll('.row.card')]
+  if (rows.length === 0) return
+
+  const last = rows.length - 1
+  const first = step > 0 ? 0 : last
+  const current = rows.findIndex((row) => row.dataset.dir === selectedDir)
+  const next = current < 0 ? first : Math.min(last, Math.max(0, current + step))
+
+  selectedDir = rows[next].dataset.dir
+  showSelection()
+  rows[next].scrollIntoView({ block: 'nearest' })
 }
 
 function onCardAction(event) {
@@ -1069,6 +1101,16 @@ async function openTool(job, tool) {
   }
 }
 
+// Runs the action bound to `key` on `job` and returns true when `key` has one.
+function jobAction(job, key) {
+  if (!Object.hasOwn(ACTION_KEYS, key)) return false
+
+  const action = ACTION_KEYS[key]
+  if (action === 'archive') archiveJob(job)
+  else openTool(job, action)
+  return true
+}
+
 async function renderJobPage(job, path) {
   const seq = renderSeq
   const row = rowContent(job)
@@ -1131,6 +1173,59 @@ function render() {
   if (!job) return renderNotFound()
 
   renderJobPage(job, route.path)
+}
+
+// Runs the list shortcut for `key` and returns true when it acted.
+function listKey(key) {
+  if (key === 'ArrowDown' || key === 'ArrowUp') {
+    moveSelection(key === 'ArrowDown' ? 1 : -1)
+    return true
+  }
+
+  const job = state.jobs.find((j) => j.dir === selectedDir)
+  if (!job) return false
+
+  if (key === 'Enter') {
+    location.hash = jobHref(job)
+    return true
+  }
+  return jobAction(job, key)
+}
+
+// Runs the job page shortcut for `key` on `job` and returns true when it acted.
+function jobKey(key, job) {
+  if (key === 'l') {
+    selectedDir = job.dir
+    location.hash = '#/'
+    return true
+  }
+
+  if (key === 'ArrowDown' || key === 'ArrowUp') {
+    const collapse = key === 'ArrowUp'
+    if (flowCollapsed === collapse) return false
+
+    toggleFlow()
+    return true
+  }
+
+  return jobAction(job, key)
+}
+
+// Dispatches a shortcut key to the shown page.
+function onKey(event) {
+  if (event.metaKey || event.ctrlKey || event.altKey) return
+  if ($('modal').open) return
+  if (event.target.closest('input, textarea, select, [contenteditable]')) return
+  if (event.key === 'Enter' && event.target.closest('button, a')) return
+
+  const route = parseRoute(location.hash)
+  if (!route) {
+    if (listKey(event.key)) event.preventDefault()
+    return
+  }
+
+  const job = state.jobs.find((j) => jobHref(j) === jobHref(route))
+  if (job && jobKey(event.key, job)) event.preventDefault()
 }
 
 // Returns the stored font size, or the default when it is missing or out of range.
@@ -1213,6 +1308,7 @@ showFontSize(readFontSize())
 flowCollapsed = readFlowCollapsed()
 
 window.addEventListener('hashchange', render)
+document.addEventListener('keydown', onKey)
 poll()
 setInterval(poll, POLL_MS)
 </script>

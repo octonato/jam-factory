@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Opens a job's worktree in a tool on `POST /open/<tool>/<repo>/<id>`.
+//! Opens a job's worktree, or its open pull request, in a tool on `POST /open/<tool>/<repo>/<id>`.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -25,12 +25,24 @@ use super::http::{Request, Response};
 
 const TEXT: &str = "text/plain; charset=utf-8";
 
-/// A tool that opens a worktree.
+/// A `sh` script that opens the open pull request of the worktree `$1` on GitHub.
+const GITHUB_SCRIPT: &str = r#"cd "$1" || exit 1
+PATH="$PATH:/opt/homebrew/bin:/usr/local/bin"
+url=$(gh pr view --json url,state --jq 'select(.state == "OPEN") | .url') || exit 1
+if [ -z "$url" ]; then
+    echo "no open pull request" >&2
+    exit 1
+fi
+open "$url"
+"#;
+
+/// A tool that opens a worktree or its open pull request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tool {
     IntelliJ,
     Zed,
     ITerm,
+    GitHub,
 }
 
 impl Tool {
@@ -40,6 +52,7 @@ impl Tool {
             "intellij" => Some(Tool::IntelliJ),
             "zed" => Some(Tool::Zed),
             "iterm" => Some(Tool::ITerm),
+            "github" => Some(Tool::GitHub),
             _ => None,
         }
     }
@@ -54,6 +67,15 @@ impl Tool {
             Tool::ITerm => (
                 "osascript".to_string(),
                 vec!["-e".to_string(), iterm_script(&worktree)],
+            ),
+            Tool::GitHub => (
+                "sh".to_string(),
+                vec![
+                    "-c".to_string(),
+                    GITHUB_SCRIPT.to_string(),
+                    "sh".to_string(),
+                    worktree,
+                ],
             ),
         }
     }
@@ -276,6 +298,86 @@ mod tests {
         (program.to_string(), strings(args))
     }
 
+    /// A folder with stub `gh` and `open` programs in `bin/`, and the worktree `work tree/`.
+    struct Stubs {
+        dir: tempfile::TempDir,
+    }
+
+    impl Stubs {
+        /// Stubs where `gh` runs its `--jq` filter on a pull request in `state` at `url`, if `jq` is on `PATH`.
+        fn pr(state: &str, url: &str) -> Option<Stubs> {
+            let jq = find_program("jq")?;
+            let record = serde_json::json!({ "state": state, "url": url }).to_string();
+
+            let gh = format!(
+                r#"while [ $# -gt 0 ]; do
+    if [ "$1" = --jq ]; then filter=$2; fi
+    shift
+done
+printf '%s' {record} | {jq} -r "$filter"
+"#,
+                record = shell_single_quote(&record),
+                jq = shell_single_quote(&jq.to_string_lossy()),
+            );
+
+            Some(Stubs::new(&gh))
+        }
+
+        /// Stubs where `gh` prints `error` to stderr and exits 1.
+        fn failing(error: &str) -> Stubs {
+            Stubs::new(&format!("echo {} >&2\nexit 1\n", shell_single_quote(error)))
+        }
+
+        /// Stubs where `gh` runs the shell script `gh`.
+        fn new(gh: &str) -> Stubs {
+            let dir = tempfile::tempdir().unwrap();
+            let bin = dir.path().join("bin");
+            fs::create_dir(&bin).unwrap();
+            fs::create_dir(dir.path().join("work tree")).unwrap();
+
+            write_program(&bin.join("gh"), gh);
+
+            let opened = dir.path().join("opened").to_string_lossy().into_owned();
+            let open = format!("printf '%s' \"$1\" > {}\n", shell_single_quote(&opened));
+            write_program(&bin.join("open"), &open);
+
+            Stubs { dir }
+        }
+
+        /// Runs `GITHUB_SCRIPT` on the worktree with only the stubs and the system folders on `PATH`.
+        fn run(&self) -> Result<(), String> {
+            let bin = self.dir.path().join("bin");
+            let path = format!("PATH={}:/usr/bin:/bin", bin.display());
+            let worktree = self.dir.path().join("work tree");
+            let worktree = worktree.to_string_lossy();
+
+            let args = strings(&[&path, "sh", "-c", GITHUB_SCRIPT, "sh", &worktree]);
+            SystemRunner.run("env", &args)
+        }
+
+        /// The argument the `open` stub got, if it ran.
+        fn opened(&self) -> Option<String> {
+            fs::read_to_string(self.dir.path().join("opened")).ok()
+        }
+    }
+
+    /// The file `name` in the first folder on `PATH` that has it.
+    fn find_program(name: &str) -> Option<PathBuf> {
+        let path = std::env::var_os("PATH")?;
+
+        std::env::split_paths(&path)
+            .map(|folder| folder.join(name))
+            .find(|file| file.is_file())
+    }
+
+    /// Writes the executable shell script `body` to `file`.
+    fn write_program(file: &Path, body: &str) {
+        use std::os::unix::fs::PermissionsExt;
+
+        fs::write(file, format!("#!/bin/sh\n{body}")).unwrap();
+        fs::set_permissions(file, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
     #[test]
     fn tools_build_their_commands() {
         let worktree = Path::new("/w x");
@@ -301,6 +403,53 @@ mod tests {
         assert_eq!(Tool::parse("intellij"), Some(Tool::IntelliJ));
         assert_eq!(Tool::parse("zed"), Some(Tool::Zed));
         assert_eq!(Tool::parse("iterm"), Some(Tool::ITerm));
+        assert_eq!(Tool::parse("github"), Some(Tool::GitHub));
+    }
+
+    #[test]
+    fn github_passes_the_worktree_as_an_argument() {
+        let (program, args) = Tool::GitHub.command(Path::new("/w x"));
+
+        assert_eq!(program, "sh");
+        assert_eq!(args, strings(&["-c", GITHUB_SCRIPT, "sh", "/w x"]));
+    }
+
+    #[test]
+    fn github_script_without_an_open_pr_fails() {
+        for state in ["MERGED", "CLOSED"] {
+            let Some(stubs) = Stubs::pr(state, "https://github.com/o/r/pull/1") else {
+                eprintln!("skipped: jq is not on PATH");
+                return;
+            };
+
+            assert_eq!(
+                stubs.run(),
+                Err("no open pull request".to_string()),
+                "{state}"
+            );
+            assert_eq!(stubs.opened(), None, "{state}");
+        }
+    }
+
+    #[test]
+    fn github_script_opens_the_pr_url() {
+        let Some(stubs) = Stubs::pr("OPEN", "https://github.com/o/r/pull/1") else {
+            eprintln!("skipped: jq is not on PATH");
+            return;
+        };
+
+        assert_eq!(stubs.run(), Ok(()));
+        assert_eq!(
+            stubs.opened().as_deref(),
+            Some("https://github.com/o/r/pull/1")
+        );
+    }
+
+    #[test]
+    fn github_script_gives_the_gh_error() {
+        let stubs = Stubs::failing("no pull requests found");
+
+        assert_eq!(stubs.run(), Err("no pull requests found".to_string()));
     }
 
     #[test]
