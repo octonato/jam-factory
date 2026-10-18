@@ -1,6 +1,6 @@
 # Jam Factory
 
-> Disclaimer: this is a set of Claude, Codex and Gemini commands that I use. It includes my personal AI software factory together with the Jam Board app to visualize the ongoing sessions. This is a WIP, has lots of loose ends and is poorly documented. And it's a moving target.
+> **Disclaimer**: this is a set of Claude, Codex and Gemini commands that I use. It includes my personal AI software factory together with the Jam Board app to visualize the ongoing sessions. This is a WIP, has lots of loose ends and is poorly documented. And it's a moving target.
 
 Plugins for code assistants that run coding like a jam session.
 
