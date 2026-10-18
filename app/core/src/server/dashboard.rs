@@ -72,7 +72,7 @@ mod tests {
     }
 
     #[test]
-    fn dashboard_header_has_a_jobs_tab() {
+    fn dashboard_header_has_a_sessions_tab() {
         let html = std::str::from_utf8(embedded("/dashboard.html").unwrap().bytes).unwrap();
         let start = html.find("<header>").unwrap();
         let end = html.find("</header>").unwrap();
@@ -81,15 +81,24 @@ mod tests {
         let title = header.find("<h1>Jam Board</h1>").unwrap();
         let tabs = header.find("<nav class=\"tabs\">").unwrap();
         assert!(tabs > title);
-        assert!(header.contains("<a class=\"tab\" href=\"#/\" aria-current=\"page\">Jobs</a>"));
+        assert!(header.contains("<a class=\"tab\" href=\"#/\" aria-current=\"page\">Sessions</a>"));
     }
 
     #[test]
     fn dashboard_has_no_back_link() {
         let html = std::str::from_utf8(embedded("/dashboard.html").unwrap().bytes).unwrap();
 
-        assert!(!html.contains("← Jobs"));
+        assert!(!html.contains("← Sessions"));
         assert!(!html.contains("class=\"back\""));
-        assert!(!html.contains("job-head"));
+        assert!(!html.contains("session-head"));
+    }
+
+    #[test]
+    fn dashboard_reads_sessions() {
+        let html = std::str::from_utf8(embedded("/dashboard.html").unwrap().bytes).unwrap();
+
+        assert!(html.contains("sessions/"));
+        assert!(html.contains("session.json"));
+        assert!(!html.to_lowercase().contains("job"));
     }
 }

@@ -127,13 +127,13 @@ fn post(port: u16, target: &str) -> Reply {
     request(port, "POST", target, &[])
 }
 
-const JOB_FILE: &str = "stack/jobs/a/job.json";
-const JOB: &str = r#"{"id":"a","stage":"done","archived":false,"counts":{"nit":1}}"#;
+const SESSION_FILE: &str = "stack/sessions/a/session.json";
+const SESSION: &str = r#"{"id":"a","stage":"done","archived":false,"counts":{"nit":1}}"#;
 
-/// A fixture whose root holds the job `stack/a`.
-fn job_fixture() -> Fixture {
+/// A fixture whose root holds the session `stack/a`.
+fn session_fixture() -> Fixture {
     let f = fixture();
-    f.write(JOB_FILE, JOB);
+    f.write(SESSION_FILE, SESSION);
     f
 }
 
@@ -151,9 +151,9 @@ fn is_utc_timestamp(text: &str) -> bool {
 #[test]
 fn serves_a_file() {
     let f = fixture();
-    f.write("stack/jobs/a/job.json", r#"{"id":"a"}"#);
+    f.write("stack/sessions/a/session.json", r#"{"id":"a"}"#);
 
-    let reply = get(f.port(), "/stack/jobs/a/job.json");
+    let reply = get(f.port(), "/stack/sessions/a/session.json");
 
     assert_eq!(reply.status, 200);
     assert_eq!(reply.text(), r#"{"id":"a"}"#);
@@ -188,15 +188,18 @@ fn lists_folders_with_trailing_slash() {
 #[test]
 fn percent_encodes_names() {
     let f = fixture();
-    f.write("stack/jobs/my job/caf\u{e9}.md", "hi");
+    f.write("stack/sessions/my session/caf\u{e9}.md", "hi");
 
-    let jobs = get(f.port(), "/stack/jobs/").text();
-    assert!(jobs.contains(r#"<a href="my%20job/">"#), "{jobs}");
+    let sessions = get(f.port(), "/stack/sessions/").text();
+    assert!(
+        sessions.contains(r#"<a href="my%20session/">"#),
+        "{sessions}"
+    );
 
-    let job = get(f.port(), "/stack/jobs/my%20job/").text();
-    assert!(job.contains(r#"<a href="caf%C3%A9.md">"#), "{job}");
+    let session = get(f.port(), "/stack/sessions/my%20session/").text();
+    assert!(session.contains(r#"<a href="caf%C3%A9.md">"#), "{session}");
 
-    let file = get(f.port(), "/stack/jobs/my%20job/caf%C3%A9.md");
+    let file = get(f.port(), "/stack/sessions/my%20session/caf%C3%A9.md");
     assert_eq!(file.status, 200);
     assert_eq!(file.text(), "hi");
 }
@@ -279,7 +282,7 @@ fn wrong_method_is_405() {
 
 #[test]
 fn foreign_host_is_403() {
-    let f = job_fixture();
+    let f = session_fixture();
     f.write("config.json", r#"{ "port": 8731 }"#);
 
     for host in [
@@ -294,13 +297,13 @@ fn foreign_host_is_403() {
 
         assert_eq!(get.status, 403, "{host}");
         assert_eq!(post.status, 403, "{host}");
-        assert_eq!(f.read(JOB_FILE), JOB, "{host}");
+        assert_eq!(f.read(SESSION_FILE), SESSION, "{host}");
     }
 }
 
 #[test]
 fn missing_host_is_403() {
-    let f = job_fixture();
+    let f = session_fixture();
     f.write("config.json", r#"{ "port": 8731 }"#);
 
     let get = send(f.port(), "GET", "/config.json", &[]);
@@ -308,13 +311,13 @@ fn missing_host_is_403() {
 
     assert_eq!(get.status, 403);
     assert_eq!(post.status, 403);
-    assert_eq!(f.read(JOB_FILE), JOB);
+    assert_eq!(f.read(SESSION_FILE), SESSION);
 }
 
 #[test]
 fn local_hosts_are_served() {
     for name in ["localhost", "127.0.0.1"] {
-        let f = job_fixture();
+        let f = session_fixture();
         f.write("config.json", r#"{ "port": 8731 }"#);
         let host = format!("{name}:{}", f.port());
         let origin = format!("http://{host}");
@@ -392,30 +395,30 @@ fn every_response_closes_and_is_not_cached() {
 
 #[test]
 fn archive_sets_fields_and_keeps_order() {
-    let f = job_fixture();
+    let f = session_fixture();
 
     let reply = post(f.port(), "/archive/stack/a");
 
     assert_eq!(reply.status, 204);
     assert!(reply.body.is_empty());
 
-    let text = f.read(JOB_FILE);
-    let job: serde_json::Map<String, serde_json::Value> = serde_json::from_str(&text).unwrap();
-    let keys: Vec<&str> = job.keys().map(String::as_str).collect();
+    let text = f.read(SESSION_FILE);
+    let session: serde_json::Map<String, serde_json::Value> = serde_json::from_str(&text).unwrap();
+    let keys: Vec<&str> = session.keys().map(String::as_str).collect();
     assert_eq!(keys, ["id", "stage", "archived", "counts", "updated"]);
-    assert_eq!(job["archived"], true);
+    assert_eq!(session["archived"], true);
 
-    let updated = job["updated"].as_str().unwrap();
+    let updated = session["updated"].as_str().unwrap();
     assert!(is_utc_timestamp(updated), "{updated}");
 
     assert!(text.lines().nth(1).unwrap().starts_with("  "), "{text}");
     assert!(text.ends_with('\n'), "{text}");
-    assert!(!f.root.join("stack/jobs/a/job.json.tmp").exists());
+    assert!(!f.root.join("stack/sessions/a/session.json.tmp").exists());
 }
 
 #[test]
 fn archive_accepts_same_origin() {
-    let f = job_fixture();
+    let f = session_fixture();
     let origin = format!("http://127.0.0.1:{}", f.port());
 
     let reply = request(f.port(), "POST", "/archive/stack/a", &[("Origin", &origin)]);
@@ -425,7 +428,7 @@ fn archive_accepts_same_origin() {
 
 #[test]
 fn archive_rejects_foreign_origin() {
-    let f = job_fixture();
+    let f = session_fixture();
 
     let reply = request(
         f.port(),
@@ -435,48 +438,48 @@ fn archive_rejects_foreign_origin() {
     );
 
     assert_eq!(reply.status, 403);
-    assert_eq!(f.read(JOB_FILE), JOB);
+    assert_eq!(f.read(SESSION_FILE), SESSION);
 }
 
 #[test]
 fn archive_rejects_bad_names() {
-    let f = job_fixture();
+    let f = session_fixture();
 
-    // Each target next to the `job.json` its names point at.
+    // Each target next to the `session.json` its names point at.
     let targets = [
-        ("/archive/%2e%2e/a", "../jobs/a/job.json"),
-        ("/archive/stack/..", "stack/job.json"),
-        ("/archive/stack/.", "stack/jobs/job.json"),
-        ("/archive/stack/a%2F..%2Fa", JOB_FILE),
-        ("/archive/stack/a%5Cb", "stack/jobs/a\\b/job.json"),
-        ("/archive//a", "jobs/a/job.json"),
+        ("/archive/%2e%2e/a", "../sessions/a/session.json"),
+        ("/archive/stack/..", "stack/session.json"),
+        ("/archive/stack/.", "stack/sessions/session.json"),
+        ("/archive/stack/a%2F..%2Fa", SESSION_FILE),
+        ("/archive/stack/a%5Cb", "stack/sessions/a\\b/session.json"),
+        ("/archive//a", "sessions/a/session.json"),
     ];
 
     for (_, file) in targets {
-        f.write(file, JOB);
+        f.write(file, SESSION);
     }
 
     for (target, file) in targets {
         let reply = post(f.port(), target);
 
         assert_eq!(reply.status, 404, "{target}");
-        assert_eq!(f.read(file), JOB, "{target}");
+        assert_eq!(f.read(file), SESSION, "{target}");
     }
 }
 
 #[test]
 fn archive_rejects_extra_segments() {
-    let f = job_fixture();
+    let f = session_fixture();
 
     let reply = post(f.port(), "/archive/stack/a/extra");
 
     assert_eq!(reply.status, 404);
-    assert_eq!(f.read(JOB_FILE), JOB);
+    assert_eq!(f.read(SESSION_FILE), SESSION);
 }
 
 #[test]
-fn archive_missing_job_is_404() {
-    let f = job_fixture();
+fn archive_missing_session_is_404() {
+    let f = session_fixture();
 
     let reply = post(f.port(), "/archive/stack/b");
 
@@ -484,19 +487,30 @@ fn archive_missing_job_is_404() {
 }
 
 #[test]
+fn archive_ignores_the_old_job_layout() {
+    let f = fixture();
+    f.write("stack/jobs/a/job.json", SESSION);
+
+    let reply = post(f.port(), "/archive/stack/a");
+
+    assert_eq!(reply.status, 404);
+    assert_eq!(f.read("stack/jobs/a/job.json"), SESSION);
+}
+
+#[test]
 fn archive_bad_json_is_500() {
-    let f = job_fixture();
-    f.write(JOB_FILE, "not json");
+    let f = session_fixture();
+    f.write(SESSION_FILE, "not json");
 
     let reply = post(f.port(), "/archive/stack/a");
 
     assert_eq!(reply.status, 500);
-    assert_eq!(f.read(JOB_FILE), "not json");
+    assert_eq!(f.read(SESSION_FILE), "not json");
 }
 
 #[test]
 fn open_rejects_foreign_origin() {
-    let f = job_fixture();
+    let f = session_fixture();
 
     let reply = request(
         f.port(),
@@ -509,8 +523,8 @@ fn open_rejects_foreign_origin() {
 }
 
 #[test]
-fn open_missing_job_is_404() {
-    let f = job_fixture();
+fn open_missing_session_is_404() {
+    let f = session_fixture();
 
     let reply = post(f.port(), "/open/zed/nope/nope");
 
@@ -519,7 +533,7 @@ fn open_missing_job_is_404() {
 
 #[test]
 fn post_elsewhere_is_404() {
-    let f = job_fixture();
+    let f = session_fixture();
 
     let reply = post(f.port(), "/stack/");
 

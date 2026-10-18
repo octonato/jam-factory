@@ -1,6 +1,6 @@
 # Factory triage
 
-This procedure takes the findings of one verify round and decides what to do with each one. The caller gives the job folder, the round `N` and the mode. The formats are in `state.md`.
+This procedure takes the findings of one verify round and decides what to do with each one. The caller gives the session folder, the round `N` and the mode. The formats are in `state.md`.
 
 In `interactive` mode, I decide. In `default` and `autonomous` mode, you decide and ask me nothing.
 

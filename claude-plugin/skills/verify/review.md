@@ -23,7 +23,7 @@ Run `mkdir -p {run directory}/reviews`.
 
 ## 2. Run the reviewers
 
-Each reviewer runs as an agent on a fresh context. Pass it only what this step lists. Pass nothing else from this session.
+Each reviewer runs as an agent on a fresh context. Pass it only what this step lists. Pass nothing else from this conversation.
 
 Dispatch the reviewers **in parallel**, in the same message, over the same diff.
 
@@ -149,7 +149,7 @@ Run the `jam:report-writer` agent with the **Agent** tool and `effort: "xhigh"`.
 - the reviewers that ran, each with why it ran
 - the **Finding rules** section above, word for word
 
-Pass nothing else from this session. The agent merges the reviews, checks each finding against the code, and writes `{run directory}/report.md`.
+Pass nothing else from this conversation. The agent merges the reviews, checks each finding against the code, and writes `{run directory}/report.md`.
 
 When it finishes, check that `report.md` exists. If it does not, tell me and stop.
 

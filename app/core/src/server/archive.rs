@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Archives a job on `POST /archive/<repo>/<id>`.
+//! Archives a session on `POST /archive/<repo>/<id>`.
 
 use std::error::Error;
 use std::fs;
@@ -29,11 +29,11 @@ pub fn post(root: &Path, request: &Request) -> Response {
         return Response::error(403);
     }
 
-    let Some(job) = job_file(root, &request.target) else {
+    let Some(session) = session_file(root, &request.target) else {
         return Response::error(404);
     };
 
-    match archive(&job) {
+    match archive(&session) {
         Ok(()) => Response::new(204, "text/plain; charset=utf-8", Vec::new()),
         Err(_) => Response::error(500),
     }
@@ -50,8 +50,8 @@ pub(super) fn same_origin(request: &Request) -> bool {
         .is_some_and(|host| origin == format!("http://{host}"))
 }
 
-/// The `job.json` of the job named in `target`, if the names are safe and the file exists.
-fn job_file(root: &Path, target: &str) -> Option<PathBuf> {
+/// The `session.json` of the session named in `target`, if the names are safe and the file exists.
+fn session_file(root: &Path, target: &str) -> Option<PathBuf> {
     let path = target.split('?').next().unwrap_or_default();
 
     let ["", "archive", repo, id] = path.split('/').collect::<Vec<_>>()[..] else {
@@ -61,7 +61,11 @@ fn job_file(root: &Path, target: &str) -> Option<PathBuf> {
     let repo = name(repo)?;
     let id = name(id)?;
 
-    let file = root.join(repo).join("jobs").join(id).join("job.json");
+    let file = root
+        .join(repo)
+        .join("sessions")
+        .join(id)
+        .join("session.json");
     file.is_file().then_some(file)
 }
 
@@ -76,19 +80,19 @@ pub(super) fn name(segment: &str) -> Option<String> {
     }
 }
 
-/// Marks the job in `file` as archived, through a temp file and a rename.
+/// Marks the session in `file` as archived, through a temp file and a rename.
 fn archive(file: &Path) -> Result<(), Box<dyn Error>> {
     let text = fs::read_to_string(file)?;
-    let mut job: Map<String, Value> = serde_json::from_str(&text)?;
+    let mut session: Map<String, Value> = serde_json::from_str(&text)?;
 
     let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
-    job.insert("archived".to_string(), Value::Bool(true));
-    job.insert("updated".to_string(), Value::String(now));
+    session.insert("archived".to_string(), Value::Bool(true));
+    session.insert("updated".to_string(), Value::String(now));
 
-    let mut text = serde_json::to_string_pretty(&job)?;
+    let mut text = serde_json::to_string_pretty(&session)?;
     text.push('\n');
 
-    let tmp = file.with_file_name("job.json.tmp");
+    let tmp = file.with_file_name("session.json.tmp");
     fs::write(&tmp, text)?;
     fs::rename(&tmp, file)?;
 

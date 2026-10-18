@@ -90,7 +90,7 @@ mod tests {
     fn opens_other_web_urls_in_the_browser() {
         for url in [
             "https://github.com/o/r/issues/1",
-            "http://127.0.0.1:8731/stack/jobs/a/spec.md",
+            "http://127.0.0.1:8731/stack/sessions/a/spec.md",
             "http://127.0.0.1:9999/dashboard.html",
             "mailto:me@example.org",
         ] {

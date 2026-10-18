@@ -215,9 +215,9 @@
   .steps .dot.blocked { --dot: var(--critical); border-radius: 2px; }
   .steps .dot.done { --dot: var(--good); }
 
-  #page:has(> .job-page) { overflow: hidden; }
+  #page:has(> .session-page) { overflow: hidden; }
 
-  .job-page {
+  .session-page {
     display: flex;
     flex-direction: column;
     gap: 12px;
@@ -585,7 +585,7 @@
 <body>
 <header>
   <h1>Jam Board</h1>
-  <nav class="tabs"><a class="tab" href="#/" aria-current="page">Jobs</a></nav>
+  <nav class="tabs"><a class="tab" href="#/" aria-current="page">Sessions</a></nav>
   <span id="status">loading…</span>
   <div class="font-size">
     <button type="button" id="font-down" title="Smaller text">A−</button>
@@ -663,9 +663,9 @@ const TOOL_LABELS = { intellij: 'IntelliJ', zed: 'Zed', iterm: 'iTerm', github: 
 const ACTION_KEYS = { a: 'archive', t: 'iterm', e: 'zed', i: 'intellij', o: 'github' }
 
 const $ = (id) => document.getElementById(id)
-const state = { jobs: [], problems: [] }
+const state = { sessions: [], problems: [] }
 let listView = { html: '', el: null }
-let jobView = { dir: null, el: null, row: '', graph: null }
+let sessionView = { dir: null, el: null, row: '', graph: null }
 let lastView = { key: null, text: null }
 let pickedRound = null
 let renderSeq = 0
@@ -706,27 +706,27 @@ async function listFiles(dir, prefix = '') {
   return files
 }
 
-async function loadJobs() {
+async function loadSessions() {
   const repos = (await listDir('./')).filter((e) => e.endsWith('/'))
-  const jobs = []
+  const sessions = []
   const problems = []
 
   for (const repo of repos) {
-    const ids = (await listDir(`${repo}jobs/`)).filter((e) => e.endsWith('/'))
+    const ids = (await listDir(`${repo}sessions/`)).filter((e) => e.endsWith('/'))
     for (const id of ids) {
-      const dir = `${repo}jobs/${id}`
+      const dir = `${repo}sessions/${id}`
       try {
-        const job = JSON.parse(await fetchText(`${dir}job.json`))
-        if (job.archived === true) continue
+        const session = JSON.parse(await fetchText(`${dir}session.json`))
+        if (session.archived === true) continue
 
-        job.dir = dir
-        jobs.push(job)
+        session.dir = dir
+        sessions.push(session)
       } catch (err) {
         problems.push(`${dir}: ${err.message}`)
       }
     }
   }
-  return { jobs, problems }
+  return { sessions, problems }
 }
 
 function decode(segment) {
@@ -745,95 +745,95 @@ function parseRoute(hash) {
   return { repo, id, path: rest.length > 0 ? rest.join('/') : null }
 }
 
-function jobHref(job) {
-  return `#/${encodeURIComponent(job.repo)}/${encodeURIComponent(job.id)}`
+function sessionHref(session) {
+  return `#/${encodeURIComponent(session.repo)}/${encodeURIComponent(session.id)}`
 }
 
 function encodePath(path) {
   return path.split('/').map(encodeURIComponent).join('/')
 }
 
-function fileHref(job, path) {
-  return `${jobHref(job)}/${encodePath(path)}`
+function fileHref(session, path) {
+  return `${sessionHref(session)}/${encodePath(path)}`
 }
 
 function shortPath(worktree) {
   return String(worktree || '').split('/').filter((s) => s !== '').slice(-3).join('/')
 }
 
-function jobFlow(job) {
-  return job.flow || 'build'
+function sessionFlow(session) {
+  return session.flow || 'build'
 }
 
-// Returns the phases and stage map of the job's flow, or null for an unknown flow.
-function flowOf(job) {
-  const flow = jobFlow(job)
+// Returns the phases and stage map of the session's flow, or null for an unknown flow.
+function flowOf(session) {
+  const flow = sessionFlow(session)
   return Object.hasOwn(FLOWS, flow) ? FLOWS[flow] : null
 }
 
-// Returns the stage that sets the phase: `blocked.stage` for a blocked job.
-function phaseStage(job) {
-  return job.stage === 'blocked' ? job.blocked?.stage : job.stage
+// Returns the stage that sets the phase: `blocked.stage` for a blocked session.
+function phaseStage(session) {
+  return session.stage === 'blocked' ? session.blocked?.stage : session.stage
 }
 
-function currentPhase(job) {
-  const flow = flowOf(job)
-  const stage = phaseStage(job)
+function currentPhase(session) {
+  const flow = flowOf(session)
+  const stage = phaseStage(session)
   return flow !== null && Object.hasOwn(flow.stagePhase, stage) ? flow.stagePhase[stage] : null
 }
 
-// Returns the problem with the job's flow or stage, or null when both are known.
-function jobProblem(job) {
-  if (flowOf(job) === null) return `unknown flow "${jobFlow(job)}"`
-  if (!currentPhase(job)) return `unknown stage "${phaseStage(job)}"`
+// Returns the problem with the session's flow or stage, or null when both are known.
+function sessionProblem(session) {
+  if (flowOf(session) === null) return `unknown flow "${sessionFlow(session)}"`
+  if (!currentPhase(session)) return `unknown stage "${phaseStage(session)}"`
   return null
 }
 
-function jobMode(job) {
-  return job.mode || 'default'
+function sessionMode(session) {
+  return session.mode || 'default'
 }
 
-function tint(job) {
-  if (job.stage === 'triage' && jobMode(job) === 'interactive') return 'waiting'
-  if (job.stage === 'blocked') return 'blocked'
-  if (job.stage === 'done') return 'done'
+function tint(session) {
+  if (session.stage === 'triage' && sessionMode(session) === 'interactive') return 'waiting'
+  if (session.stage === 'blocked') return 'blocked'
+  if (session.stage === 'done') return 'done'
   return ''
 }
 
-function indicator(job) {
-  const phases = flowOf(job)?.phases ?? []
-  const current = phases.indexOf(currentPhase(job))
+function indicator(session) {
+  const phases = flowOf(session)?.phases ?? []
+  const current = phases.indexOf(currentPhase(session))
   return phases.map((phase, i) => {
     const step = i < current ? 'past' : i === current ? 'current' : 'future'
-    const color = i === current || job.stage === 'done' ? tint(job) : ''
+    const color = i === current || session.stage === 'done' ? tint(session) : ''
     const line = i > 0 ? '<span class="line"></span>' : ''
     return `${line}<span class="dot ${step} ${color}" title="${phase}"></span>`
   }).join('')
 }
 
-function stepLabel(job) {
-  const phase = currentPhase(job) || phaseStage(job) || 'unknown'
-  const parts = [escape(jobMode(job))]
-  if (jobFlow(job) === 'review') parts.push('review')
-  parts.push(escape(job.stage === 'blocked' ? `blocked at ${phase}` : phase))
-  if (job.round > 0) parts.push(`round ${escape(job.round)}`)
-  if (job.lastRound === true) parts.push('last round')
+function stepLabel(session) {
+  const phase = currentPhase(session) || phaseStage(session) || 'unknown'
+  const parts = [escape(sessionMode(session))]
+  if (sessionFlow(session) === 'review') parts.push('review')
+  parts.push(escape(session.stage === 'blocked' ? `blocked at ${phase}` : phase))
+  if (session.round > 0) parts.push(`round ${escape(session.round)}`)
+  if (session.lastRound === true) parts.push('last round')
 
-  const counts = { deferred: 0, issued: 0, ...job.counts }
-  if (job.stage === 'done' && counts.deferred > counts.issued) {
+  const counts = { deferred: 0, issued: 0, ...session.counts }
+  if (session.stage === 'done' && counts.deferred > counts.issued) {
     parts.push(`<span class="warn">${escape(counts.deferred - counts.issued)} deferred without issue</span>`)
   }
   return parts.join(' · ')
 }
 
-function rowContent(job) {
+function rowContent(session) {
   return `
-    <span class="name"><span class="id">${escape(job.id)}</span> <span class="path">${escape(shortPath(job.worktree))}</span></span>
-    <span class="steps">${indicator(job)}</span>
-    <span class="label">${stepLabel(job)}</span>`
+    <span class="name"><span class="id">${escape(session.id)}</span> <span class="path">${escape(shortPath(session.worktree))}</span></span>
+    <span class="steps">${indicator(session)}</span>
+    <span class="label">${stepLabel(session)}</span>`
 }
 
-function cardActions(job) {
+function cardActions(session) {
   return CARD_ACTIONS.map(({ action, title, icon }) => `
     <button type="button" class="icon" data-action="${action}" title="${title}">
       <svg viewBox="0 0 16 16" aria-hidden="true">${icon}</svg>
@@ -841,13 +841,13 @@ function cardActions(job) {
 }
 
 function renderList() {
-  const jobs = [...state.jobs].sort((a, b) => String(b.updated || '').localeCompare(String(a.updated || '')))
-  const rows = jobs.map((job) => `
-    <div class="row card ${tint(job)}" data-dir="${escape(job.dir)}">
-      <a class="body" href="${escape(jobHref(job))}">${rowContent(job)}</a>
-      <span class="actions">${cardActions(job)}</span>
+  const sessions = [...state.sessions].sort((a, b) => String(b.updated || '').localeCompare(String(a.updated || '')))
+  const rows = sessions.map((session) => `
+    <div class="row card ${tint(session)}" data-dir="${escape(session.dir)}">
+      <a class="body" href="${escape(sessionHref(session))}">${rowContent(session)}</a>
+      <span class="actions">${cardActions(session)}</span>
     </div>`).join('')
-  const html = `<div class="column rows">${rows || '<p class="empty">No jobs yet.</p>'}</div>`
+  const html = `<div class="column rows">${rows || '<p class="empty">No sessions yet.</p>'}</div>`
   if (listView.el === $('page').firstElementChild && listView.html === html) return showSelection()
 
   $('page').innerHTML = html
@@ -856,9 +856,9 @@ function renderList() {
   showSelection()
 }
 
-// Clears the selection when its job is gone and outlines the selected row.
+// Clears the selection when its session is gone and outlines the selected row.
 function showSelection() {
-  if (!state.jobs.some((job) => job.dir === selectedDir)) selectedDir = null
+  if (!state.sessions.some((session) => session.dir === selectedDir)) selectedDir = null
 
   for (const row of $('page').querySelectorAll('.row.card')) {
     row.classList.toggle('selected', row.dataset.dir === selectedDir)
@@ -885,11 +885,11 @@ function onCardAction(event) {
   if (!button) return
 
   const dir = button.closest('.card')?.dataset.dir
-  const job = state.jobs.find((j) => j.dir === dir)
-  if (!job) return
+  const session = state.sessions.find((s) => s.dir === dir)
+  if (!session) return
 
-  if (button.dataset.action === 'archive') archiveJob(job)
-  else openTool(job, button.dataset.action)
+  if (button.dataset.action === 'archive') archiveSession(session)
+  else openTool(session, button.dataset.action)
 }
 
 function missingScripts() {
@@ -920,20 +920,20 @@ function fileHtml(path, text) {
   return codeBlock(text)
 }
 
-function nodeState(job, phase) {
-  const phases = flowOf(job)?.phases ?? []
-  const current = phases.indexOf(currentPhase(job))
+function nodeState(session, phase) {
+  const phases = flowOf(session)?.phases ?? []
+  const current = phases.indexOf(currentPhase(session))
   const i = phases.indexOf(phase)
   if (i < current) return 'past'
   if (i > current || current < 0) return 'future'
-  return `current ${tint(job)}`
+  return `current ${tint(session)}`
 }
 
-function graphNode(job, open, label, state, path = null) {
+function graphNode(session, open, label, state, path = null) {
   if (path === null) return `<span class="node ${state}">${escape(label)}</span>`
 
   const selected = path === open ? ' selected' : ''
-  return `<a class="node ${state}${selected}" href="${escape(fileHref(job, path))}">${escape(label)}</a>`
+  return `<a class="node ${state}${selected}" href="${escape(fileHref(session, path))}">${escape(label)}</a>`
 }
 
 function reviewNames(files, round) {
@@ -944,14 +944,14 @@ function reviewNames(files, round) {
     .sort((a, b) => a.localeCompare(b))
 }
 
-function reviewNodes(job, files, round, state, open) {
+function reviewNodes(session, files, round, state, open) {
   const names = round > 0 ? reviewNames(files, round) : []
   if (names.length > 0) {
-    return names.map((name) => graphNode(job, open, name, state, `round-${round}/reviews/${name}.md`))
+    return names.map((name) => graphNode(session, open, name, state, `round-${round}/reviews/${name}.md`))
   }
 
-  const running = round > 0 && round === job.round && job.stage === 'verify'
-  return [graphNode(job, open, running ? 'review · running' : 'review', state)]
+  const running = round > 0 && round === session.round && session.stage === 'verify'
+  return [graphNode(session, open, running ? 'review · running' : 'review', state)]
 }
 
 function displayName(path) {
@@ -984,20 +984,20 @@ function chips(files, round) {
   return list.filter((chip) => files.includes(chip.path))
 }
 
-function chipsHtml(job, files, round, open) {
+function chipsHtml(session, files, round, open) {
   const links = chips(files, round).map(({ label, path }) => {
     const selected = path === open ? ' selected' : ''
-    return `<a class="chip${selected}" href="${escape(fileHref(job, path))}">${escape(label)}</a>`
+    return `<a class="chip${selected}" href="${escape(fileHref(session, path))}">${escape(label)}</a>`
   })
   return links.length > 0 ? `<div class="chips">${links.join('')}</div>` : ''
 }
 
-function roundButtons(job) {
-  if (!(job.round > 0)) return ''
+function roundButtons(session) {
+  if (!(session.round > 0)) return ''
 
-  const shown = pickedRound ?? job.round
+  const shown = pickedRound ?? session.round
   const buttons = []
-  for (let round = 1; round <= job.round; round += 1) {
+  for (let round = 1; round <= session.round; round += 1) {
     const picked = round === shown ? ' class="picked"' : ''
     buttons.push(`<button type="button" data-round="${round}" title="round ${round}"${picked}>${round}</button>`)
   }
@@ -1005,112 +1005,112 @@ function roundButtons(job) {
 }
 
 // Returns the round the graph shows: the picked one, else the last one, or 0 before the first round.
-function shownRound(job) {
-  return job.round > 0 ? (pickedRound ?? job.round) : 0
+function shownRound(session) {
+  return session.round > 0 ? (pickedRound ?? session.round) : 0
 }
 
 // Returns the file the pane shows when the route names none.
-function defaultFile(job, files, round) {
-  if (jobFlow(job) === 'review') return reviewDefaultFile(job, files, round)
-  if (job.stage === 'blocked') return 'job.json'
+function defaultFile(session, files, round) {
+  if (sessionFlow(session) === 'review') return reviewDefaultFile(session, files, round)
+  if (session.stage === 'blocked') return 'session.json'
 
-  const stage = phaseStage(job)
+  const stage = phaseStage(session)
   const report = `round-${round}/report.md`
   if (stage === 'verify') return files.includes(report) ? report : 'tasks.md'
   if (stage === 'triage') return report
   return Object.hasOwn(STAGE_FILE, stage) ? STAGE_FILE[stage] : null
 }
 
-// Returns the file the pane shows for a review job when the route names none.
-function reviewDefaultFile(job, files, round) {
-  if (job.stage === 'blocked') return 'job.json'
+// Returns the file the pane shows for a review session when the route names none.
+function reviewDefaultFile(session, files, round) {
+  if (session.stage === 'blocked') return 'session.json'
 
   const report = `round-${round}/report.md`
   const submit = `round-${round}/submit.md`
-  if (job.stage === 'verify') return files.includes(report) ? report : 'request.md'
-  if (job.stage === 'submit' || job.stage === 'done') return files.includes(submit) ? submit : report
+  if (session.stage === 'verify') return files.includes(report) ? report : 'request.md'
+  if (session.stage === 'submit' || session.stage === 'done') return files.includes(submit) ? submit : report
   return null
 }
 
-function graphHtml(job, files, round, open) {
-  if (jobFlow(job) === 'review') return reviewGraphHtml(job, files, round, open)
+function graphHtml(session, files, round, open) {
+  if (sessionFlow(session) === 'review') return reviewGraphHtml(session, files, round, open)
 
   const phases = FLOWS.build.phases
-  const phase = phases.indexOf(currentPhase(job))
+  const phase = phases.indexOf(currentPhase(session))
   const fixing = round > 0 && phase >= 0 && phase < phases.indexOf('review')
-  const finished = round < job.round || fixing
-  const reviewState = finished ? 'past' : nodeState(job, 'review')
-  const triageState = finished ? 'past' : nodeState(job, 'triage')
-  const doneState = job.stage === 'done' ? nodeState(job, 'done') : 'future'
-  const blockedState = job.stage === 'blocked' ? 'current blocked' : 'future'
+  const finished = round < session.round || fixing
+  const reviewState = finished ? 'past' : nodeState(session, 'review')
+  const triageState = finished ? 'past' : nodeState(session, 'triage')
+  const doneState = session.stage === 'done' ? nodeState(session, 'done') : 'future'
+  const blockedState = session.stage === 'blocked' ? 'current blocked' : 'future'
 
   const edge = '<span class="edge"></span>'
   const stub = '<span class="stub"></span>'
-  const reviews = reviewNodes(job, files, round, reviewState, open)
+  const reviews = reviewNodes(session, files, round, reviewState, open)
     .map((node) => `<div class="branch">${stub}${node}${stub}</div>`)
     .join('')
   const triagePath = round > 0 ? `round-${round}/report.md` : null
 
   return `
     <div class="flow">
-      ${graphNode(job, open, 'request', 'past', 'request.md')}
+      ${graphNode(session, open, 'request', 'past', 'request.md')}
       ${edge}
-      ${graphNode(job, open, 'spec', nodeState(job, 'spec'), 'spec.md')}
+      ${graphNode(session, open, 'spec', nodeState(session, 'spec'), 'spec.md')}
       ${edge}
-      ${graphNode(job, open, 'plan', nodeState(job, 'plan'), 'plan.md')}
+      ${graphNode(session, open, 'plan', nodeState(session, 'plan'), 'plan.md')}
       ${edge}
       <div class="loop">
-        <div class="loop-end start">${graphNode(job, open, 'impl', nodeState(job, 'impl'), 'tasks.md')}</div>
+        <div class="loop-end start">${graphNode(session, open, 'impl', nodeState(session, 'impl'), 'tasks.md')}</div>
         ${edge}
         <div class="branches fan-in">${reviews}</div>
         ${edge}
-        <div class="loop-end finish">${graphNode(job, open, 'triage', triageState, triagePath)}</div>
+        <div class="loop-end finish">${graphNode(session, open, 'triage', triageState, triagePath)}</div>
         <span class="back-edge"></span>
-        ${chipsHtml(job, files, round, open)}
-        ${roundButtons(job)}
+        ${chipsHtml(session, files, round, open)}
+        ${roundButtons(session)}
       </div>
       ${edge}
       <div class="branches ends">
-        <div class="branch">${stub}${graphNode(job, open, 'done', doneState, 'deferred.md')}</div>
-        <div class="branch">${stub}${graphNode(job, open, 'blocked', blockedState, 'job.json')}</div>
+        <div class="branch">${stub}${graphNode(session, open, 'done', doneState, 'deferred.md')}</div>
+        <div class="branch">${stub}${graphNode(session, open, 'blocked', blockedState, 'session.json')}</div>
       </div>
     </div>`
 }
 
-function reviewGraphHtml(job, files, round, open) {
-  const finished = round < job.round
-  const reviewState = finished ? 'past' : nodeState(job, 'review')
-  const commentState = finished ? 'past' : nodeState(job, 'submit')
-  const doneState = job.stage === 'done' ? nodeState(job, 'done') : 'future'
-  const blockedState = job.stage === 'blocked' ? 'current blocked' : 'future'
+function reviewGraphHtml(session, files, round, open) {
+  const finished = round < session.round
+  const reviewState = finished ? 'past' : nodeState(session, 'review')
+  const commentState = finished ? 'past' : nodeState(session, 'submit')
+  const doneState = session.stage === 'done' ? nodeState(session, 'done') : 'future'
+  const blockedState = session.stage === 'blocked' ? 'current blocked' : 'future'
 
   const edge = '<span class="edge"></span>'
   const stub = '<span class="stub"></span>'
-  const reviews = reviewNodes(job, files, round, reviewState, open)
+  const reviews = reviewNodes(session, files, round, reviewState, open)
     .map((node) => `<div class="branch">${stub}${node}${stub}</div>`)
     .join('')
   const reportPath = round > 0 ? `round-${round}/report.md` : null
   const commentPath = round > 0 ? `round-${round}/submit.md` : null
-  const donePath = job.round > 0 ? `round-${job.round}/submit.md` : null
+  const donePath = session.round > 0 ? `round-${session.round}/submit.md` : null
 
   return `
     <div class="flow">
-      ${graphNode(job, open, 'request', 'past', 'request.md')}
+      ${graphNode(session, open, 'request', 'past', 'request.md')}
       ${edge}
       <div class="loop">
         <div class="loop-end start"><div class="branches fan-in">${reviews}</div></div>
         ${edge}
-        ${graphNode(job, open, 'report', reviewState, reportPath)}
+        ${graphNode(session, open, 'report', reviewState, reportPath)}
         ${edge}
-        <div class="loop-end finish">${graphNode(job, open, 'comment', commentState, commentPath)}</div>
+        <div class="loop-end finish">${graphNode(session, open, 'comment', commentState, commentPath)}</div>
         <span class="back-edge"></span>
-        ${chipsHtml(job, files, round, open)}
-        ${roundButtons(job)}
+        ${chipsHtml(session, files, round, open)}
+        ${roundButtons(session)}
       </div>
       ${edge}
       <div class="branches ends">
-        <div class="branch">${stub}${graphNode(job, open, 'done', doneState, donePath)}</div>
-        <div class="branch">${stub}${graphNode(job, open, 'blocked', blockedState, 'job.json')}</div>
+        <div class="branch">${stub}${graphNode(session, open, 'done', doneState, donePath)}</div>
+        <div class="branch">${stub}${graphNode(session, open, 'blocked', blockedState, 'session.json')}</div>
       </div>
     </div>`
 }
@@ -1128,8 +1128,8 @@ function onPickRound(event) {
 }
 
 // Shows `path` in the pane, or a blank pane when it is null or missing.
-async function showFile(job, files, path, seq) {
-  const key = path === null ? null : job.dir + path
+async function showFile(session, files, path, seq) {
+  const key = path === null ? null : session.dir + path
 
   let text = null
   if (path !== null && files.includes(path)) text = await fetchText(encodePath(key)).catch(() => null)
@@ -1165,14 +1165,14 @@ async function tell(message) {
   await openModal(message, false)
 }
 
-async function archiveJob(job) {
-  if (!(await ask(`Archive ${job.repo}/${job.id}? The dashboard will no longer list it.`))) return
+async function archiveSession(session) {
+  if (!(await ask(`Archive ${session.repo}/${session.id}? The dashboard will no longer list it.`))) return
 
   try {
-    const res = await fetch(`archive/${encodeURIComponent(job.repo)}/${encodeURIComponent(job.id)}`, { method: 'POST' })
+    const res = await fetch(`archive/${encodeURIComponent(session.repo)}/${encodeURIComponent(session.id)}`, { method: 'POST' })
     if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
   } catch (err) {
-    await tell(`Could not archive ${job.repo}/${job.id}: ${err.message}`)
+    await tell(`Could not archive ${session.repo}/${session.id}: ${err.message}`)
     return
   }
 
@@ -1180,37 +1180,37 @@ async function archiveJob(job) {
   poll()
 }
 
-async function openTool(job, tool) {
+async function openTool(session, tool) {
   const label = TOOL_LABELS[tool]
 
   try {
-    const res = await fetch(`open/${tool}/${encodeURIComponent(job.repo)}/${encodeURIComponent(job.id)}`, { method: 'POST' })
+    const res = await fetch(`open/${tool}/${encodeURIComponent(session.repo)}/${encodeURIComponent(session.id)}`, { method: 'POST' })
     if (!res.ok) throw new Error((await res.text()).trim() || `${res.status} ${res.statusText}`)
   } catch (err) {
-    await tell(`Could not open ${job.repo}/${job.id} in ${label}: ${err.message}`)
+    await tell(`Could not open ${session.repo}/${session.id} in ${label}: ${err.message}`)
   }
 }
 
-// Runs the action bound to `key` on `job` and returns true when `key` has one.
-function jobAction(job, key) {
+// Runs the action bound to `key` on `session` and returns true when `key` has one.
+function sessionAction(session, key) {
   if (!Object.hasOwn(ACTION_KEYS, key)) return false
 
   const action = ACTION_KEYS[key]
-  if (action === 'archive') archiveJob(job)
-  else openTool(job, action)
+  if (action === 'archive') archiveSession(session)
+  else openTool(session, action)
   return true
 }
 
-async function renderJobPage(job, path) {
+async function renderSessionPage(session, path) {
   const seq = renderSeq
-  const row = rowContent(job)
+  const row = rowContent(session)
 
-  if (jobView.el !== $('page').firstElementChild || jobView.dir !== job.dir) {
+  if (sessionView.el !== $('page').firstElementChild || sessionView.dir !== session.dir) {
     $('page').innerHTML = `
-      <div class="column job-page">
-        <div class="row card ${tint(job)}" id="job-row" data-dir="${escape(job.dir)}">
+      <div class="column session-page">
+        <div class="row card ${tint(session)}" id="session-row" data-dir="${escape(session.dir)}">
           <div class="body">${row}</div>
-          <span class="actions">${cardActions(job)}</span>
+          <span class="actions">${cardActions(session)}</span>
         </div>
         <section class="flow-pane" id="flow-pane">
           <button type="button" class="icon flow-toggle" id="flow-toggle">
@@ -1222,36 +1222,36 @@ async function renderJobPage(job, path) {
       </div>`
     $('flow').addEventListener('click', onPickRound)
     $('flow-toggle').addEventListener('click', toggleFlow)
-    $('job-row').addEventListener('click', onCardAction)
+    $('session-row').addEventListener('click', onCardAction)
     showFlowCollapsed()
-    jobView = { dir: job.dir, el: $('page').firstElementChild, row, graph: null }
+    sessionView = { dir: session.dir, el: $('page').firstElementChild, row, graph: null }
     lastView = { key: null, text: null }
     pickedRound = null
-  } else if (jobView.row !== row) {
-    $('job-row').querySelector('.body').innerHTML = row
-    $('job-row').className = `row card ${tint(job)}`
-    jobView.row = row
+  } else if (sessionView.row !== row) {
+    $('session-row').querySelector('.body').innerHTML = row
+    $('session-row').className = `row card ${tint(session)}`
+    sessionView.row = row
   }
 
-  const files = await listFiles(job.dir)
+  const files = await listFiles(session.dir)
   if (seq !== renderSeq) return
 
-  const round = shownRound(job)
-  const open = path ?? defaultFile(job, files, round)
+  const round = shownRound(session)
+  const open = path ?? defaultFile(session, files, round)
 
-  const graph = graphHtml(job, files, round, open)
-  if (jobView.graph !== graph) {
-    const first = jobView.graph === null
+  const graph = graphHtml(session, files, round, open)
+  if (sessionView.graph !== graph) {
+    const first = sessionView.graph === null
     $('flow').innerHTML = graph
     if (first) $('flow').scrollLeft = $('flow').scrollWidth
-    jobView.graph = graph
+    sessionView.graph = graph
   }
 
-  await showFile(job, files, open, seq)
+  await showFile(session, files, open, seq)
 }
 
 function renderNotFound() {
-  $('page').innerHTML = '<div class="column"><p class="empty">job not found</p></div>'
+  $('page').innerHTML = '<div class="column"><p class="empty">session not found</p></div>'
 }
 
 function render() {
@@ -1259,10 +1259,10 @@ function render() {
   const route = parseRoute(location.hash)
   if (!route) return renderList()
 
-  const job = state.jobs.find((j) => jobHref(j) === jobHref(route))
-  if (!job) return renderNotFound()
+  const session = state.sessions.find((s) => sessionHref(s) === sessionHref(route))
+  if (!session) return renderNotFound()
 
-  renderJobPage(job, route.path)
+  renderSessionPage(session, route.path)
 }
 
 // Runs the list shortcut for `key` and returns true when it acted.
@@ -1272,20 +1272,20 @@ function listKey(key) {
     return true
   }
 
-  const job = state.jobs.find((j) => j.dir === selectedDir)
-  if (!job) return false
+  const session = state.sessions.find((s) => s.dir === selectedDir)
+  if (!session) return false
 
   if (key === 'Enter') {
-    location.hash = jobHref(job)
+    location.hash = sessionHref(session)
     return true
   }
-  return jobAction(job, key)
+  return sessionAction(session, key)
 }
 
-// Runs the job page shortcut for `key` on `job` and returns true when it acted.
-function jobKey(key, job) {
+// Runs the session page shortcut for `key` on `session` and returns true when it acted.
+function sessionKey(key, session) {
   if (key === 'l') {
-    selectedDir = job.dir
+    selectedDir = session.dir
     location.hash = '#/'
     return true
   }
@@ -1298,7 +1298,7 @@ function jobKey(key, job) {
     return true
   }
 
-  return jobAction(job, key)
+  return sessionAction(session, key)
 }
 
 // Dispatches a shortcut key to the shown page.
@@ -1314,8 +1314,8 @@ function onKey(event) {
     return
   }
 
-  const job = state.jobs.find((j) => jobHref(j) === jobHref(route))
-  if (job && jobKey(event.key, job)) event.preventDefault()
+  const session = state.sessions.find((s) => sessionHref(s) === sessionHref(route))
+  if (session && sessionKey(event.key, session)) event.preventDefault()
 }
 
 // Returns the stored font size, or the default when it is missing or out of range.
@@ -1376,16 +1376,16 @@ function toggleFlow() {
 
 async function poll() {
   try {
-    const { jobs, problems } = await loadJobs()
-    for (const job of jobs) {
-      const problem = jobProblem(job)
-      if (problem !== null) problems.push(`${job.repo}/${job.id}: ${problem}`)
+    const { sessions, problems } = await loadSessions()
+    for (const session of sessions) {
+      const problem = sessionProblem(session)
+      if (problem !== null) problems.push(`${session.repo}/${session.id}: ${problem}`)
     }
     problems.push(...missingScripts())
 
-    state.jobs = jobs
+    state.sessions = sessions
     state.problems = problems
-    $('status').textContent = `${jobs.length} jobs`
+    $('status').textContent = `${sessions.length} sessions`
     $('problems').innerHTML = problems.map((p) => `<div>${escape(p)}</div>`).join('')
     render()
   } catch (err) {

@@ -7,7 +7,7 @@ Plugins for code assistants that run coding like a jam session.
 Vibe coding follows the mood.
 A jam session has pace, theory and discipline, and still leaves room for creativity.
 In Jam Factory, the orchestrator keeps the tempo.
-It takes each job through spec, plan, implement, verify and triage.
+It takes each session through spec, plan, implement, verify and triage.
 You supervise the session and nudge it in the direction you want.
 
 AI agents write more of our code every day. The engineer still owns the result.
@@ -17,7 +17,7 @@ So these plugins hand work to agents, but leave the thinking to the engineer.
 
 For example:
 
-- `/jam:take` runs one job through the factory, from spec to a branch ready for review.
+- `/jam:take` runs one session through the factory, from spec to a branch ready for review.
 - `/jam:checks` reports problems in comments and docs. It changes nothing.
 - `/jam:walk-through` explains a code path or a change, one step at a time.
 
@@ -105,7 +105,7 @@ The current extension stores commands directly under `commands/`, so Gemini expo
 
 ### Factory setup
 
-The factory needs a directory for job state outside your Git repositories. Set `FACTORY_ROOT` to its absolute path and use the same value in every session that should share those jobs.
+The factory needs a directory for session state outside your Git repositories. Set `FACTORY_ROOT` to its absolute path and use the same value in every conversation that should share those sessions.
 
 In this README, `<org>` means a local directory that groups your repositories, such as `$HOME/Sources/my-team`. It is a path placeholder, not a GitHub organization name or an assistant setting. With that layout, `<org>/.factory` could be `$HOME/Sources/my-team/.factory`. You can also choose another directory outside your repositories.
 
@@ -126,7 +126,7 @@ Codex's `--add-dir` grants the directory write access in its workspace sandbox; 
 
 If you use Claude Code's sandbox, also add the absolute factory path to `sandbox.filesystem.allowWrite` in your settings. For a sandboxed Gemini session, make that path writable through your sandbox configuration or mount it into the container; see [Gemini sandboxing](https://geminicli.com/docs/cli/sandbox/). The session needs both file editing and shell write access to the factory directory.
 
-The factory shares this directory across repositories and worktrees. Create a feature branch before starting a job:
+The factory shares this directory across repositories and worktrees. Create a feature branch before starting a session:
 
 ```sh
 git switch -c my-feature
@@ -138,15 +138,15 @@ Then invoke the factory with a description: `/jam:take Add rate limiting` in Cla
 
 `/jam:take` is the main command in Jam Factory. The examples here use Claude Code syntax; use `$jam:take` in Codex or `/take` in Gemini. Complete the [factory setup](#factory-setup) before starting.
 
-`/jam:take` takes one change from spec to a branch ready for review. Each job belongs to one feature branch, in the main checkout or in a worktree. The last segment of the branch name is the job id: `octonato/rate-limit` gives `rate-limit`. You create the branch; the factory never does. It refuses to run on the base branch.
+`/jam:take` takes one change from spec to a branch ready for review. Each session belongs to one feature branch, in the main checkout or in a worktree. The last segment of the branch name is the session id: `octonato/rate-limit` gives `rate-limit`. You create the branch; the factory never does. It refuses to run on the base branch.
 
 ```
 spec ─► plan ─► implement ─► verify(N) ─► triage(N) ─┬─► implement ─► verify(N+1) ...
                                                      └─► finalize ─► done
 ```
 
-- **spec** and **plan**: the factory writes `spec.md` and `plan.md` to the job folder. It brainstorms the spec with you through `superpowers:brainstorming` when the mode asks for it. It writes the plan with `superpowers:writing-plans`.
-- **implement**: a fresh `jam:implementer` agent makes each task's change. The factory then commits it. In each git repository, the job's first commit is phase 0: a Conventional Commit that describes the whole job, ready to keep when you squash. Later commits are `phase N:`.
+- **spec** and **plan**: the factory writes `spec.md` and `plan.md` to the session folder. It brainstorms the spec with you through `superpowers:brainstorming` when the mode asks for it. It writes the plan with `superpowers:writing-plans`.
+- **implement**: a fresh `jam:implementer` agent makes each task's change. The factory then commits it. In each git repository, the session's first commit is phase 0: a Conventional Commit that describes the whole session, ready to keep when you squash. Later commits are `phase N:`.
 - **verify**: runs one `/jam:verify` round over the branch. A round never sees earlier rounds.
 - **triage**: the factory hides findings dismissed or deferred in earlier rounds. In `interactive` mode, you mark each remaining finding as fix, dismiss or defer. Then you pick `next round`, `last round` or `finalize`. In the other modes, the factory checks each finding against the code:
   - A valid must-fix or should-fix finding becomes a fix task.
@@ -158,19 +158,19 @@ spec ─► plan ─► implement ─► verify(N) ─► triage(N) ─┬─►
 
 | Call | What it does |
 |---|---|
-| `/jam:take <description>` | Starts the branch's job from a description. |
-| `/jam:take <issue>` | Starts the branch's job from a GitHub issue number or URL. |
-| `/jam:take` | Starts the branch's job from what you discussed in the session. |
-| `/jam:take <PR URL>` | Starts a review job for that PR. Run it on the PR's branch. |
-| `/jam:take -p [number]`, `/jam:take --pr [number]` | Starts a review job for the PR with that number, or for the current branch's PR. |
-| `/jam:take -r`, `/jam:take --resume` | Resumes the branch's job at the stage it reached. |
-| `/jam:take -v`, `/jam:take --verify` | Runs another verify round on a done job. |
+| `/jam:take <description>` | Starts the branch's session from a description. |
+| `/jam:take <issue>` | Starts the branch's session from a GitHub issue number or URL. |
+| `/jam:take` | Starts the branch's session from what you discussed in the conversation. |
+| `/jam:take <PR URL>` | Starts a review session for that PR. Run it on the PR's branch. |
+| `/jam:take -p [number]`, `/jam:take --pr [number]` | Starts a review session for the PR with that number, or for the current branch's PR. |
+| `/jam:take -r`, `/jam:take --resume` | Resumes the branch's session at the stage it reached. |
+| `/jam:take -v`, `/jam:take --verify` | Runs another verify round on a done session. |
 
-Without `-r` or `-v`, `/jam:take` refuses to run on a branch that already has a job. To track a deferred finding, open an issue with `/jam:gh-issue-create`. Then set the entry's `issue` to its URL.
+Without `-r` or `-v`, `/jam:take` refuses to run on a branch that already has a session. To track a deferred finding, open an issue with `/jam:gh-issue-create`. Then set the entry's `issue` to its URL.
 
 ### Modes
 
-The job's `mode` in `job.json` sets when the factory asks you something. Pick it with a flag when you start or resume the job. You can also edit `mode` by hand at any time. The factory reads it before each stage and before each step that may ask you something.
+The session's `mode` in `session.json` sets when the factory asks you something. Pick it with a flag when you start or resume the session. You can also edit `mode` by hand at any time. The factory reads it before each stage and before each step that may ask you something.
 
 | Mode | Flag | Spec | Plan | Extra reviewers | Triage |
 |---|---|---|---|---|---|
@@ -180,9 +180,9 @@ The job's `mode` in `job.json` sets when the factory asks you something. Pick it
 
 In `default` mode, the factory judges whether the request is clear. If it is, the factory writes the spec alone, short for a small task. If it is not, the factory brainstorms the spec with you. In `autonomous` mode, the factory always writes the spec alone and lists the choices it made under **Assumptions**.
 
-### Review jobs
+### Review sessions
 
-A review job reviews a coworker's PR. It runs one verify round over the whole PR diff, then writes the PR comment. It changes no code and makes no commits. The factory never posts the comment: you open it on GitHub and submit it yourself.
+A review session reviews a coworker's PR. It runs one verify round over the whole PR diff, then writes the PR comment. It changes no code and makes no commits. The factory never posts the comment: you open it on GitHub and submit it yourself.
 
 Check out the PR first:
 
@@ -190,7 +190,7 @@ Check out the PR first:
 gh pr checkout <pr>
 ```
 
-Then run `/jam:take <PR URL>`, or `/jam:take -p` for the current branch's PR. Add a number to name the PR: `/jam:take -p 42`. The factory stops when the PR is not open, or when the current branch is not the PR's head branch. It never checks out a branch. A PR URL always starts a review job. An issue number or URL still starts a build job.
+Then run `/jam:take <PR URL>`, or `/jam:take -p` for the current branch's PR. Add a number to name the PR: `/jam:take -p 42`. The factory stops when the PR is not open, or when the current branch is not the PR's head branch. It never checks out a branch. A PR URL always starts a review session. An issue number or URL still starts a build session.
 
 ```
 verify(N) ─► submit(N) ─► done
@@ -200,7 +200,7 @@ verify(N) ─► submit(N) ─► done
 - **submit**: writes the PR comment, drops the findings already on the PR, then offers to open the comment.
 - **done**: shows the PR URL, the comment's path and its number of findings.
 
-The job's `mode` sets when a review job asks you something:
+The session's `mode` sets when a review session asks you something:
 
 | Mode | Flag | Extra reviewers | Open the comment |
 |---|---|---|---|
@@ -208,7 +208,7 @@ The job's `mode` sets when a review job asks you something:
 | `autonomous` | `-a`, `--autonomously` | never | never |
 | `interactive` | `-i`, `--interactive` | always | ask |
 
-After the coworker pushes new commits, run `/jam:take -v`. The factory pulls the commits and reviews the whole PR diff again in a new round. The new comment leaves out the findings that PR comments already report. If the PR is closed or merged, the job blocks. `-p` does not combine with `-r` or `-v`.
+After the coworker pushes new commits, run `/jam:take -v`. The factory pulls the commits and reviews the whole PR diff again in a new round. The new comment leaves out the findings that PR comments already report. If the PR is closed or merged, the session blocks. `-p` does not combine with `-r` or `-v`.
 
 ### Files
 
@@ -218,9 +218,9 @@ After the coworker pushes new commits, run `/jam:take -v`. The factory pulls the
   dashboard.html
   marked.min.js                  vendored markdown renderer
   purify.min.js                  vendored HTML sanitizer
-  <repo>/jobs/<job id>/
-    job.json                     the job's mode, stage, round and counts
-    request.md                   the description, issue or PR the job started from
+  <repo>/sessions/<session id>/
+    session.json                 the session's mode, stage, round and counts
+    request.md                   the description, issue or PR the session started from
     spec.md, plan.md, tasks.md
     decisions.md                 dismissed findings, never shown again
     deferred.md                  deferred findings, with their issue URLs
@@ -229,7 +229,7 @@ After the coworker pushes new commits, run `/jam:take -v`. The factory pulls the
       report.md
       extras.md                  extra reviewer candidates and your pick
       triage.md
-      submit.md                  the PR comment, review jobs only
+      submit.md                  the PR comment, review sessions only
 ```
 
 ## Commands
@@ -254,7 +254,7 @@ The examples below use Claude Code syntax: `/jam:take`, `/jam:verify`, and so on
 
 | Skill | Description |
 |---|---|
-| `/jam:take` | Runs one job through the factory: spec, plan, implement, verify and triage. It tracks the job in files under $FACTORY_ROOT. Run it on a feature branch, in the main checkout or in a worktree. Pass a description or a GitHub issue to start the branch's job. Pass nothing to start it from the session. Pass a PR URL, or `-p`, to review a coworker's PR as a job. Add `-r` to resume the job, or `-v` to run another verify round on a done job. It runs on its own and asks only when the request is unclear. Add `-a` to never ask, or `-i` to approve every step. It never merges or pushes. |
+| `/jam:take` | Runs one session through the factory: spec, plan, implement, verify and triage. It tracks the session in files under $FACTORY_ROOT. Run it on a feature branch, in the main checkout or in a worktree. Pass a description or a GitHub issue to start the branch's session. Pass nothing to start it from the conversation. Pass a PR URL, or `-p`, to review a coworker's PR as a session. Add `-r` to resume the session, or `-v` to run another verify round on a done session. It runs on its own and asks only when the request is unclear. Add `-a` to never ask, or `-i` to approve every step. It never merges or pushes. |
 | `/jam:verify` | Read-only review of a PR, a commit range or the current branch. Under 300 changed lines, it runs jam:independent-reviewer or superpowers:requesting-code-review, picked at random. From 300 lines, it runs both. Then it offers extra reviewers suited to the diff (from `pr-review-toolkit` in Claude Code). It checks each finding against the code. It writes one report to .nogit/verify-{timestamp}/, or to the directory --out names. Use /jam:submit-review to turn the report into a PR comment. |
 | `/jam:submit-review` | Turns a /jam:verify report into a PR comment. The comment holds only the findings and their severity. Pass verify-{timestamp} to use a run on disk. Pass a target to run /jam:verify first. Pass nothing to pick a run from a list. It drops the findings that comments on the PR already report, then offers to open the comment on GitHub. It never posts the comment. |
 | `/jam:independent-reviewer` | Independent, read-only code review of a PR, a commit range or the current branch. A fresh subagent reviews the change and never learns how it was built. It writes the report to .nogit/verify-{timestamp}/independent-review.md. Add --report-in-chat to get the report in chat instead. |

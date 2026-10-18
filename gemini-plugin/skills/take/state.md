@@ -1,14 +1,14 @@
 # Factory state files
 
-The factory keeps all the state of one job in its job folder, `$FACTORY_ROOT/<repo>/jobs/<id>/`. A new session reads these files to pick up the work. The dashboard reads them too.
+The factory keeps all the state of one session in its session folder, `$FACTORY_ROOT/<repo>/sessions/<id>/`. A new conversation reads these files to pick up the work. The dashboard reads them too.
 
-Write every file in the job folder with the **Write** or **Edit** tool, never with Bash. Re-read a file before you change it. I may have edited it by hand.
+Write every file in the session folder with the **Write** or **Edit** tool, never with Bash. Re-read a file before you change it. I may have edited it by hand.
 
 ## Layout
 
 ```
-<job folder>/
-  job.json
+<session folder>/
+  session.json
   request.md
   spec.md
   plan.md
@@ -27,9 +27,9 @@ Write every file in the job folder with the **Write** or **Edit** tool, never wi
 
 `round-N/extras.md` lists the extra reviewer candidates and my decision on them. `skills/verify/review.md` defines its format.
 
-A review job writes only `job.json`, `request.md` and the round folders. Its round folders add `submit.md`, the PR comment, and hold no `triage.md`. `skills/submit-review/submit.md` defines its format.
+A review session writes only `session.json`, `request.md` and the round folders. Its round folders add `submit.md`, the PR comment, and hold no `triage.md`. `skills/submit-review/submit.md` defines its format.
 
-## job.json
+## session.json
 
 Only the factory skill writes it, with two exceptions. The dashboard's Archive button sets `archived` and `updated`. I may edit `mode` by hand. Rewrite the whole file on every change, and set `updated` to the current UTC time.
 
@@ -61,8 +61,8 @@ Only the factory skill writes it, with two exceptions. The dashboard's Archive b
 - `worktree`: an absolute path.
 - `mode`: `default`, `autonomous` or `interactive`. The skill's **Modes** section says when each one asks me something. A missing field means `default`.
 - `flow`: `build` or `review`. A missing field means `build`.
-- `pr`: the PR number. Only review jobs set it.
-- `stage`: `spec`, `plan`, `implement`, `verify`, `triage`, `done` or `blocked`. A review job uses `verify`, `submit`, `done` and `blocked`.
+- `pr`: the PR number. Only review sessions set it.
+- `stage`: `spec`, `plan`, `implement`, `verify`, `triage`, `done` or `blocked`. A review session uses `verify`, `submit`, `done` and `blocked`.
 - `round`: the last verify round, `0` before the first.
 - `lastRound`: `true` when triage picked `last round`. `-r` sets it back to `false`.
 - `tasksOpen`, `tasksDone`: counted from `tasks.md`.
@@ -70,16 +70,16 @@ Only the factory skill writes it, with two exceptions. The dashboard's Archive b
 - `dismissed`, `deferred`: the entries in `decisions.md` and `deferred.md`.
 - `issued`: the count of entries in `deferred.md` with an issue URL. Recount it on every write. I set an entry's `issue` by hand.
 - `blocked`: `null`, or `{ "stage": "<stage>", "reason": "<text>" }`.
-- `archived`: `true` when the job is archived. The dashboard hides archived jobs. A missing field means `false`.
+- `archived`: `true` when the session is archived. The dashboard hides archived sessions. A missing field means `false`.
 
 ## request.md
 
 ```markdown
 # Request: {id}
 
-- source: {description | issue URL | PR URL | session}
+- source: {description | issue URL | PR URL | conversation}
 
-{My description verbatim, the issue's title and body, the PR's title and body, or the summary of the session's discussion.}
+{My description verbatim, the issue's title and body, the PR's title and body, or the summary of the conversation.}
 ```
 
 ## tasks.md

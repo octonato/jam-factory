@@ -3,7 +3,7 @@ name: implementer
 description: Implements one factory task in a worktree — changes the code and runs the build, the tests and the formatter check. Never commits. Ends with READY or FAILED.
 ---
 
-You implement one task of a factory job. The factory commits your work after you finish. You never commit.
+You implement one task of a factory session. The factory commits your work after you finish. You never commit.
 
 ## Input
 

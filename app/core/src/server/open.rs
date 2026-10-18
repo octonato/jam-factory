@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Opens a job's worktree, or its open pull request, in a tool on `POST /open/<tool>/<repo>/<id>`.
+//! Opens a session's worktree, or its open pull request, in a tool on `POST /open/<tool>/<repo>/<id>`.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -121,11 +121,11 @@ pub fn post_with(root: &Path, request: &Request, runner: &dyn Runner) -> Respons
         return Response::error(403);
     }
 
-    let Some((tool, job)) = tool_and_job(root, &request.target) else {
+    let Some((tool, session)) = tool_and_session(root, &request.target) else {
         return Response::error(404);
     };
 
-    let Some(worktree) = worktree(&job) else {
+    let Some(worktree) = worktree(&session) else {
         return Response::error(404);
     };
 
@@ -137,8 +137,8 @@ pub fn post_with(root: &Path, request: &Request, runner: &dyn Runner) -> Respons
     }
 }
 
-/// The tool and the `job.json` named in `target`, if the names are safe and the file exists.
-fn tool_and_job(root: &Path, target: &str) -> Option<(Tool, PathBuf)> {
+/// The tool and the `session.json` named in `target`, if the names are safe and the file exists.
+fn tool_and_session(root: &Path, target: &str) -> Option<(Tool, PathBuf)> {
     let path = target.split('?').next().unwrap_or_default();
 
     let ["", "open", tool, repo, id] = path.split('/').collect::<Vec<_>>()[..] else {
@@ -149,16 +149,20 @@ fn tool_and_job(root: &Path, target: &str) -> Option<(Tool, PathBuf)> {
     let repo = name(repo)?;
     let id = name(id)?;
 
-    let file = root.join(repo).join("jobs").join(id).join("job.json");
+    let file = root
+        .join(repo)
+        .join("sessions")
+        .join(id)
+        .join("session.json");
     file.is_file().then_some((tool, file))
 }
 
-/// The `worktree` folder named in the job file `file`, if it is a string naming an existing folder.
+/// The `worktree` folder named in the session file `file`, if it is a string naming an existing folder.
 fn worktree(file: &Path) -> Option<PathBuf> {
     let text = fs::read_to_string(file).ok()?;
-    let job: Value = serde_json::from_str(&text).ok()?;
+    let session: Value = serde_json::from_str(&text).ok()?;
 
-    let worktree = PathBuf::from(job.get("worktree")?.as_str()?);
+    let worktree = PathBuf::from(session.get("worktree")?.as_str()?);
     worktree.is_dir().then_some(worktree)
 }
 
@@ -240,7 +244,7 @@ mod tests {
         }
     }
 
-    /// A factory root holding the job `stack/a`, and that job's worktree.
+    /// A factory root holding the session `stack/a`, and that session's worktree.
     struct Fixture {
         root: PathBuf,
         worktree: PathBuf,
@@ -248,15 +252,15 @@ mod tests {
     }
 
     impl Fixture {
-        fn write_job(&self, job: &Value) {
-            self.write("stack/jobs/a/job.json", job);
+        fn write_session(&self, session: &Value) {
+            self.write("stack/sessions/a/session.json", session);
         }
 
-        /// Writes `job` to `file`, a path relative to the root.
-        fn write(&self, file: &str, job: &Value) {
+        /// Writes `session` to `file`, a path relative to the root.
+        fn write(&self, file: &str, session: &Value) {
             let file = self.root.join(file);
             fs::create_dir_all(file.parent().unwrap()).unwrap();
-            fs::write(file, job.to_string()).unwrap();
+            fs::write(file, session.to_string()).unwrap();
         }
     }
 
@@ -264,7 +268,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("root");
         let worktree = dir.path().join("worktree");
-        fs::create_dir_all(root.join("stack/jobs/a")).unwrap();
+        fs::create_dir_all(root.join("stack/sessions/a")).unwrap();
         fs::create_dir(&worktree).unwrap();
 
         let f = Fixture {
@@ -272,7 +276,7 @@ mod tests {
             worktree,
             _dir: dir,
         };
-        f.write_job(&serde_json::json!({ "worktree": f.worktree }));
+        f.write_session(&serde_json::json!({ "worktree": f.worktree }));
         f
     }
 
@@ -504,24 +508,24 @@ printf '%s' {record} | {jq} -r "$filter"
         let file = f.worktree.join("file");
         fs::write(&file, "").unwrap();
 
-        for job in [
+        for session in [
             serde_json::json!({ "worktree": 3 }),
             serde_json::json!({}),
             serde_json::json!({ "worktree": gone }),
             serde_json::json!({ "worktree": file }),
         ] {
-            f.write_job(&job);
+            f.write_session(&session);
 
             let response = post_with(&f.root, &request("/open/zed/stack/a", &[]), &runner);
 
-            assert_eq!(response.status, 404, "{job}");
+            assert_eq!(response.status, 404, "{session}");
         }
 
         assert!(runner.calls.into_inner().is_empty());
     }
 
     #[test]
-    fn unknown_tool_or_job_is_404() {
+    fn unknown_tool_or_session_is_404() {
         let f = fixture();
         let runner = RecordingRunner::new(Ok(()));
 
@@ -543,16 +547,16 @@ printf '%s' {record} | {jq} -r "$filter"
     fn bad_names_are_404() {
         let f = fixture();
         let runner = RecordingRunner::new(Ok(()));
-        let job = serde_json::json!({ "worktree": f.worktree });
+        let session = serde_json::json!({ "worktree": f.worktree });
 
-        // Each target next to the `job.json` its names point at.
+        // Each target next to the `session.json` its names point at.
         let targets = [
-            ("/open/zed/../a", "../jobs/a/job.json"),
-            ("/open/zed/stack/..", "stack/job.json"),
+            ("/open/zed/../a", "../sessions/a/session.json"),
+            ("/open/zed/stack/..", "stack/session.json"),
         ];
 
         for (_, file) in targets {
-            f.write(file, &job);
+            f.write(file, &session);
         }
 
         for (target, _) in targets {
@@ -561,6 +565,22 @@ printf '%s' {record} | {jq} -r "$filter"
             assert_eq!(response.status, 404, "{target}");
         }
 
+        assert!(runner.calls.into_inner().is_empty());
+    }
+
+    #[test]
+    fn open_ignores_the_old_job_layout() {
+        let f = fixture();
+        let runner = RecordingRunner::new(Ok(()));
+        fs::remove_file(f.root.join("stack/sessions/a/session.json")).unwrap();
+        f.write(
+            "stack/jobs/a/job.json",
+            &serde_json::json!({ "worktree": f.worktree }),
+        );
+
+        let response = post_with(&f.root, &request("/open/zed/stack/a", &[]), &runner);
+
+        assert_eq!(response.status, 404);
         assert!(runner.calls.into_inner().is_empty());
     }
 

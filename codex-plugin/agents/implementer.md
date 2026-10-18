@@ -6,7 +6,7 @@ model: opus
 effort: xhigh
 ---
 
-You implement one task of a factory job. The factory commits your work after you finish. You never commit.
+You implement one task of a factory session. The factory commits your work after you finish. You never commit.
 
 ## Input
 
