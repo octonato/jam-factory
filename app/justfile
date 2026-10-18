@@ -2,6 +2,17 @@
 default:
     @just --list --unsorted
 
+# clean up the release binary and the app bundle
+clean:
+    #!/usr/bin/env bash
+    if [ -f target/release/jam-board ]; then
+        rm target/release/jam-board
+    fi
+
+    if [ -d target/release/bundle ]; then
+        rm -rf target/release/bundle
+    fi
+
 # format and lint the codebase (auto-fix)
 format:
     cargo fmt --all
@@ -19,6 +30,88 @@ test:
 # Run the full CI quality-gate set: fmt, clippy, test.
 build: check test
 
-# Run the app in dev mode.
-dev:
-    cargo run -p odeck-app
+# Run the gates, then build the app bundle and copy it to /Applications.
+install: build
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    if ! cargo tauri --version >/dev/null 2>&1; then
+        echo "Error: the Tauri CLI is missing. Run 'mise install' in app/." >&2
+        exit 1
+    fi
+
+    cargo tauri build --bundles app
+
+    if [ -d "/Applications/Jam Board.app" ]; then
+        rm -rf "/Applications/Jam Board.app"
+    fi
+
+    cp -R "target/release/bundle/macos/Jam Board.app" /Applications/
+
+# Build release (no gates) and run the produced binary, forwarding args.
+run *ARGS:
+    #!/usr/bin/env bash
+    # Build the binary when it is missing.
+    if [ ! -f target/release/jam-board ]; then
+        cargo fmt --all
+        cargo build --release -p jam-board
+    else
+        # Offer a rebuild when the binary is older than the latest commit that touched app/.
+        latest_change="$(git log -1 --format=%ct -- .)"
+        binary_mtime="$(stat -f %m target/release/jam-board 2>/dev/null || stat -c %Y target/release/jam-board 2>/dev/null)"
+        if [[ "$binary_mtime" -lt "$latest_change" ]]; then
+            echo "Warning: target/release/jam-board is older than the latest app change" >&2
+            read -r -p "Do you want to rebuild first? (Y/n) " answer
+            if [[ "$answer" != "n" && "$answer" != "N" ]]; then
+                cargo fmt --all
+                cargo build --release -p jam-board
+            fi
+        fi
+    fi
+
+    ./target/release/jam-board {{ARGS}}
+
+# Cut a release: validate version, bump Cargo.toml, run gates, commit + tag as jam-board-vX.Y.Z.
+release VERSION:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    raw="{{VERSION}}"
+    version="${raw#jam-board-}"
+    version="${version#v}"
+    tag="jam-board-v${version}"
+
+    if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.+][0-9A-Za-z.-]+)?$ ]]; then
+      echo "Error: '$version' is not a valid semver version" >&2
+      exit 1
+    fi
+
+    if [[ -n "$(git status --porcelain)" ]]; then
+      echo "Error: working tree is not clean" >&2
+      exit 1
+    fi
+
+    if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
+      echo "Error: tag ${tag} already exists" >&2
+      exit 1
+    fi
+
+    # Set the [workspace.package] version, the first `version = "..."` line in the file.
+    sed -i.bak -E "1,/^version = \".*\"$/s/^version = \".*\"$/version = \"${version}\"/" Cargo.toml
+    rm -f Cargo.toml.bak
+
+    # Refresh Cargo.lock for the workspace members.
+    cargo update --workspace >/dev/null
+
+    just build
+    cargo build --release -p jam-board
+
+    git add Cargo.toml Cargo.lock
+    git commit -m "rel: ${tag}"
+    git tag -a "${tag}" -m "rel: ${tag}"
+
+    echo "Released ${tag} (commit + tag created)."
+    read -r -p "Do you want to push it? (Y/n) " answer
+    if [[ "$answer" != "n" && "$answer" != "N" ]]; then
+        git push && git push upstream "${tag}"
+    fi

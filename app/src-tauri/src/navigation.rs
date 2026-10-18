@@ -61,7 +61,7 @@ pub fn open_in_browser(url: &Url) {
             Err(e) => e.to_string(),
         };
 
-        eprintln!("octodeck: cannot open {url}: {failure}");
+        eprintln!("jam-board: cannot open {url}: {failure}");
     });
 }
 

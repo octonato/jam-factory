@@ -24,8 +24,8 @@ use tauri::menu::{Menu, MenuItem, MenuItemKind};
 use tauri::{AppHandle, Manager, Url, WebviewUrl, WebviewWindowBuilder, Wry};
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 
-use odeck_core::factory::{self, FactoryError};
-use odeck_core::server::Server;
+use jam_board_core::factory::{self, FactoryError};
+use jam_board_core::server::Server;
 
 use crate::navigation::{self, Navigation};
 use crate::recent_store::{RecentStore, display_path};
@@ -155,11 +155,11 @@ pub fn open_welcome_window(app: &AppHandle) {
     }
 
     let built = WebviewWindowBuilder::new(app, WELCOME, WebviewUrl::App("index.html".into()))
-        .title("octodeck")
-        .inner_size(600.0, 560.0)
+        .title("Jam Board")
+        .inner_size(600.0, 400.0)
         .build();
     if let Err(e) = built {
-        eprintln!("octodeck: cannot open the welcome window: {e}");
+        eprintln!("jam-board: cannot open the welcome window: {e}");
     }
 }
 
@@ -193,7 +193,7 @@ pub fn restore(app: &AppHandle) {
             Ok(()) => {}
             Err(OpenError::Server(message)) => show_error(app, message),
             Err(e) => {
-                eprintln!("octodeck: {e}");
+                eprintln!("jam-board: {e}");
                 store.remove(&path);
             }
         }

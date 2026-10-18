@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Tauri entry point for the octodeck desktop app.
+//! Tauri entry point for the Jam Board desktop app.
 
 mod navigation;
 mod recent_store;
@@ -60,7 +60,7 @@ fn main() {
             windows::open_recent_factory
         ])
         .build(tauri::generate_context!())
-        .expect("error while building octodeck");
+        .expect("error while building Jam Board");
 
     app.run(|app, event| {
         if let RunEvent::ExitRequested { .. } = event {

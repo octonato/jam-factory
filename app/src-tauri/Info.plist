@@ -3,6 +3,6 @@
 <plist version="1.0">
 <dict>
   <key>NSAppleEventsUsageDescription</key>
-  <string>octodeck opens job worktrees in iTerm.</string>
+  <string>Jam Board opens job worktrees in iTerm.</string>
 </dict>
 </plist>

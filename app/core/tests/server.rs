@@ -18,8 +18,8 @@ use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use odeck_core::server::Server;
-use odeck_core::server::dashboard::embedded;
+use jam_board_core::server::Server;
+use jam_board_core::server::dashboard::embedded;
 
 struct Fixture {
     server: Server,
@@ -172,7 +172,7 @@ fn missing_file_is_404() {
 #[test]
 fn lists_folders_with_trailing_slash() {
     let f = fixture();
-    f.mkdir("octodeck");
+    f.mkdir("jam-factory");
     f.mkdir("stack");
     f.write("config.json", r#"{ "port": 8731 }"#);
 
@@ -180,7 +180,7 @@ fn lists_folders_with_trailing_slash() {
 
     assert_eq!(reply.status, 200);
     let body = reply.text();
-    assert!(body.contains(r#"<a href="octodeck/">"#), "{body}");
+    assert!(body.contains(r#"<a href="jam-factory/">"#), "{body}");
     assert!(body.contains(r#"<a href="stack/">"#), "{body}");
     assert!(body.contains(r#"<a href="config.json">"#), "{body}");
 }

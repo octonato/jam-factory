@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Core logic for the octodeck desktop app.
+//! Core logic for the Jam Board desktop app.
 
 pub mod factory;
 pub mod server;

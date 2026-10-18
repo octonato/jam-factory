@@ -1495,6 +1495,30 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
+name = "jam-board"
+version = "0.1.0"
+dependencies = [
+ "jam-board-core",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
+ "tempfile",
+]
+
+[[package]]
+name = "jam-board-core"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "httparse",
+ "percent-encoding",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "javascriptcore-rs"
 version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2095,30 +2119,6 @@ dependencies = [
  "objc2-app-kit",
  "objc2-core-foundation",
  "objc2-foundation",
-]
-
-[[package]]
-name = "odeck-app"
-version = "0.1.0"
-dependencies = [
- "odeck-core",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-dialog",
- "tempfile",
-]
-
-[[package]]
-name = "odeck-core"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "httparse",
- "percent-encoding",
- "serde_json",
- "tempfile",
- "thiserror 2.0.21",
 ]
 
 [[package]]

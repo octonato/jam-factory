@@ -1,11 +1,11 @@
 [package]
-name = "odeck-core"
+name = "jam-board-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [lib]
-name = "odeck_core"
+name = "jam_board_core"
 
 [dependencies]
 chrono = "0.4"

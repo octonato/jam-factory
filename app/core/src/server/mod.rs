@@ -51,7 +51,7 @@ impl Server {
             let stop = Arc::clone(&stop);
             let port = address.port();
             thread::Builder::new()
-                .name(format!("odeck-server-{port}"))
+                .name(format!("jam-board-server-{port}"))
                 .spawn(move || accept_loop(listener, root.into(), port, &stop))?
         };
 

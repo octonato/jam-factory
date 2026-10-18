@@ -76,10 +76,10 @@ impl ProjectStore {
         match serde_json::to_string_pretty(paths) {
             Ok(json) => {
                 if let Err(e) = fs::write(&self.file, json) {
-                    eprintln!("octodeck: cannot save {}: {e}", self.file.display());
+                    eprintln!("jam-board: cannot save {}: {e}", self.file.display());
                 }
             }
-            Err(e) => eprintln!("octodeck: cannot encode open projects: {e}"),
+            Err(e) => eprintln!("jam-board: cannot encode open projects: {e}"),
         }
     }
 }
