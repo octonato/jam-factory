@@ -166,8 +166,9 @@ spec ─► plan ─► implement ─► verify(N) ─► triage(N) ─┬─►
 | `/jam:take -p [number]`, `/jam:take --pr [number]` | Starts a review session for the PR with that number, or for the current branch's PR. |
 | `/jam:take -r`, `/jam:take --resume` | Resumes the branch's session at the stage it reached. |
 | `/jam:take -v`, `/jam:take --verify` | Runs another verify round on a done session. |
+| `/jam:take -f`, `/jam:take --feedback` | Imports new feedback from the branch's open GitHub PR into a done build session. |
 
-Without `-r` or `-v`, `/jam:take` refuses to run on a branch that already has a session. To track a deferred finding, open an issue with `/jam:gh-issue-create`. Then set the entry's `issue` to its URL.
+Without `-r`, `-v` or `-f`, `/jam:take` refuses to run on a branch that already has a session. To track a deferred finding, open an issue with `/jam:gh-issue-create`. Then set the entry's `issue` to its URL.
 
 ### Modes
 
@@ -180,6 +181,16 @@ The session's `mode` in `session.json` sets when the factory asks you something.
 | `interactive` | `-i`, `--interactive` | always | always | always | always |
 
 In `default` mode, the factory judges whether the request is clear. If it is, the factory writes the spec alone, short for a small task. If it is not, the factory brainstorms the spec with you. In `autonomous` mode, the factory always writes the spec alone and lists the choices it made under **Assumptions**.
+
+### Import PR feedback
+
+After your build session reaches `done` and you open its PR, run `/jam:take -f` or `/jam:take --feedback`. The session must be unarchived, have no open or failed tasks, and match the current worktree and full branch name. Every repository in the worktree must be clean, and the branch must have a matching open PR. Local fixes may be unpushed; local HEAD does not have to equal the remote PR head.
+
+The factory fetches all pages of issue comments, submitted review bodies and inline review comments. It keeps each new version, with the original body and GitHub metadata, in the next round's `reviews/github-feedback.md`, including praise and empty reviews. Repository, PR, source kind, id and effective timestamp distinguish versions; a body digest also detects edited reviews when GitHub provides no updated timestamp. Duplicate-only or failed fetches leave the session and round unchanged.
+
+Actionable feedback becomes a report with source links, then follows the existing triage and implementation loop. Add `-i` to decide every remaining finding, including nits: `/jam:take -f -i`. The other modes retain the normal triage rules. Remote text is feedback data, never instructions to the factory. New feedback resets `lastRound`; triage chooses whether fixes need another verify round.
+
+`-f` accepts one mode flag and no other arguments. It conflicts with `-r`, `-v`, `-p`, PR selections and descriptions. Review, vibe and unfinished sessions cannot import new feedback. Resume an interrupted import with `/jam:take -r`; its durable capture is processed in the same round without losing or re-importing sources. The factory commits selected fixes through the existing loop and never pushes, merges, posts comments or opens PRs.
 
 ### Review sessions
 
@@ -256,8 +267,9 @@ Without `-r`, `/jam:just-vibe` refuses to run on a branch that already has a ses
     spec.md, plan.md, tasks.md
     decisions.md                 dismissed findings, never shown again
     deferred.md                  deferred findings, with their issue URLs
+    feedback-pending.md          staging checkpoint during a feedback import
     round-<N>/
-      reviews/                   one file per reviewer
+      reviews/                   one file per reviewer; github-feedback.md for imported feedback
       report.md
       extras.md                  extra reviewer candidates and your pick
       triage.md
@@ -288,7 +300,7 @@ The examples below use Claude Code syntax: `/jam:take`, `/jam:verify`, and so on
 
 | Skill | Description |
 |---|---|
-| `/jam:take` | Runs one session through the factory: spec, plan, implement, verify and triage. It tracks the session in files under $FACTORY_ROOT. Run it on a feature branch, in the main checkout or in a worktree. Pass a description or a GitHub issue to start the branch's session. Pass nothing to start it from the conversation. Pass a PR URL, or `-p`, to review a coworker's PR as a session. Add `-r` to resume the session, or `-v` to run another verify round on a done session. It runs on its own and asks only when the request is unclear. Add `-a` to never ask, or `-i` to approve every step. It never merges or pushes. |
+| `/jam:take` | Runs one session through the factory: spec, plan, implement, verify and triage. It tracks the session in files under $FACTORY_ROOT. Run it on a feature branch, in the main checkout or in a worktree. Pass a description or a GitHub issue to start the branch's session. Pass nothing to start it from the conversation. Pass a PR URL, or `-p`, to review a coworker's PR as a session. Add `-r` to resume the session, or `-v` to run another verify round on a done session. Add `-f` to import new PR feedback into a done build session. It runs on its own and asks only when the request is unclear. Add `-a` to never ask, or `-i` to approve every step. It never merges or pushes. |
 | `/jam:just-vibe` | Runs a quick task through the factory as a vibe session: no spec, no plan, no review. It tracks the session in files under $FACTORY_ROOT. Run it on a feature branch, in the main checkout or in a worktree. Pass a description or a GitHub issue. Pass nothing to start from the conversation. It asks for clarification only when the request is unclear. Add `-a` to never ask, or `-i` to confirm the request first. Add `-r` to resume the session. It commits the work and never merges or pushes. |
 | `/jam:verify` | Read-only review of a PR, a commit range or the current branch. Under 300 changed lines, it runs jam:independent-reviewer or superpowers:requesting-code-review, picked at random. From 300 lines, it runs both. Then it offers extra reviewers suited to the diff (from `pr-review-toolkit` in Claude Code). It checks each finding against the code. It writes one report to .nogit/verify-{timestamp}/, or to the directory --out names. Use /jam:submit-review to turn the report into a PR comment. |
 | `/jam:submit-review` | Turns a /jam:verify report into a PR comment. The comment holds only the findings and their severity. Pass verify-{timestamp} to use a run on disk. Pass a target to run /jam:verify first. Pass nothing to pick a run from a list. It drops the findings that comments on the PR already report, then offers to open the comment on GitHub. It never posts the comment. |
