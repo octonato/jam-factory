@@ -257,12 +257,13 @@
   .session-page {
     display: grid;
     grid-template-columns: minmax(0, var(--left, 30%)) 6px minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
     height: 100%;
   }
 
   #metro-pane {
     overflow: auto;
-    padding: 0 16px 48px;
+    padding: 16px 16px 48px;
   }
 
   #splitter {
@@ -327,35 +328,38 @@
 
   #view code { font: 0.857rem/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 
-  .session-card-wrap {
-    position: sticky;
-    top: 0;
-    z-index: 3;
-    padding: 16px 0 12px;
-    background: var(--bg);
+  .session-bar {
+    grid-column: 1 / -1;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--line);
   }
 
   .session-card {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 16px;
     padding: 12px 14px;
     background: var(--surface);
     border: 1px solid var(--line);
     border-radius: 8px;
   }
 
+  .session-card .name { min-width: 0; }
   .session-card .id { font-size: 1.1rem; font-weight: 600; }
   .session-card .path { color: var(--muted); font-size: 0.85rem; overflow-wrap: anywhere; }
 
   .session-card .facts {
     display: flex;
+    flex: 1 1 auto;
     flex-wrap: wrap;
     gap: 6px;
-    margin-top: 8px;
   }
 
   .session-card .actions {
     display: flex;
     gap: 2px;
-    margin: 8px 0 0 -4px;
+    margin: 0 -4px 0 auto;
   }
 
   .pill {
@@ -666,7 +670,7 @@
   .markdown img { max-width: 100%; }
 
   @media (max-width: 800px) {
-    .session-page { grid-template-columns: minmax(0, 1fr); grid-template-rows: 55% 45%; }
+    .session-page { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 55fr) minmax(0, 45fr); }
     #splitter { display: none; }
     .viewer { border-top: 1px solid var(--line); }
   }
@@ -780,11 +784,12 @@ const CARD_ACTIONS = [
   {
     action: 'archive',
     title: 'Archive (a)',
-    icon: '<path d="M2.5 4.5h11M6.5 4.5V2.75h3V4.5M4 4.5l.75 9h6.5l.75-9M6.75 7v4M9.25 7v4"/>',
+    icon: '<rect x="2" y="2.5" width="12" height="3" rx=".5"/><path d="M3 5.5v8h10v-8M6.5 8h3"/>',
   },
 ]
 const TOOL_LABELS = { intellij: 'IntelliJ', zed: 'Zed', iterm: 'iTerm', github: 'GitHub' }
 const ACTION_KEYS = { a: 'archive', t: 'iterm', e: 'zed', i: 'intellij', o: 'github' }
+const BACK_KEYS = ['l', 'Escape', 'Meta+[']
 
 const $ = (id) => document.getElementById(id)
 const state = { sessions: [], problems: [], failedChecks: [] }
@@ -1656,8 +1661,10 @@ function sessionCardHtml(session, runs) {
 
   return `
     <div class="session-card" data-dir="${escape(session.dir)}">
-      <div class="id">${escape(sessionName(session))}</div>
-      <div class="path">${escape(shortPath(session.worktree))}</div>
+      <div class="name">
+        <div class="id">${escape(sessionName(session))}</div>
+        <div class="path">${escape(shortPath(session.worktree))}</div>
+      </div>
       <div class="facts">${facts.map((fact) => `<span class="pill">${escape(fact)}</span>`).join('')}</div>
       <div class="actions">${cardActions(session)}</div>
     </div>`
@@ -1869,12 +1876,11 @@ function sessionAction(session, key) {
   return true
 }
 
-// Scrolls the metro pane to show the card of stop `index` below the session card.
+// Scrolls the metro pane to show the card of stop `index`.
 function revealStop(index) {
   const card = $('metro').querySelector(`.stop[data-index="${index}"] > .card`)
   if (!card) return
 
-  card.style.scrollMarginTop = `${$('session-card').offsetHeight}px`
   card.scrollIntoView({ block: 'nearest' })
 }
 
@@ -1956,8 +1962,8 @@ async function renderSessionPage(session, path) {
   if (sessionView.el !== $('page').firstElementChild || sessionView.dir !== session.dir) {
     $('page').innerHTML = `
       <div class="session-page">
+        <div class="session-bar" id="session-card"></div>
         <section id="metro-pane">
-          <div class="session-card-wrap" id="session-card"></div>
           <div class="metro" id="metro"></div>
         </section>
         <div id="splitter"></div>
@@ -2044,7 +2050,7 @@ function listKey(key) {
 
 // Runs the session page shortcut for `key` on `session` and returns true when it acted.
 function sessionKey(key, session) {
-  if (key === 'l') {
+  if (BACK_KEYS.includes(key)) {
     selectedDir = session.dir
     location.hash = '#/'
     return true
@@ -2055,21 +2061,29 @@ function sessionKey(key, session) {
   return sessionAction(session, key)
 }
 
+// Returns the shortcut name of `event`, or null when its modifiers make it no shortcut.
+function shortcutKey(event) {
+  if (event.key === '[' && event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey) return 'Meta+['
+  if (event.metaKey || event.ctrlKey || event.altKey) return null
+  return event.key
+}
+
 // Dispatches a shortcut key to the shown page.
 function onKey(event) {
-  if (event.metaKey || event.ctrlKey || event.altKey) return
+  const key = shortcutKey(event)
+  if (key === null) return
   if ($('modal').open) return
   if (event.target.closest('input, textarea, select, [contenteditable]')) return
-  if (event.key === 'Enter' && event.target.closest('button, a')) return
+  if (key === 'Enter' && event.target.closest('button, a')) return
 
   const route = parseRoute(location.hash)
   if (!route) {
-    if (listKey(event.key)) event.preventDefault()
+    if (listKey(key)) event.preventDefault()
     return
   }
 
   const session = state.sessions.find((s) => sessionHref(s) === sessionHref(route))
-  if (session && sessionKey(event.key, session)) event.preventDefault()
+  if (session && sessionKey(key, session)) event.preventDefault()
 }
 
 // Returns the stored font size, or the default when it is missing or out of range.

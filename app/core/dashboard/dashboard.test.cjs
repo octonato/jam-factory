@@ -73,7 +73,7 @@ function dashboard({ script = source, pageWidth = 1200, pageLeft = 0, splitterWi
     return el
   }
 
-  for (const id of ['page', 'status', 'problems', 'font-down', 'font-up', 'font-value']) element(id)
+  for (const id of ['page', 'status', 'problems', 'font-down', 'font-up', 'font-value', 'modal']) element(id)
 
   let pageHtml = ''
   elements.get('page').querySelectorAll = () => cardRows(pageHtml)
@@ -206,7 +206,7 @@ test('splitter clamps dragging, resizing and reopening to the actual page and sp
   app.geometry.pageWidth = 400
   app.window.dispatch('resize')
   assert.equal(left(), 290, 'mobile layout keeps the saved desktop width')
-  assert.match(html, /@media \(max-width: 800px\)\s*\{\s*\.session-page \{ grid-template-columns: minmax\(0, 1fr\)/)
+  assert.match(html, /@media \(max-width: 800px\)\s*\{\s*\.session-page \{ grid-template-columns: minmax\(0, 1fr\); grid-template-rows: auto minmax\(0, 55fr\) minmax\(0, 45fr\); \}/)
 
   app.elements.get('page').innerHTML = '<div>list</div>'
   app.geometry.pageWidth = 850
@@ -220,6 +220,33 @@ test('splitter clamps dragging, resizing and reopening to the actual page and sp
 
 test('window resizing before opening a session is safe', () => {
   dashboard().window.dispatch('resize')
+})
+
+test('the session card heads the session page above the split panes', async () => {
+  const app = dashboard({ fetcher: () => filesReply(['session.json']) })
+  app.context.session = session
+  await app.run('renderSessionPage(session, null)')
+
+  const page = app.elements.get('page').innerHTML
+  assert.match(page, /<div class="session-page">\s*<div class="session-bar" id="session-card"><\/div>\s*<section id="metro-pane">\s*<div class="metro" id="metro"><\/div>\s*<\/section>/)
+  assert.match(html, /\.session-bar \{[^}]*grid-column: 1 \/ -1;/)
+  assert.doesNotMatch(html, /session-card-wrap|position: sticky/)
+
+  const card = app.elements.get('session-card').innerHTML
+  assert.match(card, /<div class="name">\s*<div class="id">[^<]*<\/div>\s*<div class="path">[^<]*<\/div>\s*<\/div>\s*<div class="facts">/)
+})
+
+test('revealing a stop scrolls its card into view without a header offset', async () => {
+  const app = dashboard({ fetcher: () => filesReply(['session.json']) })
+  app.context.session = session
+  await app.run('renderSessionPage(session, null)')
+
+  const card = { style: {}, scrolled: null, scrollIntoView(options) { this.scrolled = options } }
+  app.elements.get('metro').querySelector = () => card
+  app.run('revealStop(0)')
+
+  assert.equal(card.style.scrollMarginTop, undefined)
+  assert.deepEqual(plain(card.scrolled), { block: 'nearest' })
 })
 
 test('Request timing is hidden in every flow, including legacy zero and derived durations', () => {
@@ -455,4 +482,62 @@ test('archive and open post to the api routes with the org', async () => {
   failing.run('tell = async (message) => { messages.push(message) }')
   await failing.run('openTool(session, "zed")')
   assert.deepEqual(failing.context.messages, ['Could not open my org/a b%c/s1 in Zed: zed is missing'])
+})
+
+test('the archive action draws an archive box', () => {
+  const app = dashboard()
+  const icon = app.run("CARD_ACTIONS.find((entry) => entry.action === 'archive').icon")
+  assert.equal(icon, '<rect x="2" y="2.5" width="12" height="3" rx=".5"/><path d="M3 5.5v8h10v-8M6.5 8h3"/>')
+})
+
+// Dispatches a keydown for `key` with `modifiers` and returns true when the page took it.
+function press(app, key, modifiers = {}) {
+  let prevented = false
+  app.context.document.dispatch('keydown', {
+    key,
+    metaKey: false,
+    ctrlKey: false,
+    altKey: false,
+    shiftKey: false,
+    ...modifiers,
+    target: { closest: () => null },
+    preventDefault: () => { prevented = true },
+  })
+  return prevented
+}
+
+test('l, Escape and Cmd+[ return from a session to the list', () => {
+  for (const [key, modifiers] of [['l'], ['Escape'], ['[', { metaKey: true }]]) {
+    const app = dashboard()
+    app.context.session = session
+    app.run('state.sessions = [session]')
+    app.context.location.hash = app.run('sessionHref(session)')
+
+    assert.ok(press(app, key, modifiers), `${key} is taken`)
+    assert.equal(app.context.location.hash, '#/')
+    assert.equal(app.run('selectedDir'), session.dir)
+  }
+})
+
+test('other modified keys, an open dialog and the list page ignore the back keys', () => {
+  const app = dashboard()
+  app.context.session = session
+  app.run('state.sessions = [session]')
+  const href = app.run('sessionHref(session)')
+  app.context.location.hash = href
+
+  for (const modifiers of [{ ctrlKey: true }, { metaKey: true, altKey: true }, { metaKey: true, shiftKey: true }]) {
+    assert.equal(press(app, '[', modifiers), false)
+  }
+  assert.equal(press(app, 'l', { metaKey: true }), false)
+  assert.equal(app.context.location.hash, href)
+
+  app.elements.get('modal').open = true
+  assert.equal(press(app, 'Escape'), false)
+  assert.equal(app.context.location.hash, href)
+
+  app.elements.get('modal').open = false
+  app.context.location.hash = '#/'
+  assert.equal(press(app, 'Escape'), false)
+  assert.equal(press(app, '[', { metaKey: true }), false)
 })
