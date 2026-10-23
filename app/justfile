@@ -51,6 +51,7 @@ install: build
 
     cargo build --release -p jam-factory-mcp
     mkdir -p "$HOME/.local/bin"
+    rm -f "$HOME/.local/bin/jam-factory-mcp"
     cp target/release/jam-factory-mcp "$HOME/.local/bin/"
 
 # Build release (no gates) and run the produced binary, forwarding args.
