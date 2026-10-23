@@ -23,8 +23,9 @@ check:
     cargo fmt --all -- --check
     cargo clippy --all-targets --locked -- -D warnings
 
-# run tests (cargo test compiles everything it needs)
+# run dashboard and Rust tests (cargo test compiles everything it needs)
 test:
+    node --test core/dashboard/dashboard.test.cjs
     cargo test --locked --all-targets
 
 # Run the full CI quality-gate set: fmt, clippy, test.

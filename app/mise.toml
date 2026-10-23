@@ -1,5 +1,6 @@
 [tools]
 just = "1.58.0"
+node = "26.12.0"
 "cargo:tauri-cli" = "2.12.3"
 
 [tasks.build]

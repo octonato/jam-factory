@@ -171,17 +171,18 @@ Each line is one JSON object: one agent run or one main-conversation stage.
 | `task` | string | the task ID, for an Implement run |
 | `model` | string | the model the run used, as the skill knows it |
 | `started`, `ended` | UTC ISO-8601 string | from `date -u +%Y-%m-%dT%H:%M:%SZ` |
-| `durationMs` | integer | the duration the CLI reports |
+| `durationMs` | integer | only the duration the CLI reports; `null` when unavailable |
 | `tokens` | integer | the total tokens the CLI reports for the run |
 | `toolUses` | integer | the tool uses the CLI reports |
-| `file` | string | the review file a reviewer wrote, relative to the session folder |
+| `file` | string | the artifact the run wrote, relative to the session folder, such as a review or report |
 | `outcome` | string | `done`, `failed` or `blocked` |
 
 - Only append lines. Never change or remove a line.
 - To append, re-read the file and write it back with the new line at the end. The first line creates the file.
 - Every field other than `stop` and `round` may be missing or `null`.
 - Write `null` for a field the CLI does not report. Never estimate a value.
-- Take `started` right before the run or stage starts. Take `ended` right after it ends.
+- Store only a reported `durationMs`; write `durationMs: null` when the runtime reports none, including main-conversation stages. Never store a duration calculated from timestamps. The dashboard may derive positive elapsed time from valid `started` and `ended` values for display. Request lines always store `durationMs: null`; the dashboard hides their timing.
+- Take `started` right before the run or stage starts. Take `ended` right after it ends. On resume, use fresh timestamps for the current invocation; never invent timings across an interruption.
 - `model`: for an agent, the model the **collaboration** tools report for the run, or `null` when they report none. For the main conversation, the model name the CLI states as its own.
 - `outcome`: how the run or stage ended.
 

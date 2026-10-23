@@ -27,7 +27,7 @@ Re-read `session.json` before each stage and before each step that may ask me so
 4. If the current branch is not `headRefName`, tell me to run `gh pr checkout {number}` and stop. The factory never checks out or creates a branch.
 5. Write `{session folder}/request.md`, as `state.md` shows. The `source` is the PR's `url`. The body holds the PR's title and body.
 6. Write `{session folder}/session.json` with this worktree and the current branch. Set `flow: review`, `pr` to the PR's `number` and `base` to its `baseRefName`. Set `mode` from the flag, or `default` without one. Set `stage: verify`, `round: 0`, `lastRound: false`, every count `0`, `blocked: null` and `archived: false`. Create the folders before writing the file.
-7. Append a `request` line to `runs.jsonl` with `agent: "main"`. Set its `started` and `ended` to the current time.
+7. Append a `request` line to `runs.jsonl` with `agent: "main"`. Set its `started` and `ended` to the current time. Set `durationMs: null`.
 8. Go to **Verify**.
 
 ## Verify
@@ -55,7 +55,7 @@ Take the `started` time for `runs.jsonl`.
    - **`default` and `interactive`**: follow steps 4 and 5. Step 4 asks me.
    - **`autonomous`**: follow `submit.md` steps 1 to 3 only. Do not open the comment.
 3. If `submit.md` picks no finding, the session still goes to `done`. The same holds when step 3, **Drop the findings already on the PR**, drops every finding. If `submit.md` stops on an error, append a `comment` line to `runs.jsonl` with `agent: "main"` and `outcome: "blocked"`. Set `stage: blocked` and `blocked: { "stage": "submit", "reason": "<the error>" }`. Stop.
-4. Append a `comment` line to `runs.jsonl` with `agent: "main"` and `outcome: "done"`.
+4. Append a `comment` line to `runs.jsonl` with `agent: "main"` and `outcome: "done"` on every successful Submit, including when there are no findings or all findings were dropped and no `submit.md` was written. This successful run is the dashboard's completion signal for the round; an existing `submit.md` remains a compatible completion signal.
 5. Set `stage: done` and go to **Done**.
 
 ## Done

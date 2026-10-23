@@ -31,7 +31,7 @@ Re-read `session.json` before each stage and before each step that may ask me so
 6. Write `{session folder}/request.md` with the request, as `state.md` shows.
 7. Write `{session folder}/tasks.md`, as `state.md` shows, with one task `T1`. Its title names the request in a few words. Set `source: request`, `status: open` and `commit: none`. Its text points to `request.md`.
 8. Write `{session folder}/session.json` with this worktree, the current branch and the base. Set `mode` from the flag, or `default` without one. Set `flow: vibe`, `stage: implement`, `round: 0`, `lastRound: false`, `clarified: false`, `tasksOpen: 1`, every other count `0`, `blocked: null` and `archived: false`. Create the folders before writing the file.
-9. Append a `request` line to `runs.jsonl` with `agent: "main"`. Set its `started` and `ended` to the current time.
+9. Append a `request` line to `runs.jsonl` with `agent: "main"`. Set its `started` and `ended` to the current time. Set `durationMs: null`.
 10. Go to **Implement**.
 
 ## Implement

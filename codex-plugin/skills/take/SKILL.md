@@ -92,7 +92,7 @@ Show this list when a step says to show the usage:
    - **Anything else**: the request is the argument, verbatim.
 6. Write `{session folder}/request.md` with the request, as `state.md` shows.
 7. Write `{session folder}/session.json` with this worktree, the current branch and the base. Set `mode` from the flag, or `default` without one. Set `flow: build`, `stage: spec`, `round: 0`, `lastRound: false`, every count `0`, `blocked: null` and `archived: false`. The Write tool creates the folders.
-8. Append a `request` line to `runs.jsonl` with `agent: "main"`. Set its `started` and `ended` to the current time.
+8. Append a `request` line to `runs.jsonl` with `agent: "main"`. Set its `started` and `ended` to the current time. Set `durationMs: null`.
 9. Go to **Spec**.
 
 ## Resume
@@ -216,9 +216,9 @@ If `round-{round}/report.md` exists and `round-{round}/triage.md` does not, the 
 
 ## Triage
 
-Take the `started` time for `runs.jsonl`. Re-read `mode`. If `feedbackImport` is not null, read the plugin root's `skills/take/feedback.md` and follow **Triage imported feedback**. Otherwise follow the ordinary procedure: Read the plugin root's `skills/take/triage.md` and follow it, with the session folder, the current round and the mode.
+Re-read `mode`. If `feedbackImport` is not null, read the plugin root's `skills/take/feedback.md` and follow **Triage imported feedback**. Use the fresh `started` timestamp it returns for this invocation. Otherwise take the `started` time for `runs.jsonl`, read the plugin root's `skills/take/triage.md` and follow it, with the session folder, the current round and the mode.
 
-Then update the counts. `mustFix`, `shouldFix` and `nit` count the findings left after triage step 2, by severity. For a feedback import, use **Triage imported feedback** in `feedback.md` in place of the ordinary triage call above; on resume it reconciles existing decisions before processing the remainder. Clear `feedbackImport` in the same session rewrite that applies the outcome below. Append a `triage` line to `runs.jsonl` with `agent: "main"`. Then branch on the outcome:
+Take `ended` after triage returns, then update the counts. `mustFix`, `shouldFix` and `nit` count the findings left after triage step 2, by severity. For a feedback import, use **Triage imported feedback** in `feedback.md` in place of the ordinary triage call above; on resume it reconciles existing decisions before processing the remainder. Clear `feedbackImport` in the same session rewrite that applies the outcome below. Append exactly one `triage` line to `runs.jsonl` with `agent: "main"`, using this invocation's `started` and `ended`. This is the single append path, including direct import resumes. Then branch on the outcome:
 
 - `next round`: set `stage: implement` and go to **Implement**.
 - `last round`: set `lastRound: true` and `stage: implement`. Go to **Implement**.

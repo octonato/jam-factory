@@ -226,7 +226,7 @@
 
   .session-page {
     display: grid;
-    grid-template-columns: minmax(320px, var(--left, 30%)) 6px minmax(0, 1fr);
+    grid-template-columns: minmax(0, var(--left, 30%)) 6px minmax(0, 1fr);
     height: 100%;
   }
 
@@ -845,8 +845,10 @@ function parseRuns(text) {
   return runs
 }
 
-// Returns the runs of the session in `dir`, or none when its `runs.jsonl` cannot be fetched.
-async function loadRuns(dir) {
+// Returns the runs of the session in `dir`, or none when its `runs.jsonl` is absent or cannot be fetched.
+async function loadRuns(dir, files) {
+  if (!files.includes('runs.jsonl')) return []
+
   try {
     return parseRuns(await fetchText(encodePath(`${dir}runs.jsonl`)))
   } catch {
@@ -1353,6 +1355,7 @@ function buildStops(session, files, runs, outcomes = {}) {
 
   const blocked = stops[current]
   if (blocked?.state === 'blocked') {
+    if (blocked.kind === 'implement' && blocked.file !== null) blocked.links.push({ label: 'tasks', path: blocked.file })
     blocked.file = 'session.json'
     blocked.note = stringOrNull(session.blocked?.reason)
   }
@@ -1567,14 +1570,21 @@ function firstStarted(runs) {
 
 // Returns the session card: the session's name, worktree, facts and actions.
 function sessionCardHtml(session, runs) {
-  const facts = [sessionFlow(session), sessionMode(session)]
+  const stage = session.stage === 'blocked' ? `blocked at ${phaseStage(session) ?? 'unknown'}` : session.stage ?? 'unknown'
+  const facts = [sessionFlow(session), sessionMode(session), stage]
   if (sessionRound(session) > 0) facts.push(`round ${sessionRound(session)}`)
+  if (session.lastRound === true) facts.push('last round')
+
+  const counts = { deferred: 0, issued: 0, ...session.counts }
+  if (session.stage === 'done' && counts.deferred > counts.issued) {
+    facts.push(`${counts.deferred - counts.issued} deferred without issue`)
+  }
 
   const started = firstStarted(runs)
   if (started !== null) facts.push(`started ${started.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}`)
 
-  const tokens = runTotals(runs).tokens
-  if (tokens !== null) facts.push(`${formatCount(tokens)} tokens`)
+  const tokens = runTotals(runs.filter((run) => run.agent !== null && run.agent !== 'main')).tokens
+  if (tokens !== null) facts.push(`${formatCount(tokens)} agent tokens`)
 
   return `
     <div class="session-card" data-dir="${escape(session.dir)}">
@@ -1664,7 +1674,7 @@ function stopCardHtml(stop, open, selected) {
     lines.push(`<div class="meta">${links.join('')}</div>`)
   }
 
-  const durationMs = stop.durationMs ?? totals.durationMs
+  const durationMs = stop.kind === 'request' ? null : stop.durationMs ?? totals.durationMs
   const when = durationMs !== null ? `<span class="when">${formatDuration(durationMs)}</span>` : ''
   const path = stop.file !== null ? ` data-path="${escape(stop.file)}"` : ''
   return `
@@ -1834,14 +1844,28 @@ function moveStop(session, step) {
   return true
 }
 
+// Clamps the left column to the page, reserving the splitter and viewer widths. Mobile keeps its stacked layout.
+function resizeSessionPage(page, width = leftWidth) {
+  const splitterWidth = $('splitter').getBoundingClientRect().width
+  if (splitterWidth === 0) return
+
+  const pageWidth = page.getBoundingClientRect().width
+  const max = Math.max(0, Math.floor(pageWidth - splitterWidth - RIGHT_MIN))
+  const min = Math.min(LEFT_MIN, max)
+  leftWidth = Math.round(Math.min(max, Math.max(min, width ?? pageWidth * 0.3)))
+  page.style.setProperty('--left', `${leftWidth}px`)
+}
+
+function onSessionResize() {
+  if (sessionView.el !== null && sessionView.el === $('page').firstElementChild) resizeSessionPage(sessionView.el)
+}
+
 // Resizes the left column while the splitter is dragged.
 function onSplitterDown(event) {
   const splitter = event.currentTarget
   const page = splitter.parentElement
   const resize = (move) => {
-    const left = move.clientX - page.getBoundingClientRect().left
-    leftWidth = Math.round(Math.min(innerWidth - RIGHT_MIN, Math.max(LEFT_MIN, left)))
-    page.style.setProperty('--left', `${leftWidth}px`)
+    resizeSessionPage(page, move.clientX - page.getBoundingClientRect().left)
   }
 
   event.preventDefault()
@@ -1875,7 +1899,7 @@ async function renderSessionPage(session, path) {
         </section>
       </div>`
     const page = $('page').firstElementChild
-    if (leftWidth !== null) page.style.setProperty('--left', `${leftWidth}px`)
+    resizeSessionPage(page)
     $('session-card').addEventListener('click', onCardAction)
     $('metro').addEventListener('click', onMetroClick)
     $('splitter').addEventListener('pointerdown', onSplitterDown)
@@ -1883,7 +1907,8 @@ async function renderSessionPage(session, path) {
     lastView = { key: null, text: null }
   }
 
-  const [files, runs] = await Promise.all([listFiles(session.dir), loadRuns(session.dir)])
+  const files = await listFiles(session.dir)
+  const runs = await loadRuns(session.dir, files)
   const outcomes = await loadOutcomes(session.dir, files)
   if (seq !== renderSeq) return
 
@@ -2034,6 +2059,7 @@ $('font-up').addEventListener('click', () => stepFontSize(1))
 showFontSize(readFontSize())
 
 window.addEventListener('hashchange', render)
+window.addEventListener('resize', onSessionResize)
 document.addEventListener('keydown', onKey)
 state.failedChecks = metroSelfCheck()
 poll()
