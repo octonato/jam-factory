@@ -1,16 +1,18 @@
 # Factory triage
 
-This procedure takes the findings of one verify round and decides what to do with each one. The caller gives the session folder, the round `N` and the mode. The formats are in `state.md`.
+This procedure takes the findings of one verify round and decides what to do with each one. The caller gives the session, the round `N` and the mode. The tools and the formats are in `state.md`. Read and write the session's files only with the `jam-factory` tools.
+
+Add each entry or line at the end of its file with `append_file`. When the file does not exist, create it with `write_file`, with its heading from `state.md`.
 
 In `interactive` mode, I decide. In `default` and `autonomous` mode, you decide and ask me nothing.
 
 ## 1. Read the round
 
-Read `round-N/report.md`. Take every entry under **Findings** and every entry under **Open questions**. Leave out the **Dropped** entries.
+Read `round-N/report.md` with `read_file`. Take every entry under **Findings** and every entry under **Open questions**. Leave out the **Dropped** entries.
 
 ## 2. Filter
 
-Read `decisions.md` and `deferred.md`. Compare each finding with every entry in both files.
+Read `decisions.md` and `deferred.md` with `read_file`. A `not_found` error means the file has no entry yet. Compare each finding with every entry in both files.
 
 A finding matches an entry when both describe the same problem in the same code element: the same function, class, field or config key. The line numbers can differ, because the code moves between rounds. The wording can differ too. A matching location alone is not a match.
 
@@ -73,4 +75,4 @@ In `default` and `autonomous` mode, pick `Last round` when this round added fix 
 
 In `interactive` mode, ask me with **AskUserQuestion**. Recommend `Finalize` when no fix task came out of this round. Otherwise recommend `Next round`. If I pick `Finalize` and this round added fix tasks, warn me that they will stay open. Offer `Last round` instead. Ask again.
 
-Write the outcome as the last line of `round-N/triage.md`.
+Write the outcome as the last line of `round-N/triage.md` with `append_file`.

@@ -1,6 +1,6 @@
 # Submit review
 
-This procedure turns `report.md` into a comment for the PR author. The `submit-review` skill runs this procedure with the run directory.
+This procedure turns `report.md` into a comment for the PR author. The `submit-review` skill runs this procedure with a disk run directory. The `take` skill runs it with a `factory:` run directory. For a `factory:` run directory, use the `jam-factory` tools, as `skills/verify/review.md` says.
 
 If `{run directory}/submit.md` exists, use it as it is. Skip steps 1 and 2, and go to step 3.
 
@@ -80,10 +80,15 @@ If I decline, stop here.
 
 ## 5. Open the comment
 
+The comment file depends on the run directory:
+
+- For a disk run directory, it is `{run directory}/submit.md`.
+- For a `factory:` run directory, read `submit.md` with `read_file`. Write its content to `$TMPDIR/submit-<number>.md`. That file is the comment file.
+
 Run this command with `outside the sandbox after obtaining approval`:
 
 ```
-<extension-root>/skills/submit-review/open-comment.sh <number> {run directory}/submit.md
+<extension-root>/skills/submit-review/open-comment.sh <number> <comment file>
 ```
 
 The script copies the comment to the clipboard and opens the comment form.

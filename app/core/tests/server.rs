@@ -12,19 +12,131 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fs;
+use std::collections::{BTreeMap, HashMap};
 use std::io::{ErrorKind, Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use jam_board_core::server::Server;
 use jam_board_core::server::dashboard::embedded;
+use jam_board_core::store::Store;
+use jam_factory_store::name::check_path;
+use jam_factory_store::sessions::SESSION_FILE;
+use jam_factory_store::{FileRead, SessionEntry, SessionRef, StoreError};
+use serde_json::{Map, Value, json};
+
+/// A store over an in-memory map from each session to its files, which fails every call once `failure` is set.
+#[derive(Default)]
+struct FakeStore {
+    sessions: Mutex<HashMap<SessionRef, BTreeMap<String, String>>>,
+    failure: Mutex<Option<StoreError>>,
+}
+
+impl FakeStore {
+    fn write(&self, s: &SessionRef, path: &str, content: &str) {
+        let mut sessions = self.sessions.lock().unwrap();
+        let files = sessions.entry(s.clone()).or_default();
+        files.insert(path.to_string(), content.to_string());
+    }
+
+    fn read(&self, s: &SessionRef, path: &str) -> Option<String> {
+        let sessions = self.sessions.lock().unwrap();
+        sessions.get(s)?.get(path).cloned()
+    }
+
+    fn fail_with(&self, error: StoreError) {
+        *self.failure.lock().unwrap() = Some(error);
+    }
+
+    fn check(&self) -> Result<(), StoreError> {
+        match self.failure.lock().unwrap().clone() {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+}
+
+impl Store for FakeStore {
+    fn list_sessions(&self) -> Result<Vec<SessionEntry>, StoreError> {
+        self.check()?;
+
+        let sessions = self.sessions.lock().unwrap();
+
+        let mut entries: Vec<SessionEntry> = sessions
+            .iter()
+            .filter_map(|(s, files)| entry(s, files.get(SESSION_FILE)?))
+            .collect();
+        entries.sort_by(|a, b| (&a.org, &a.repo, &a.session).cmp(&(&b.org, &b.repo, &b.session)));
+
+        Ok(entries)
+    }
+
+    fn list_files(&self, s: &SessionRef) -> Result<Vec<String>, StoreError> {
+        self.check()?;
+
+        let sessions = self.sessions.lock().unwrap();
+        let files = sessions.get(s).ok_or_else(|| not_found(s, ""))?;
+
+        Ok(files.keys().cloned().collect())
+    }
+
+    fn read_file(&self, s: &SessionRef, path: &str) -> Result<FileRead, StoreError> {
+        self.check()?;
+        check_path(path)?;
+
+        let content = self.read(s, path).ok_or_else(|| not_found(s, path))?;
+
+        Ok(FileRead {
+            content,
+            version: "v1".to_string(),
+        })
+    }
+
+    fn archive_session(&self, s: &SessionRef) -> Result<(), StoreError> {
+        self.check()?;
+
+        let text = self
+            .read(s, SESSION_FILE)
+            .ok_or_else(|| not_found(s, SESSION_FILE))?;
+        let mut session: Map<String, Value> =
+            serde_json::from_str(&text).map_err(|e| StoreError::BadJson(e.to_string()))?;
+
+        session.insert("archived".to_string(), Value::Bool(true));
+        self.write(s, SESSION_FILE, &Value::Object(session).to_string());
+
+        Ok(())
+    }
+}
+
+/// The list entry of the session `s` with the `session.json` text `text`, or `None` when it is archived.
+fn entry(s: &SessionRef, text: &str) -> Option<SessionEntry> {
+    let (data, error) = match serde_json::from_str::<Value>(text) {
+        Ok(data) if data["archived"] == true => return None,
+        Ok(data) => (Some(data), None),
+        Err(e) => (None, Some(e.to_string())),
+    };
+
+    Some(SessionEntry {
+        org: s.org().to_string(),
+        repo: s.repo().to_string(),
+        session: s.session().to_string(),
+        data,
+        error,
+    })
+}
+
+fn not_found(s: &SessionRef, path: &str) -> StoreError {
+    StoreError::NotFound(format!("{s}/{path} does not exist"))
+}
+
+fn session(org: &str, repo: &str, id: &str) -> SessionRef {
+    SessionRef::new(org, repo, id).unwrap()
+}
 
 struct Fixture {
     server: Server,
-    root: PathBuf,
-    _dir: tempfile::TempDir,
+    store: Arc<FakeStore>,
 }
 
 impl Fixture {
@@ -32,34 +144,31 @@ impl Fixture {
         self.server.port()
     }
 
-    fn write(&self, path: &str, text: &str) {
-        let file = self.root.join(path);
-        fs::create_dir_all(file.parent().unwrap()).unwrap();
-        fs::write(file, text).unwrap();
-    }
-
-    fn mkdir(&self, path: &str) {
-        fs::create_dir_all(self.root.join(path)).unwrap();
-    }
-
-    fn read(&self, path: &str) -> String {
-        fs::read_to_string(self.root.join(path)).unwrap()
+    /// The `session.json` text of the session `o/stack/a`.
+    fn session_json(&self) -> String {
+        self.store.read(&session_a(), SESSION_FILE).unwrap()
     }
 }
 
+/// A server on a free port over an empty fake store.
 fn fixture() -> Fixture {
-    let dir = tempfile::tempdir().unwrap();
-    let root = dir.path().join("root");
-    fs::create_dir(&root).unwrap();
-    fs::write(dir.path().join("outside.txt"), "outside").unwrap();
+    let store = Arc::new(FakeStore::default());
+    let server = Server::start(store.clone(), 0).unwrap();
 
-    let server = Server::start(root.clone(), 0).unwrap();
+    Fixture { server, store }
+}
 
-    Fixture {
-        server,
-        root,
-        _dir: dir,
-    }
+const SESSION: &str = r#"{"id":"a","stage":"done","archived":false}"#;
+
+fn session_a() -> SessionRef {
+    session("o", "stack", "a")
+}
+
+/// A fixture whose store holds the session `o/stack/a`.
+fn session_fixture() -> Fixture {
+    let f = fixture();
+    f.store.write(&session_a(), SESSION_FILE, SESSION);
+    f
 }
 
 struct Reply {
@@ -78,6 +187,10 @@ impl Reply {
 
     fn text(&self) -> String {
         String::from_utf8_lossy(&self.body).into_owned()
+    }
+
+    fn json(&self) -> Value {
+        serde_json::from_slice(&self.body).unwrap()
     }
 }
 
@@ -127,163 +240,237 @@ fn post(port: u16, target: &str) -> Reply {
     request(port, "POST", target, &[])
 }
 
-const SESSION_FILE: &str = "stack/sessions/a/session.json";
-const SESSION: &str = r#"{"id":"a","stage":"done","archived":false,"counts":{"nit":1}}"#;
-
-/// A fixture whose root holds the session `stack/a`.
-fn session_fixture() -> Fixture {
-    let f = fixture();
-    f.write(SESSION_FILE, SESSION);
-    f
-}
-
-/// Whether `text` has the shape `YYYY-MM-DDTHH:MM:SSZ`.
-fn is_utc_timestamp(text: &str) -> bool {
-    let shape = "0000-00-00T00:00:00Z";
-
-    text.len() == shape.len()
-        && text.bytes().zip(shape.bytes()).all(|(c, s)| match s {
-            b'0' => c.is_ascii_digit(),
-            _ => c == s,
-        })
-}
-
 #[test]
-fn serves_a_file() {
-    let f = fixture();
-    f.write("stack/sessions/a/session.json", r#"{"id":"a"}"#);
-
-    let reply = get(f.port(), "/stack/sessions/a/session.json");
-
-    assert_eq!(reply.status, 200);
-    assert_eq!(reply.text(), r#"{"id":"a"}"#);
-    assert_eq!(reply.header("Content-Type"), Some("application/json"));
-}
-
-#[test]
-fn missing_file_is_404() {
-    let f = fixture();
-
-    let reply = get(f.port(), "/nope.md");
-
-    assert_eq!(reply.status, 404);
-}
-
-#[test]
-fn lists_folders_with_trailing_slash() {
-    let f = fixture();
-    f.mkdir("jam-factory");
-    f.mkdir("stack");
-    f.write("config.json", r#"{ "port": 8731 }"#);
-
-    let reply = get(f.port(), "/");
-
-    assert_eq!(reply.status, 200);
-    let body = reply.text();
-    assert!(body.contains(r#"<a href="jam-factory/">"#), "{body}");
-    assert!(body.contains(r#"<a href="stack/">"#), "{body}");
-    assert!(body.contains(r#"<a href="config.json">"#), "{body}");
-}
-
-#[test]
-fn percent_encodes_names() {
-    let f = fixture();
-    f.write("stack/sessions/my session/caf\u{e9}.md", "hi");
-
-    let sessions = get(f.port(), "/stack/sessions/").text();
-    assert!(
-        sessions.contains(r#"<a href="my%20session/">"#),
-        "{sessions}"
+fn sessions_route_returns_the_entries() {
+    let f = session_fixture();
+    f.store
+        .write(&session("p", "web", "b"), SESSION_FILE, "not json");
+    f.store.write(
+        &session("o", "stack", "old"),
+        SESSION_FILE,
+        r#"{"archived":true}"#,
     );
 
-    let session = get(f.port(), "/stack/sessions/my%20session/").text();
-    assert!(session.contains(r#"<a href="caf%C3%A9.md">"#), "{session}");
+    let reply = get(f.port(), "/api/sessions");
 
-    let file = get(f.port(), "/stack/sessions/my%20session/caf%C3%A9.md");
+    assert_eq!(reply.status, 200);
+    assert_eq!(reply.header("Content-Type"), Some("application/json"));
+
+    let error = serde_json::from_str::<Value>("not json")
+        .unwrap_err()
+        .to_string();
+    assert_eq!(
+        reply.json(),
+        json!({ "sessions": [
+            { "org": "o", "repo": "stack", "session": "a", "data": serde_json::from_str::<Value>(SESSION).unwrap() },
+            { "org": "p", "repo": "web", "session": "b", "error": error },
+        ] })
+    );
+}
+
+#[test]
+fn file_route_serves_content_with_its_type() {
+    let f = session_fixture();
+    f.store.write(&session_a(), "spec.md", "# Spec");
+    f.store.write(&session_a(), "runs.jsonl", "{}\n{}\n");
+
+    for (path, content, content_type) in [
+        ("spec.md", "# Spec", "text/markdown; charset=utf-8"),
+        ("session.json", SESSION, "application/json"),
+        ("runs.jsonl", "{}\n{}\n", "application/jsonl"),
+    ] {
+        let reply = get(f.port(), &format!("/api/file/o/stack/a/{path}"));
+
+        assert_eq!(reply.status, 200, "{path}");
+        assert_eq!(reply.text(), content, "{path}");
+        assert_eq!(reply.header("Content-Type"), Some(content_type), "{path}");
+    }
+}
+
+#[test]
+fn file_route_reads_nested_paths() {
+    let f = session_fixture();
+    f.store
+        .write(&session_a(), "round-1/reviews/review.md", "fine");
+
+    let reply = get(f.port(), "/api/file/o/stack/a/round-1/reviews/review.md");
+
+    assert_eq!(reply.status, 200);
+    assert_eq!(reply.text(), "fine");
+}
+
+#[test]
+fn files_route_lists_paths() {
+    let f = session_fixture();
+    f.store.write(&session_a(), "round-1/plan.md", "");
+    f.store.write(&session_a(), "spec.md", "");
+
+    let reply = get(f.port(), "/api/files/o/stack/a");
+
+    assert_eq!(reply.status, 200);
+    assert_eq!(reply.header("Content-Type"), Some("application/json"));
+    assert_eq!(
+        reply.json(),
+        json!({ "files": ["round-1/plan.md", "session.json", "spec.md"] })
+    );
+}
+
+#[test]
+fn odd_names_round_trip() {
+    let f = fixture();
+    let odd = session("caf\u{e9}", "a b%c", "s 1");
+    f.store.write(&odd, SESSION_FILE, r#"{"id":"s 1"}"#);
+    f.store.write(&odd, "notes/caf\u{e9} 1.md", "hi");
+
+    let sessions = get(f.port(), "/api/sessions").json();
+    assert_eq!(sessions["sessions"][0]["org"], "caf\u{e9}");
+    assert_eq!(sessions["sessions"][0]["repo"], "a b%c");
+    assert_eq!(sessions["sessions"][0]["session"], "s 1");
+
+    let files = get(f.port(), "/api/files/caf%C3%A9/a%20b%25c/s%201").json();
+    assert_eq!(
+        files,
+        json!({ "files": ["notes/caf\u{e9} 1.md", "session.json"] })
+    );
+
+    let file = get(
+        f.port(),
+        "/api/file/caf%C3%A9/a%20b%25c/s%201/notes/caf%C3%A9%201.md",
+    );
     assert_eq!(file.status, 200);
     assert_eq!(file.text(), "hi");
+
+    let archived = post(f.port(), "/api/archive/caf%C3%A9/a%20b%25c/s%201");
+    assert_eq!(archived.status, 204);
+    assert_eq!(
+        f.store.read(&odd, SESSION_FILE).unwrap(),
+        r#"{"id":"s 1","archived":true}"#
+    );
 }
 
 #[test]
-fn redirects_folder_without_slash() {
-    let f = fixture();
-    f.mkdir("stack");
+fn archive_route_archives() {
+    let f = session_fixture();
 
-    let reply = get(f.port(), "/stack");
+    let reply = post(f.port(), "/api/archive/o/stack/a");
 
-    assert_eq!(reply.status, 301);
-    assert_eq!(reply.header("Location"), Some("/stack/"));
+    assert_eq!(reply.status, 204);
+    assert!(reply.body.is_empty());
+    assert_eq!(
+        f.session_json(),
+        r#"{"id":"a","stage":"done","archived":true}"#
+    );
+
+    let sessions = get(f.port(), "/api/sessions").json();
+    assert_eq!(sessions, json!({ "sessions": [] }));
 }
 
 #[test]
-fn file_with_trailing_slash_is_404() {
-    let f = fixture();
-    f.write("config.json", r#"{ "port": 8731 }"#);
+fn archive_accepts_same_origin() {
+    let f = session_fixture();
+    let origin = format!("http://127.0.0.1:{}", f.port());
 
-    let reply = get(f.port(), "/config.json/");
+    let reply = request(
+        f.port(),
+        "POST",
+        "/api/archive/o/stack/a",
+        &[("Origin", &origin)],
+    );
 
-    assert_eq!(reply.status, 404);
+    assert_eq!(reply.status, 204);
 }
 
 #[test]
-fn path_outside_root_is_404() {
-    let f = fixture();
-    f.mkdir("stack");
+fn archive_rejects_bad_names() {
+    let f = session_fixture();
 
     for target in [
-        "/../outside.txt",
-        "/%2e%2e/outside.txt",
-        "/stack/../../outside.txt",
+        "/api/archive/o/%2e%2e/a",
+        "/api/archive/o/stack/..",
+        "/api/archive/o/stack/.",
+        "/api/archive/o/stack/a%2F..%2Fa",
+        "/api/archive/o/stack/a%5Cb",
+        "/api/archive/o//a",
+        "/api/archive/o/%FF/a",
+    ] {
+        let reply = post(f.port(), target);
+
+        assert_eq!(reply.status, 404, "{target}");
+        assert_eq!(f.session_json(), SESSION, "{target}");
+    }
+}
+
+#[test]
+fn archive_rejects_extra_segments() {
+    let f = session_fixture();
+
+    let reply = post(f.port(), "/api/archive/o/stack/a/extra");
+
+    assert_eq!(reply.status, 404);
+    assert_eq!(f.session_json(), SESSION);
+}
+
+#[test]
+fn unknown_session_is_404() {
+    let f = session_fixture();
+
+    for target in [
+        "/api/files/o/stack/nope",
+        "/api/file/o/stack/nope/spec.md",
+        "/api/file/o/stack/a/nope.md",
+        "/api/file/o/stack/a/",
+        "/api/file/o/stack/a/.lock",
+        "/api/file/o/stack/a",
+        "/api/files/o/stack",
+        "/api/nope",
     ] {
         let reply = get(f.port(), target);
+
+        assert_eq!(reply.status, 404, "{target}");
+    }
+
+    for target in ["/api/archive/o/stack/nope", "/api/open/zed/o/stack/nope"] {
+        let reply = post(f.port(), target);
 
         assert_eq!(reply.status, 404, "{target}");
     }
 }
 
 #[test]
-fn query_string_is_ignored() {
-    let f = fixture();
-    f.write("config.json", r#"{ "port": 8731 }"#);
+fn store_failure_is_500_with_the_message() {
+    let f = session_fixture();
+    f.store
+        .fail_with(StoreError::Io("the disk is full".to_string()));
 
-    let reply = get(f.port(), "/config.json?x=1");
-
-    assert_eq!(reply.status, 200);
-}
-
-#[test]
-fn embedded_dashboard_wins_over_disk() {
-    let f = fixture();
-
-    for (name, content_type) in [
-        ("dashboard.html", "text/html; charset=utf-8"),
-        ("marked.min.js", "text/javascript; charset=utf-8"),
-        ("purify.min.js", "text/javascript; charset=utf-8"),
+    for (method, target) in [
+        ("GET", "/api/sessions"),
+        ("GET", "/api/files/o/stack/a"),
+        ("GET", "/api/file/o/stack/a/session.json"),
+        ("POST", "/api/archive/o/stack/a"),
+        ("POST", "/api/open/zed/o/stack/a"),
     ] {
-        f.write(name, "stale");
-        let path = format!("/{name}");
+        let reply = request(f.port(), method, target, &[]);
 
-        let reply = get(f.port(), &path);
-
-        assert_eq!(reply.status, 200, "{name}");
-        assert_eq!(reply.body, embedded(&path).unwrap().bytes, "{name}");
-        assert_eq!(reply.header("Content-Type"), Some(content_type), "{name}");
+        assert_eq!(reply.status, 500, "{target}");
+        assert_eq!(reply.text(), "the disk is full", "{target}");
     }
 }
 
 #[test]
-fn wrong_method_is_405() {
-    let f = fixture();
+fn archive_bad_json_is_500() {
+    let f = session_fixture();
+    f.store.write(&session_a(), SESSION_FILE, "not json");
 
-    let reply = request(f.port(), "PUT", "/", &[]);
+    let reply = post(f.port(), "/api/archive/o/stack/a");
 
-    assert_eq!(reply.status, 405);
+    assert_eq!(reply.status, 500);
+    assert!(!reply.body.is_empty());
+    assert_eq!(f.session_json(), "not json");
 }
 
 #[test]
 fn foreign_host_is_403() {
     let f = session_fixture();
-    f.write("config.json", r#"{ "port": 8731 }"#);
 
     for host in [
         format!("evil.example:{}", f.port()),
@@ -292,41 +479,58 @@ fn foreign_host_is_403() {
     ] {
         let headers = [("Host", host.as_str())];
 
-        let get = send(f.port(), "GET", "/config.json", &headers);
-        let post = send(f.port(), "POST", "/archive/stack/a", &headers);
+        let sessions = send(f.port(), "GET", "/api/sessions", &headers);
+        let dashboard = send(f.port(), "GET", "/dashboard.html", &headers);
+        let archive = send(f.port(), "POST", "/api/archive/o/stack/a", &headers);
 
-        assert_eq!(get.status, 403, "{host}");
-        assert_eq!(post.status, 403, "{host}");
-        assert_eq!(f.read(SESSION_FILE), SESSION, "{host}");
+        assert_eq!(sessions.status, 403, "{host}");
+        assert_eq!(dashboard.status, 403, "{host}");
+        assert_eq!(archive.status, 403, "{host}");
+        assert_eq!(f.session_json(), SESSION, "{host}");
     }
 }
 
 #[test]
 fn missing_host_is_403() {
     let f = session_fixture();
-    f.write("config.json", r#"{ "port": 8731 }"#);
 
-    let get = send(f.port(), "GET", "/config.json", &[]);
-    let post = send(f.port(), "POST", "/archive/stack/a", &[]);
+    let get = send(f.port(), "GET", "/api/sessions", &[]);
+    let post = send(f.port(), "POST", "/api/archive/o/stack/a", &[]);
 
     assert_eq!(get.status, 403);
     assert_eq!(post.status, 403);
-    assert_eq!(f.read(SESSION_FILE), SESSION);
+    assert_eq!(f.session_json(), SESSION);
+}
+
+#[test]
+fn foreign_origin_post_is_403() {
+    let f = session_fixture();
+
+    for target in ["/api/archive/o/stack/a", "/api/open/zed/o/stack/a"] {
+        let reply = request(
+            f.port(),
+            "POST",
+            target,
+            &[("Origin", "http://evil.example")],
+        );
+
+        assert_eq!(reply.status, 403, "{target}");
+        assert_eq!(f.session_json(), SESSION, "{target}");
+    }
 }
 
 #[test]
 fn local_hosts_are_served() {
     for name in ["localhost", "127.0.0.1"] {
         let f = session_fixture();
-        f.write("config.json", r#"{ "port": 8731 }"#);
         let host = format!("{name}:{}", f.port());
         let origin = format!("http://{host}");
 
-        let get = send(f.port(), "GET", "/config.json", &[("Host", &host)]);
+        let get = send(f.port(), "GET", "/api/sessions", &[("Host", &host)]);
         let post = send(
             f.port(),
             "POST",
-            "/archive/stack/a",
+            "/api/archive/o/stack/a",
             &[("Host", &host), ("Origin", &origin)],
         );
 
@@ -336,12 +540,71 @@ fn local_hosts_are_served() {
 }
 
 #[test]
-fn taken_port_is_an_error() {
+fn dashboard_is_served() {
     let f = fixture();
+
+    for (name, content_type) in [
+        ("dashboard.html", "text/html; charset=utf-8"),
+        ("marked.min.js", "text/javascript; charset=utf-8"),
+        ("purify.min.js", "text/javascript; charset=utf-8"),
+    ] {
+        let path = format!("/{name}");
+
+        let reply = get(f.port(), &path);
+
+        assert_eq!(reply.status, 200, "{name}");
+        assert_eq!(reply.body, embedded(&path).unwrap().bytes, "{name}");
+        assert_eq!(reply.header("Content-Type"), Some(content_type), "{name}");
+    }
+
+    for target in ["/", "/nope.html", "/o/stack/sessions/a/session.json"] {
+        assert_eq!(get(f.port(), target).status, 404, "{target}");
+    }
+}
+
+#[test]
+fn query_string_is_ignored() {
+    let f = session_fixture();
+
+    for target in [
+        "/api/sessions?x=1",
+        "/api/file/o/stack/a/session.json?x=1",
+        "/dashboard.html?x=1",
+    ] {
+        let reply = get(f.port(), target);
+
+        assert_eq!(reply.status, 200, "{target}");
+    }
+}
+
+#[test]
+fn wrong_method_is_405() {
+    let f = fixture();
+
+    let reply = request(f.port(), "PUT", "/api/sessions", &[]);
+
+    assert_eq!(reply.status, 405);
+}
+
+#[test]
+fn post_elsewhere_is_404() {
+    let f = session_fixture();
+
+    for target in ["/api/sessions", "/dashboard.html", "/archive/stack/a"] {
+        let reply = post(f.port(), target);
+
+        assert_eq!(reply.status, 404, "{target}");
+    }
+
+    assert_eq!(f.session_json(), SESSION);
+}
+
+#[test]
+fn taken_port_is_an_error() {
     let taken = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = taken.local_addr().unwrap().port();
 
-    let Err(err) = Server::start(f.root.clone(), port) else {
+    let Err(err) = Server::start(Arc::new(FakeStore::default()), port) else {
         panic!("started on taken port {port}");
     };
 
@@ -350,12 +613,12 @@ fn taken_port_is_an_error() {
 
 #[test]
 fn port_is_free_after_drop() {
-    let Fixture { server, root, _dir } = fixture();
+    let Fixture { server, store } = fixture();
     let port = server.port();
 
     drop(server);
 
-    let again = Server::start(root, port).unwrap();
+    let again = Server::start(store, port).unwrap();
     assert_eq!(again.port(), port);
 }
 
@@ -365,7 +628,7 @@ fn idle_connection_does_not_block_others() {
     let _idle = TcpStream::connect(("127.0.0.1", f.port())).unwrap();
     let start = Instant::now();
 
-    let reply = get(f.port(), "/");
+    let reply = get(f.port(), "/api/sessions");
 
     assert_eq!(reply.status, 200);
     assert!(
@@ -377,10 +640,13 @@ fn idle_connection_does_not_block_others() {
 
 #[test]
 fn every_response_closes_and_is_not_cached() {
-    let f = fixture();
-    f.write("config.json", r#"{ "port": 8731 }"#);
+    let f = session_fixture();
 
-    for target in ["/config.json", "/nope.md", "/"] {
+    for target in [
+        "/api/sessions",
+        "/api/file/o/stack/a/nope.md",
+        "/dashboard.html",
+    ] {
         let reply = get(f.port(), target);
 
         assert_eq!(reply.header("Cache-Control"), Some("no-store"), "{target}");
@@ -391,151 +657,4 @@ fn every_response_closes_and_is_not_cached() {
             "{target}"
         );
     }
-}
-
-#[test]
-fn archive_sets_fields_and_keeps_order() {
-    let f = session_fixture();
-
-    let reply = post(f.port(), "/archive/stack/a");
-
-    assert_eq!(reply.status, 204);
-    assert!(reply.body.is_empty());
-
-    let text = f.read(SESSION_FILE);
-    let session: serde_json::Map<String, serde_json::Value> = serde_json::from_str(&text).unwrap();
-    let keys: Vec<&str> = session.keys().map(String::as_str).collect();
-    assert_eq!(keys, ["id", "stage", "archived", "counts", "updated"]);
-    assert_eq!(session["archived"], true);
-
-    let updated = session["updated"].as_str().unwrap();
-    assert!(is_utc_timestamp(updated), "{updated}");
-
-    assert!(text.lines().nth(1).unwrap().starts_with("  "), "{text}");
-    assert!(text.ends_with('\n'), "{text}");
-    assert!(!f.root.join("stack/sessions/a/session.json.tmp").exists());
-}
-
-#[test]
-fn archive_accepts_same_origin() {
-    let f = session_fixture();
-    let origin = format!("http://127.0.0.1:{}", f.port());
-
-    let reply = request(f.port(), "POST", "/archive/stack/a", &[("Origin", &origin)]);
-
-    assert_eq!(reply.status, 204);
-}
-
-#[test]
-fn archive_rejects_foreign_origin() {
-    let f = session_fixture();
-
-    let reply = request(
-        f.port(),
-        "POST",
-        "/archive/stack/a",
-        &[("Origin", "http://evil.example")],
-    );
-
-    assert_eq!(reply.status, 403);
-    assert_eq!(f.read(SESSION_FILE), SESSION);
-}
-
-#[test]
-fn archive_rejects_bad_names() {
-    let f = session_fixture();
-
-    // Each target next to the `session.json` its names point at.
-    let targets = [
-        ("/archive/%2e%2e/a", "../sessions/a/session.json"),
-        ("/archive/stack/..", "stack/session.json"),
-        ("/archive/stack/.", "stack/sessions/session.json"),
-        ("/archive/stack/a%2F..%2Fa", SESSION_FILE),
-        ("/archive/stack/a%5Cb", "stack/sessions/a\\b/session.json"),
-        ("/archive//a", "sessions/a/session.json"),
-    ];
-
-    for (_, file) in targets {
-        f.write(file, SESSION);
-    }
-
-    for (target, file) in targets {
-        let reply = post(f.port(), target);
-
-        assert_eq!(reply.status, 404, "{target}");
-        assert_eq!(f.read(file), SESSION, "{target}");
-    }
-}
-
-#[test]
-fn archive_rejects_extra_segments() {
-    let f = session_fixture();
-
-    let reply = post(f.port(), "/archive/stack/a/extra");
-
-    assert_eq!(reply.status, 404);
-    assert_eq!(f.read(SESSION_FILE), SESSION);
-}
-
-#[test]
-fn archive_missing_session_is_404() {
-    let f = session_fixture();
-
-    let reply = post(f.port(), "/archive/stack/b");
-
-    assert_eq!(reply.status, 404);
-}
-
-#[test]
-fn archive_ignores_the_old_job_layout() {
-    let f = fixture();
-    f.write("stack/jobs/a/job.json", SESSION);
-
-    let reply = post(f.port(), "/archive/stack/a");
-
-    assert_eq!(reply.status, 404);
-    assert_eq!(f.read("stack/jobs/a/job.json"), SESSION);
-}
-
-#[test]
-fn archive_bad_json_is_500() {
-    let f = session_fixture();
-    f.write(SESSION_FILE, "not json");
-
-    let reply = post(f.port(), "/archive/stack/a");
-
-    assert_eq!(reply.status, 500);
-    assert_eq!(f.read(SESSION_FILE), "not json");
-}
-
-#[test]
-fn open_rejects_foreign_origin() {
-    let f = session_fixture();
-
-    let reply = request(
-        f.port(),
-        "POST",
-        "/open/zed/stack/a",
-        &[("Origin", "http://evil.example")],
-    );
-
-    assert_eq!(reply.status, 403);
-}
-
-#[test]
-fn open_missing_session_is_404() {
-    let f = session_fixture();
-
-    let reply = post(f.port(), "/open/zed/nope/nope");
-
-    assert_eq!(reply.status, 404);
-}
-
-#[test]
-fn post_elsewhere_is_404() {
-    let f = session_fixture();
-
-    let reply = post(f.port(), "/stack/");
-
-    assert_eq!(reply.status, 404);
 }

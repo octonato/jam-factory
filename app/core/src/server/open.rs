@@ -12,16 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Opens a session's worktree, or its open pull request, in a tool on `POST /open/<tool>/<repo>/<id>`.
+//! Opens a session's worktree, or its open pull request, in a tool on `POST /api/open/<tool>/<org>/<repo>/<id>`.
 
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use jam_factory_store::sessions::SESSION_FILE;
 use serde_json::Value;
 
-use super::archive::{name, same_origin};
+use super::api::{error_response, same_origin, segments, session_ref};
 use super::http::{Request, Response};
+use crate::store::Store;
 
 const TEXT: &str = "text/plain; charset=utf-8";
 
@@ -110,19 +111,32 @@ impl Runner for SystemRunner {
     }
 }
 
-/// Answers `POST` for the factory root `root`.
-pub fn post(root: &Path, request: &Request) -> Response {
-    post_with(root, request, &SystemRunner)
+/// Answers `POST` with `store`.
+pub fn post(store: &dyn Store, request: &Request) -> Response {
+    post_with(store, request, &SystemRunner)
 }
 
-/// Answers `POST` for the factory root `root`, running the tool with `runner`.
-pub fn post_with(root: &Path, request: &Request, runner: &dyn Runner) -> Response {
+/// Answers `POST` with `store`, running the tool with `runner`.
+pub fn post_with(store: &dyn Store, request: &Request, runner: &dyn Runner) -> Response {
     if !same_origin(request) {
         return Response::error(403);
     }
 
-    let Some((tool, session)) = tool_and_session(root, &request.target) else {
+    let segments = segments(&request.target);
+
+    let ["", "api", "open", tool, org, repo, id] = segments.as_slice() else {
         return Response::error(404);
+    };
+
+    let Some(tool) = Tool::parse(tool) else {
+        return Response::error(404);
+    };
+
+    let session = session_ref(org, repo, id).and_then(|s| store.read_file(&s, SESSION_FILE));
+
+    let session = match session {
+        Ok(file) => file.content,
+        Err(error) => return error_response(&error),
     };
 
     let Some(worktree) = worktree(&session) else {
@@ -137,30 +151,9 @@ pub fn post_with(root: &Path, request: &Request, runner: &dyn Runner) -> Respons
     }
 }
 
-/// The tool and the `session.json` named in `target`, if the names are safe and the file exists.
-fn tool_and_session(root: &Path, target: &str) -> Option<(Tool, PathBuf)> {
-    let path = target.split('?').next().unwrap_or_default();
-
-    let ["", "open", tool, repo, id] = path.split('/').collect::<Vec<_>>()[..] else {
-        return None;
-    };
-
-    let tool = Tool::parse(tool)?;
-    let repo = name(repo)?;
-    let id = name(id)?;
-
-    let file = root
-        .join(repo)
-        .join("sessions")
-        .join(id)
-        .join("session.json");
-    file.is_file().then_some((tool, file))
-}
-
-/// The `worktree` folder named in the session file `file`, if it is a string naming an existing folder.
-fn worktree(file: &Path) -> Option<PathBuf> {
-    let text = fs::read_to_string(file).ok()?;
-    let session: Value = serde_json::from_str(&text).ok()?;
+/// The `worktree` folder named in the session JSON `text`, if it is a string naming an existing folder.
+fn worktree(text: &str) -> Option<PathBuf> {
+    let session: Value = serde_json::from_str(text).ok()?;
 
     let worktree = PathBuf::from(session.get("worktree")?.as_str()?);
     worktree.is_dir().then_some(worktree)
@@ -218,8 +211,15 @@ fn applescript_escape(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
+    use std::collections::HashMap;
+    use std::fs;
+    use std::sync::Mutex;
+
+    use jam_factory_store::{FileRead, SessionEntry, SessionRef, StoreError};
 
     use super::*;
+
+    const TARGET: &str = "/api/open/zed/o/stack/a";
 
     /// A runner that records each call and gives `result`.
     struct RecordingRunner {
@@ -244,35 +244,83 @@ mod tests {
         }
     }
 
-    /// A factory root holding the session `stack/a`, and that session's worktree.
+    /// A store holding the files of the session `o/stack/a`, which logs each read and gives `failure` when set.
+    #[derive(Default)]
+    struct FakeStore {
+        files: Mutex<HashMap<String, String>>,
+        reads: Mutex<Vec<String>>,
+        failure: Option<StoreError>,
+    }
+
+    impl FakeStore {
+        fn write(&self, path: &str, content: &str) {
+            let mut files = self.files.lock().unwrap();
+            files.insert(path.to_string(), content.to_string());
+        }
+
+        fn remove(&self, path: &str) {
+            self.files.lock().unwrap().remove(path);
+        }
+
+        fn reads(&self) -> Vec<String> {
+            self.reads.lock().unwrap().clone()
+        }
+    }
+
+    impl Store for FakeStore {
+        fn list_sessions(&self) -> Result<Vec<SessionEntry>, StoreError> {
+            unreachable!("open lists no sessions")
+        }
+
+        fn list_files(&self, _s: &SessionRef) -> Result<Vec<String>, StoreError> {
+            unreachable!("open lists no files")
+        }
+
+        fn read_file(&self, s: &SessionRef, path: &str) -> Result<FileRead, StoreError> {
+            self.reads.lock().unwrap().push(format!("{s}/{path}"));
+
+            if let Some(failure) = &self.failure {
+                return Err(failure.clone());
+            }
+
+            let content = match s.to_string().as_str() {
+                "o/stack/a" => self.files.lock().unwrap().get(path).cloned(),
+                _ => None,
+            };
+
+            content
+                .map(|content| FileRead {
+                    content,
+                    version: "v1".to_string(),
+                })
+                .ok_or_else(|| StoreError::NotFound(format!("{s}/{path} does not exist")))
+        }
+
+        fn archive_session(&self, _s: &SessionRef) -> Result<(), StoreError> {
+            unreachable!("open archives no session")
+        }
+    }
+
+    /// A store holding the session `o/stack/a`, and that session's worktree.
     struct Fixture {
-        root: PathBuf,
+        store: FakeStore,
         worktree: PathBuf,
         _dir: tempfile::TempDir,
     }
 
     impl Fixture {
         fn write_session(&self, session: &Value) {
-            self.write("stack/sessions/a/session.json", session);
-        }
-
-        /// Writes `session` to `file`, a path relative to the root.
-        fn write(&self, file: &str, session: &Value) {
-            let file = self.root.join(file);
-            fs::create_dir_all(file.parent().unwrap()).unwrap();
-            fs::write(file, session.to_string()).unwrap();
+            self.store.write("session.json", &session.to_string());
         }
     }
 
     fn fixture() -> Fixture {
         let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().join("root");
         let worktree = dir.path().join("worktree");
-        fs::create_dir_all(root.join("stack/sessions/a")).unwrap();
         fs::create_dir(&worktree).unwrap();
 
         let f = Fixture {
-            root,
+            store: FakeStore::default(),
             worktree,
             _dir: dir,
         };
@@ -476,10 +524,11 @@ printf '%s' {record} | {jq} -r "$filter"
         let f = fixture();
         let runner = RecordingRunner::new(Ok(()));
 
-        let response = post_with(&f.root, &request("/open/zed/stack/a", &[]), &runner);
+        let response = post_with(&f.store, &request(TARGET, &[]), &runner);
 
         assert_eq!(response.status, 204);
         assert!(response.body.is_empty());
+        assert_eq!(f.store.reads(), ["o/stack/a/session.json"]);
 
         let worktree = f.worktree.to_string_lossy().into_owned();
         assert_eq!(
@@ -494,10 +543,23 @@ printf '%s' {record} | {jq} -r "$filter"
         let error = "Unable to find application named 'Zed'";
         let runner = RecordingRunner::new(Err(error.to_string()));
 
-        let response = post_with(&f.root, &request("/open/zed/stack/a", &[]), &runner);
+        let response = post_with(&f.store, &request(TARGET, &[]), &runner);
 
         assert_eq!(response.status, 500);
         assert_eq!(response.body, error.as_bytes());
+    }
+
+    #[test]
+    fn store_failure_is_500_with_the_message() {
+        let mut f = fixture();
+        f.store.failure = Some(StoreError::Io("the disk is full".to_string()));
+        let runner = RecordingRunner::new(Ok(()));
+
+        let response = post_with(&f.store, &request(TARGET, &[]), &runner);
+
+        assert_eq!(response.status, 500);
+        assert_eq!(response.body, b"the disk is full");
+        assert!(runner.calls.into_inner().is_empty());
     }
 
     #[test]
@@ -516,11 +578,15 @@ printf '%s' {record} | {jq} -r "$filter"
         ] {
             f.write_session(&session);
 
-            let response = post_with(&f.root, &request("/open/zed/stack/a", &[]), &runner);
+            let response = post_with(&f.store, &request(TARGET, &[]), &runner);
 
             assert_eq!(response.status, 404, "{session}");
         }
 
+        f.store.write("session.json", "not json");
+        let response = post_with(&f.store, &request(TARGET, &[]), &runner);
+
+        assert_eq!(response.status, 404);
         assert!(runner.calls.into_inner().is_empty());
     }
 
@@ -530,12 +596,13 @@ printf '%s' {record} | {jq} -r "$filter"
         let runner = RecordingRunner::new(Ok(()));
 
         for target in [
-            "/open/vim/stack/a",
-            "/open/zed/stack/b",
-            "/open/zed/stack/..",
-            "/open/zed/stack/a/extra",
+            "/api/open/vim/o/stack/a",
+            "/api/open/zed/o/stack/b",
+            "/api/open/zed/o/stack/a/extra",
+            "/api/open/zed/stack/a",
+            "/open/zed/stack/a",
         ] {
-            let response = post_with(&f.root, &request(target, &[]), &runner);
+            let response = post_with(&f.store, &request(target, &[]), &runner);
 
             assert_eq!(response.status, 404, "{target}");
         }
@@ -547,24 +614,22 @@ printf '%s' {record} | {jq} -r "$filter"
     fn bad_names_are_404() {
         let f = fixture();
         let runner = RecordingRunner::new(Ok(()));
-        let session = serde_json::json!({ "worktree": f.worktree });
 
-        // Each target next to the `session.json` its names point at.
-        let targets = [
-            ("/open/zed/../a", "../sessions/a/session.json"),
-            ("/open/zed/stack/..", "stack/session.json"),
-        ];
-
-        for (_, file) in targets {
-            f.write(file, &session);
-        }
-
-        for (target, _) in targets {
-            let response = post_with(&f.root, &request(target, &[]), &runner);
+        for target in [
+            "/api/open/zed/%2e%2e/stack/a",
+            "/api/open/zed/o/stack/..",
+            "/api/open/zed/o/stack/.",
+            "/api/open/zed/o/a%2Fb/a",
+            "/api/open/zed/o/stack/a%5Cb",
+            "/api/open/zed//stack/a",
+            "/api/open/zed/o/%FF/a",
+        ] {
+            let response = post_with(&f.store, &request(target, &[]), &runner);
 
             assert_eq!(response.status, 404, "{target}");
         }
 
+        assert!(f.store.reads().is_empty());
         assert!(runner.calls.into_inner().is_empty());
     }
 
@@ -572,13 +637,11 @@ printf '%s' {record} | {jq} -r "$filter"
     fn open_ignores_the_old_job_layout() {
         let f = fixture();
         let runner = RecordingRunner::new(Ok(()));
-        fs::remove_file(f.root.join("stack/sessions/a/session.json")).unwrap();
-        f.write(
-            "stack/jobs/a/job.json",
-            &serde_json::json!({ "worktree": f.worktree }),
-        );
+        f.store.remove("session.json");
+        let job = serde_json::json!({ "worktree": f.worktree });
+        f.store.write("job.json", &job.to_string());
 
-        let response = post_with(&f.root, &request("/open/zed/stack/a", &[]), &runner);
+        let response = post_with(&f.store, &request(TARGET, &[]), &runner);
 
         assert_eq!(response.status, 404);
         assert!(runner.calls.into_inner().is_empty());
@@ -588,11 +651,12 @@ printf '%s' {record} | {jq} -r "$filter"
     fn foreign_origin_is_403() {
         let f = fixture();
         let runner = RecordingRunner::new(Ok(()));
-        let foreign = request("/open/zed/stack/a", &[("Origin", "http://evil")]);
+        let foreign = request(TARGET, &[("Origin", "http://evil")]);
 
-        let response = post_with(&f.root, &foreign, &runner);
+        let response = post_with(&f.store, &foreign, &runner);
 
         assert_eq!(response.status, 403);
+        assert!(f.store.reads().is_empty());
         assert!(runner.calls.into_inner().is_empty());
     }
 

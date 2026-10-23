@@ -31,7 +31,7 @@ test:
 # Run the full CI quality-gate set: fmt, clippy, test.
 build: check test
 
-# Run the gates, then build the app bundle and copy it to /Applications.
+# Run the gates, copy the app bundle to /Applications and the MCP server to ~/.local/bin.
 install: build
     #!/usr/bin/env bash
     set -euo pipefail
@@ -48,6 +48,10 @@ install: build
     fi
 
     cp -R "target/release/bundle/macos/Jam Board.app" /Applications/
+
+    cargo build --release -p jam-factory-mcp
+    mkdir -p "$HOME/.local/bin"
+    cp target/release/jam-factory-mcp "$HOME/.local/bin/"
 
 # Build release (no gates) and run the produced binary, forwarding args.
 run *ARGS:

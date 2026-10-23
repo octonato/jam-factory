@@ -2,7 +2,12 @@
 
 This procedure reviews a target and writes the findings to `report.md` in the run directory. The caller gives the target and the run directory. The caller may also give a problem statement.
 
-Read nothing under `.nogit/` outside the run directory. When `$FACTORY_ROOT` is set, read nothing under it outside the run directory.
+The run directory takes one of two forms:
+
+- A disk path, such as `.nogit/verify-20261022-101500/`. Read and write its files on disk.
+- `factory:{org}/{repo}/{session}/round-{N}/`, a round of a factory session. Read and write its files with the tools of the `jam-factory` server, as the plugin root's `skills/take/state.md` says. `{run directory}/reviews/x.md` is the path `round-{N}/reviews/x.md` in that session. Both forms are called the run directory.
+
+Read nothing under `.nogit/` outside the run directory. For a `factory:` run directory, call the `jam-factory` tools only on files inside it.
 
 ## 1. Resolve the target
 
@@ -19,7 +24,7 @@ If the diff is empty, say `Nothing to review.` and stop.
 
 If `git status` shows uncommitted changes, tell me they are not part of the review.
 
-Run `mkdir -p {run directory}/reviews`.
+For a disk run directory, run `mkdir -p {run directory}/reviews`. A `factory:` run directory needs no `mkdir`: its writes create the folders.
 
 ## 2. Run the reviewers
 
@@ -88,7 +93,7 @@ Give `jam:independent-reviewer`:
 - the target and the commands to read it
 - the problem statement
 - the `file` output mode
-- `{run directory}/reviews/` as the folder to write into
+- `{run directory}/reviews/` as the directory to write into
 
 For reviewer 2, load the `superpowers:requesting-code-review` skill with the Codex skill system. Use only its `code-reviewer.md` template. Skip its steps on acting on feedback. Dispatch a **general-purpose** agent with the template's prompt. Fill the placeholders:
 
@@ -98,7 +103,7 @@ For reviewer 2, load the `superpowers:requesting-code-review` skill with the Cod
 
 Add to its prompt:
 
-- do not read, list or search anything under `.nogit/`, or under `$FACTORY_ROOT` when it is set
+- do not read, list or search anything under `.nogit/`, and do not call the `jam-factory` tools
 - the **Finding rules** section below, word for word
 
 Tell reviewers 3 to 8:
@@ -107,7 +112,7 @@ Tell reviewers 3 to 8:
 - to return located findings, each with a severity, a location and a suggested fix
 - the **Finding rules** section below, word for word
 - not to edit or write any file
-- not to read, list or search anything under `.nogit/`, or under `$FACTORY_ROOT` when it is set
+- not to read, list or search anything under `.nogit/`, and not to call the `jam-factory` tools
 
 `code-simplifier` edits code by default, so tell it to report its suggestions as findings.
 

@@ -1,28 +1,30 @@
 ---
 name: just-vibe
-description: Run a quick task through the Jam Factory as a vibe session — no spec, no plan, no review — tracked in files under $FACTORY_ROOT. Run it on a feature branch, in the main checkout or in a worktree. Pass a description or a GitHub issue. Pass nothing to start from the conversation. It asks for clarification only when the request is unclear. Add -a/--autonomously to never ask, or -i/--interactive to confirm the request first. Add -r/--resume to resume the session. It commits the work and never merges or pushes.
+description: Run a quick task through the Jam Factory as a vibe session — no spec, no plan, no review — tracked in files that the jam-factory MCP server keeps. Run it on a feature branch, in the main checkout or in a worktree. Pass a description or a GitHub issue. Pass nothing to start from the conversation. It asks for clarification only when the request is unclear. Add -a/--autonomously to never ask, or -i/--interactive to confirm the request first. Add -r/--resume to resume the session. It commits the work and never merges or pushes.
 ---
 
 Run a quick task through the factory, as a vibe session.
 
 What I gave you: the arguments supplied with the invocation
 
-Factory root: the output of `echo "${FACTORY_ROOT:-unset}"`
-
 Worktree: the output of `git rev-parse --show-toplevel`
 
 Current branch: the output of `git branch --show-current`
 
-Read the extension root's `skills/take/state.md` before you start. It holds the format of every file this skill writes.
+Read the extension root's `skills/take/state.md` before you start. It holds the tools and the format of every file this skill writes.
 
 ## Where things are
 
 - **Worktree**: the value above. It is the main checkout or a linked worktree.
 - **Git repositories**: the worktree, plus each folder below it that holds a `.git` entry. A project can hold subprojects with their own git repositories. Every `git status`, restore and commit in this skill runs in each git repository.
-- **Factory root**: the value above. If it is `unset`, tell me to export `FACTORY_ROOT` as `<org>/.factory` in my shell alias. Also tell me to start Gemini with `--include-directories "$FACTORY_ROOT"`. Then stop. Never guess the path.
 - **Session id**: the last segment of the current branch. For `octonato/rate-limit`, it is `rate-limit`.
 - **Repo**: the name of the worktree's parent folder.
-- **Session folder**: `{factory root}/{repo}/sessions/{session id}/`.
+- **Org**: the name of the folder above the repo folder. For the worktree `~/Sources/octonato/jam-factory/rate-limit`, the org is `octonato` and the repo is `jam-factory`.
+- **Session**: the session named by `org`, `repo` and `session id`. The tools of the `jam-factory` MCP server read and write its files, as `state.md` says. Every file path in this skill, such as `request.md`, is relative to the session.
+
+If the `jam-factory` tools are missing, tell me to run `just install` in the `app/` folder of the jam-factory repository. Then stop.
+
+After this skill creates `session.json`, each change to it, such as "set `stage: done`", is an `update_session` call.
 
 ## Modes
 
@@ -48,9 +50,11 @@ Take the flags out of what I gave you:
 
 If I passed both mode flags, tell me they conflict and stop. The rest is the argument.
 
-- **The session folder holds `session.json` with `archived: true`**: tell me the session is archived and stop.
-- **The session folder holds `session.json`, and I passed `-r`**: if its `flow` is not `vibe`, tell me to resume it with `/jam:take -r` and stop. Otherwise go to **Resume**.
-- **The session folder holds `session.json`**: tell me the session already exists, and to pass `-r` to resume it. Stop.
+Read `session.json` with `read_file`. A `not_found` error means the session holds no `session.json`.
+
+- **The session holds `session.json` with `archived: true`**: tell me the session is archived and stop.
+- **The session holds `session.json`, and I passed `-r`**: if its `flow` is not `vibe`, tell me to resume it with `/jam:take -r` and stop. Otherwise go to **Resume**.
+- **The session holds `session.json`**: tell me the session already exists, and to pass `-r` to resume it. Stop.
 - **I passed `-r`**: tell me the branch has no session. Stop.
 - **The argument is a PR URL**: tell me that `/jam:take` reviews PRs. Stop. A PR URL holds `/pull/`.
 - **Anything else**: read the extension root's `skills/take/vibe.md` and go to its **New vibe session** section.
@@ -59,7 +63,7 @@ When you go to **Resume** and the argument is not empty, tell me the session alr
 
 ## Resume
 
-Read `session.json`. If I passed a mode flag, set `mode` to it.
+Read `session.json` with `read_file`. If I passed a mode flag, set `mode` to it.
 
 Tell me the session id, the mode and the stage in one line.
 
@@ -77,6 +81,7 @@ Show this list when a step says to show the usage:
 ## Rules
 
 - You never merge, push or open a PR.
-- Update `session.json` on every stage change, as `state.md` says.
+- Read and write the session's files only with the `jam-factory` tools, as `state.md` says.
+- Update `session.json` with `update_session` on every stage change.
 - Ask me only where the session's mode allows it. A blocked session is the one exception.
 - Keep me posted with one short line per stage change. For example: `fix-typo: implement done, 1 commit → done`.

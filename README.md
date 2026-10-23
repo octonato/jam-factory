@@ -106,28 +106,27 @@ The current extension stores commands directly under `commands/`, so Gemini expo
 
 ### Factory setup
 
-The factory needs a directory for session state outside your Git repositories. Set `FACTORY_ROOT` to its absolute path and use the same value in every conversation that should share those sessions.
+The factory keeps session state in files outside your Git repositories. The `jam-factory-mcp` server owns those files. Each plugin starts it as the `jam-factory` MCP server. The skills read and write session files only through that server.
 
-In this README, `<org>` means a local directory that groups your repositories, such as `$HOME/Sources/my-team`. It is a path placeholder, not a GitHub organization name or an assistant setting. With that layout, `<org>/.factory` could be `$HOME/Sources/my-team/.factory`. You can also choose another directory outside your repositories.
+Install the server from a clone of this repository. The build needs [rustup](https://rustup.rs/) and [mise](https://mise.jdx.dev/). `mise install` adds `just`, Node and the Tauri CLI:
 
 ```sh
-export FACTORY_ROOT="$HOME/Sources/my-team/.factory"
-mkdir -p "$FACTORY_ROOT"
+cd /absolute/path/to/jam-factory/app
+mise install
+just install
 ```
 
-Use your own path. Put the export in your shell profile or a launcher if you want it available in future sessions. From the repository or worktree you want to work on, start your assistant with access to that directory:
+`just install` builds Jam Board and the server. It copies `jam-factory-mcp` to `~/.local/bin`, which must be on your `PATH`.
 
-| Assistant | Launch command |
-|---|---|
-| Claude Code | `claude --add-dir "$FACTORY_ROOT"` |
-| Codex | `codex --sandbox workspace-write --add-dir "$FACTORY_ROOT"` |
-| Gemini CLI | `gemini --include-directories "$FACTORY_ROOT"` |
+The server keeps every session under one root folder, `~/.jam-factory/factory` by default. To use another folder, set `root` in `~/.jam-factory/config.json`. A leading `~/` expands to your home folder:
 
-Codex's `--add-dir` grants the directory write access in its workspace sandbox; see the [CLI reference](https://developers.openai.com/codex/cli/reference/). Gemini's flag adds it to the workspace; see the [Gemini CLI reference](https://geminicli.com/docs/cli/cli-reference/).
+```json
+{ "root": "~/Sources/factory" }
+```
 
-If you use Claude Code's sandbox, also add the absolute factory path to `sandbox.filesystem.allowWrite` in your settings. For a sandboxed Gemini session, make that path writable through your sandbox configuration or mount it into the container; see [Gemini sandboxing](https://geminicli.com/docs/cli/sandbox/). The session needs both file editing and shell write access to the factory directory.
+Each session lives in `<root>/<org>/<repo>/sessions/<session id>/`. `<repo>` is the name of the worktree's parent folder, and `<org>` is the name of the folder above it. For the worktree `~/Sources/my-team/sdk/rate-limit`, `<org>` is `my-team` and `<repo>` is `sdk`.
 
-The factory shares this directory across repositories and worktrees. Create a feature branch before starting a session:
+The factory shares this folder across orgs, repositories and worktrees. Create a feature branch before starting a session:
 
 ```sh
 git switch -c my-feature
@@ -256,17 +255,16 @@ Without `-r`, `/jam:just-vibe` refuses to run on a branch that already has a ses
 ### Files
 
 ```
-<org>/.factory/
-  config.json                    { "port": 8731 }
-  dashboard.html
-  marked.min.js                  vendored markdown renderer
-  purify.min.js                  vendored HTML sanitizer
-  <repo>/sessions/<session id>/
+~/.jam-factory/
+  config.json                    optional: { "root": "<root>" }
+<root>/                          ~/.jam-factory/factory by default
+  <org>/<repo>/sessions/<session id>/
     session.json                 the session's mode, stage, round and counts
     request.md                   the description, issue or PR the session started from
     spec.md, plan.md, tasks.md
     decisions.md                 dismissed findings, never shown again
     deferred.md                  deferred findings, with their issue URLs
+    runs.jsonl                   one line per agent run and per stage
     feedback-pending.md          staging checkpoint during a feedback import
     round-<N>/
       reviews/                   one file per reviewer; github-feedback.md for imported feedback
@@ -276,7 +274,7 @@ Without `-r`, `/jam:just-vibe` refuses to run on a branch that already has a ses
       submit.md                  the PR comment, review sessions only
 ```
 
-A vibe session writes only `session.json`, `request.md` and `tasks.md`. Its `request.md` may end with `## Clarifications` and `## Assumptions`: the questions the factory asked with your answers, and the choices it made alone.
+The `jam-factory-mcp` server writes every file under `<root>`. A vibe session writes only `session.json`, `request.md`, `tasks.md` and `runs.jsonl`. Its `request.md` may end with two sections. `## Clarifications` holds the questions the factory asked and your answers. `## Assumptions` holds the choices the factory made alone.
 
 ## Commands
 
@@ -300,8 +298,8 @@ The examples below use Claude Code syntax: `/jam:take`, `/jam:verify`, and so on
 
 | Skill | Description |
 |---|---|
-| `/jam:take` | Runs one session through the factory: spec, plan, implement, verify and triage. It tracks the session in files under $FACTORY_ROOT. Run it on a feature branch, in the main checkout or in a worktree. Pass a description or a GitHub issue to start the branch's session. Pass nothing to start it from the conversation. Pass a PR URL, or `-p`, to review a coworker's PR as a session. Add `-r` to resume the session, or `-v` to run another verify round on a done session. Add `-f` to import new PR feedback into a done build session. It runs on its own and asks only when the request is unclear. Add `-a` to never ask, or `-i` to approve every step. It never merges or pushes. |
-| `/jam:just-vibe` | Runs a quick task through the factory as a vibe session: no spec, no plan, no review. It tracks the session in files under $FACTORY_ROOT. Run it on a feature branch, in the main checkout or in a worktree. Pass a description or a GitHub issue. Pass nothing to start from the conversation. It asks for clarification only when the request is unclear. Add `-a` to never ask, or `-i` to confirm the request first. Add `-r` to resume the session. It commits the work and never merges or pushes. |
+| `/jam:take` | Runs one session through the factory: spec, plan, implement, verify and triage. The `jam-factory` MCP server keeps its session files. Run it on a feature branch, in the main checkout or in a worktree. Pass a description or a GitHub issue to start the branch's session. Pass nothing to start it from the conversation. Pass a PR URL, or `-p`, to review a coworker's PR as a session. Add `-r` to resume the session, or `-v` to run another verify round on a done session. Add `-f` to import new PR feedback into a done build session. It runs on its own and asks only when the request is unclear. Add `-a` to never ask, or `-i` to approve every step. It never merges or pushes. |
+| `/jam:just-vibe` | Runs a quick task through the factory as a vibe session: no spec, no plan, no review. The `jam-factory` MCP server keeps its session files. Run it on a feature branch, in the main checkout or in a worktree. Pass a description or a GitHub issue. Pass nothing to start from the conversation. It asks for clarification only when the request is unclear. Add `-a` to never ask, or `-i` to confirm the request first. Add `-r` to resume the session. It commits the work and never merges or pushes. |
 | `/jam:verify` | Read-only review of a PR, a commit range or the current branch. Under 300 changed lines, it runs jam:independent-reviewer or superpowers:requesting-code-review, picked at random. From 300 lines, it runs both. Then it offers extra reviewers suited to the diff (from `pr-review-toolkit` in Claude Code). It checks each finding against the code. It writes one report to .nogit/verify-{timestamp}/, or to the directory --out names. Use /jam:submit-review to turn the report into a PR comment. |
 | `/jam:submit-review` | Turns a /jam:verify report into a PR comment. The comment holds only the findings and their severity. Pass verify-{timestamp} to use a run on disk. Pass a target to run /jam:verify first. Pass nothing to pick a run from a list. It drops the findings that comments on the PR already report, then offers to open the comment on GitHub. It never posts the comment. |
 | `/jam:independent-reviewer` | Independent, read-only code review of a PR, a commit range or the current branch. A fresh subagent reviews the change and never learns how it was built. It writes the report to .nogit/verify-{timestamp}/independent-review.md. Add --report-in-chat to get the report in chat instead. |

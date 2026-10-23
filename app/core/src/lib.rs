@@ -14,5 +14,6 @@
 
 //! Core logic for the Jam Board desktop app.
 
-pub mod factory;
+pub mod mcp_client;
 pub mod server;
+pub mod store;

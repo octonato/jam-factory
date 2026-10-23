@@ -1,6 +1,6 @@
 # Factory vibe session
 
-This procedure runs a vibe session. `skills/just-vibe/SKILL.md` and `skills/take/SKILL.md` route here. The formats are in `state.md`.
+This procedure runs a vibe session. `skills/just-vibe/SKILL.md` and `skills/take/SKILL.md` route here. The tools and the formats are in `state.md`. Read and write the session's files only with the `jam-factory` tools.
 
 ## Modes
 
@@ -16,7 +16,7 @@ Re-read `session.json` before each stage and before each step that may ask me so
 
 ## New vibe session
 
-`SKILL.md` already checked that the session folder holds no `session.json`.
+`SKILL.md` already checked that the session holds no `session.json`.
 
 1. Find the base, the branch the session merges into. Take the first that works:
    1. The remote's default branch: `git symbolic-ref --short refs/remotes/{remote}/HEAD`, with the remote prefix dropped. The remote is `upstream` when `git remote` lists it, otherwise `origin`.
@@ -28,34 +28,34 @@ Re-read `session.json` before each stage and before each step that may ask me so
    - **An empty argument**: the request is what we discussed in this conversation. Write the goal, the decisions we made and the constraints. A reader who never saw the conversation must be able to act on it.
    - **An issue number, `#n` or an issue URL**: run `gh issue view {issue} --json number,title,body,url`. The request is the issue's title, URL and body.
    - **Anything else**: the request is the argument, verbatim.
-6. Write `{session folder}/request.md` with the request, as `state.md` shows.
-7. Write `{session folder}/tasks.md`, as `state.md` shows, with one task `T1`. Its title names the request in a few words. Set `source: request`, `status: open` and `commit: none`. Its text points to `request.md`.
-8. Write `{session folder}/session.json` with this worktree, the current branch and the base. Set `mode` from the flag, or `default` without one. Set `flow: vibe`, `stage: implement`, `round: 0`, `lastRound: false`, `clarified: false`, `tasksOpen: 1`, every other count `0`, `blocked: null` and `archived: false`. Create the folders before writing the file.
-9. Append a `request` line to `runs.jsonl` with `agent: "main"`. Set its `started` and `ended` to the current time. Set `durationMs: null`.
+6. Create `request.md` with `write_file`, holding the request, as `state.md` shows.
+7. Create `tasks.md` with `write_file`, as `state.md` shows, with one task `T1`. Its title names the request in a few words. Set `source: request`, `status: open` and `commit: none`. Its text points to `request.md`.
+8. Create `session.json` with `write_file`, holding this worktree, the current branch and the base. Set `mode` from the flag, or `default` without one. Set `flow: vibe`, `stage: implement`, `round: 0`, `lastRound: false`, `clarified: false`, `tasksOpen: 1`, every other count `0`, `blocked: null` and `archived: false`.
+9. Append a `request` line to `runs.jsonl` with `append_file` and `agent: "main"`. Set its `started` and `ended` to the current time. Set `durationMs: null`.
 10. Go to **Implement**.
 
 ## Implement
 
-1. If `T1` in `tasks.md` is `done`, set `stage: done` and go to **Done**. If it is `failed`, set it back to `open`.
+1. Read `tasks.md` with `read_file`. If `T1` is `done`, set `stage: done` with `update_session` and go to **Done**. If it is `failed`, set it back to `open` with `edit_file`.
 2. Run `git status --porcelain` in each git repository. If it prints anything, set `stage: blocked` and `blocked: { "stage": "implement", "reason": "dirty worktree" }`. List the files and stop.
 3. **Clarify.** Follow the mode:
    - **`default`**: skip this step when `session.json` holds `clarified: true`. Otherwise judge whether the request is clear. A request is clear when it has one reading, a bounded scope and a checkable result. Tell me your judgement in one line. If it is unclear, ask me until it is clear.
    - **`autonomous`**: ask me nothing.
    - **`interactive`**: restate the request and your approach in a few lines, with the `## Clarifications` and `## Assumptions` that `request.md` holds. Ask me to confirm or correct them, until I confirm.
 
-   In `default` and `interactive` mode, append any answers I gave under `## Clarifications` in `request.md`, as `state.md` shows. Then set `clarified: true` in `session.json`.
+   In `default` and `interactive` mode, add any answers I gave under `## Clarifications` in `request.md` with `append_file` or `edit_file`, as `state.md` shows. Then set `clarified: true` with `update_session`.
 4. **Do the work** in this conversation, with no agent. Take the `started` time for `runs.jsonl` first. Follow the **Implement**, **Test** and **Never** sections of the extension root's `agents/implementer.md`. The task is the request in `request.md`, with my answers. When the work hits a choice the request does not settle, follow the mode:
    - **`default` and `interactive`**: ask me.
    - **`autonomous`**: choose alone.
-5. Append the answers I gave during the work under `## Clarifications` and the choices you made alone under `## Assumptions` in `request.md`, as `state.md` shows.
-6. Append an `implement` line to `runs.jsonl` with `agent: "main"` and `task: "T1"`. Set `outcome: "failed"` when you cannot finish the work or make the checks pass, and `outcome: "done"` otherwise.
+5. With `append_file` or `edit_file`, add the answers I gave during the work under `## Clarifications` and the choices you made alone under `## Assumptions` in `request.md`, as `state.md` shows.
+6. Append an `implement` line to `runs.jsonl` with `append_file`, `agent: "main"` and `task: "T1"`. Set `outcome: "failed"` when you cannot finish the work or make the checks pass, and `outcome: "done"` otherwise.
 7. **On failure**, when you cannot finish the work or make the checks pass:
    1. In each git repository, restore the tracked files with `git restore --staged --worktree .`.
    2. In each git repository, delete only the untracked files the session created, as `git status --porcelain` lists them.
-   3. Set `T1` to `status: failed`.
+   3. Set `T1` to `status: failed` with `edit_file`.
    4. Set `stage: blocked` and `blocked: { "stage": "implement", "reason": "<the failure's reason>" }`. Stop.
 8. **Commit** as section **4. Commit** of the extension root's `commands/autonomously.toml` says. The request is the task. In each git repository the work changed, the session makes one commit: phase 0, with a Conventional Commit subject. Take its subject and body from the request and the change. If a commit fails, set `stage: blocked` and `blocked: { "stage": "implement", "reason": "<git's error>" }`. Leave the changes in place. Stop.
-9. Record each commit in the `commit` field of `T1`, as `state.md` shows, and set `T1` to `status: done`. Update `tasksOpen` and `tasksDone`. Set `stage: done` and go to **Done**.
+9. With `edit_file`, record each commit in the `commit` field of `T1`, as `state.md` shows, and set `T1` to `status: done`. With one `update_session` call, update `tasksOpen` and `tasksDone` and set `stage: done`. Go to **Done**.
 
 ## Done
 
@@ -63,7 +63,7 @@ Show me:
 
 - the commits, one line each, from `tasks.md`: short hash and subject
 - the assumptions, from `## Assumptions` in `request.md`, when it holds that section
-- the session folder
+- the session, as `factory:{org}/{repo}/{session id}/`
 
 Tell me that `/jam:verify` reviews the branch. Remind me that the branch is ready for me to push, merge or open a PR.
 

@@ -12,117 +12,58 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Project windows, the welcome window and the app menu.
+//! The board window and the `jam-factory-mcp` server behind it.
 
-use std::collections::HashMap;
-use std::fmt;
+use std::env;
+use std::ffi::OsStr;
+use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
-use tauri::menu::{Menu, MenuItem, MenuItemKind};
-use tauri::{AppHandle, Manager, Url, WebviewUrl, WebviewWindowBuilder, Wry};
+use tauri::{AppHandle, Manager, Url, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 
-use jam_board_core::factory::{self, FactoryError};
+use jam_board_core::mcp_client::McpStore;
 use jam_board_core::server::Server;
 
 use crate::navigation::{self, Navigation};
-use crate::recent_store::{RecentStore, display_path};
-use crate::session_store::ProjectStore;
 
-pub const OPEN_PROJECT: &str = "open-project";
+const SERVER_BINARY: &str = "jam-factory-mcp";
 
-const WELCOME: &str = "welcome";
+const DEFAULT_PORT: u16 = 8731;
 
-/// Maps each project window label to its project path and its server.
-#[derive(Default)]
-pub struct Windows {
-    projects: Mutex<HashMap<String, (PathBuf, Server)>>,
-    next: AtomicU64,
-}
+const MAIN: &str = "main";
 
-impl Windows {
-    fn label_for(&self, path: &Path) -> Option<String> {
-        self.projects
-            .lock()
-            .unwrap()
-            .iter()
-            .find(|(_, (p, _))| p.as_path() == path)
-            .map(|(label, _)| label.clone())
-    }
+const INSTALL_HINT: &str = "Run `just install` in app/.";
 
-    fn insert(&self, path: &Path, server: Server) -> String {
-        let label = format!("project-{}", self.next.fetch_add(1, Ordering::Relaxed));
-        self.projects
-            .lock()
-            .unwrap()
-            .insert(label.clone(), (path.to_path_buf(), server));
-        label
-    }
-
-    /// Forgets the window `label` and stops its server.
-    fn remove(&self, label: &str) -> Option<PathBuf> {
-        let (path, _server) = self.projects.lock().unwrap().remove(label)?;
-        Some(path)
-    }
-
-    fn is_empty(&self) -> bool {
-        self.projects.lock().unwrap().is_empty()
+/// Opens the board window, or shows an error dialog and exits.
+pub fn open_board_window(app: &AppHandle) {
+    if let Err(message) = try_open_board_window(app) {
+        let handle = app.clone();
+        app.dialog()
+            .message(message)
+            .kind(MessageDialogKind::Error)
+            .show(move |_| handle.exit(1));
     }
 }
 
-/// A failure to open a project window.
-#[derive(Debug)]
-pub enum OpenError {
-    /// The picked folder is not a usable project.
-    Factory(FactoryError),
-    /// The project's server cannot start.
-    Server(String),
-    /// The project window cannot be built.
-    Window(String),
-}
-
-impl fmt::Display for OpenError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            OpenError::Factory(e) => write!(f, "{e}"),
-            OpenError::Server(message) | OpenError::Window(message) => f.write_str(message),
-        }
-    }
-}
-
-/// Opens a window for the project at `picked`, or focuses the one already open.
-pub fn open_project_window(app: &AppHandle, picked: PathBuf) -> Result<(), OpenError> {
-    let factory = factory::open(&picked).map_err(OpenError::Factory)?;
-
-    let windows = app.state::<Windows>();
-    if let Some(window) = windows
-        .label_for(&factory.project)
-        .and_then(|label| app.get_webview_window(&label))
-    {
-        let _ = window.set_focus();
-        app.state::<RecentStore>().touch(&factory.project);
-        return Ok(());
-    }
-
-    let server = Server::start(factory.root.clone(), factory.port).map_err(|e| {
-        OpenError::Server(format!(
-            "Cannot serve {} on port {}: {}. Change the port in {}.",
-            factory.root.display(),
-            factory.port,
-            e,
-            factory.config_file().display()
-        ))
+/// Spawns the server binary, serves the dashboard on port 8731 or a free port, and opens one window on it.
+fn try_open_board_window(app: &AppHandle) -> Result<(), String> {
+    let home = app.path().home_dir().map_err(|e| e.to_string())?;
+    let program = find_server(&home, env::var_os("PATH").as_deref()).ok_or_else(|| {
+        format!("Cannot find {SERVER_BINARY} in ~/.local/bin or on PATH.\n\n{INSTALL_HINT}")
     })?;
+
+    let store = Arc::new(McpStore::spawn(program)?);
+    let server = with_fallback_port(DEFAULT_PORT, |port| Server::start(store.clone(), port))
+        .map_err(|e| format!("Cannot start the board server: {e}"))?;
 
     let port = server.port();
     let url = Url::parse(&format!("http://127.0.0.1:{port}/dashboard.html"))
-        .map_err(|e| OpenError::Window(e.to_string()))?;
-    let label = windows.insert(&factory.project, server);
+        .map_err(|e| e.to_string())?;
 
-    let built = WebviewWindowBuilder::new(app, &label, WebviewUrl::External(url))
-        .title(format!("Jam Board — {}", factory.name()))
+    WebviewWindowBuilder::new(app, MAIN, WebviewUrl::External(url))
+        .title("Jam Board")
         .inner_size(1200.0, 800.0)
         .on_navigation(move |url| match navigation::decide(url, port) {
             Navigation::Stay => true,
@@ -132,186 +73,132 @@ pub fn open_project_window(app: &AppHandle, picked: PathBuf) -> Result<(), OpenE
             }
             Navigation::Block => false,
         })
-        .build();
-    if let Err(e) = built {
-        windows.remove(&label);
-        return Err(OpenError::Window(e.to_string()));
-    }
+        .build()
+        .map_err(|e| format!("Cannot open the board window: {e}"))?;
 
-    app.state::<ProjectStore>().add(&factory.project);
-    app.state::<RecentStore>().touch(&factory.project);
-    if let Some(welcome) = app.get_webview_window(WELCOME) {
-        let _ = welcome.close();
-    }
+    app.manage(server);
 
     Ok(())
 }
 
-/// Opens the welcome window, or focuses it when it is already open.
-pub fn open_welcome_window(app: &AppHandle) {
-    if let Some(window) = app.get_webview_window(WELCOME) {
-        let _ = window.set_focus();
-        return;
-    }
-
-    let built = WebviewWindowBuilder::new(app, WELCOME, WebviewUrl::App("index.html".into()))
-        .title("Jam Board")
-        .inner_size(600.0, 400.0)
-        .build();
-    if let Err(e) = built {
-        eprintln!("jam-board: cannot open the welcome window: {e}");
+/// Calls `start` with `port`, then with port 0 when `port` is in use.
+fn with_fallback_port<T>(port: u16, start: impl Fn(u16) -> io::Result<T>) -> io::Result<T> {
+    match start(port) {
+        Err(e) if e.kind() == io::ErrorKind::AddrInUse => start(0),
+        result => result,
     }
 }
 
-/// Shows a folder picker and opens the picked project.
-pub fn pick_project(app: &AppHandle) {
-    let handle = app.clone();
-    app.dialog().file().pick_folder(move |folder| {
-        let Some(path) = folder.and_then(|f| f.into_path().ok()) else {
-            return;
-        };
-
-        if let Err(e) = open_project_window(&handle, path) {
-            show_error(&handle, e.to_string());
-        }
-    });
-}
-
-/// Shows `message` in a native error dialog.
-fn show_error(app: &AppHandle, message: String) {
-    app.dialog()
-        .message(message)
-        .kind(MessageDialogKind::Error)
-        .show(|_| {});
-}
-
-/// Reopens the stored projects, or the welcome window when none can open.
-pub fn restore(app: &AppHandle) {
-    let store = app.state::<ProjectStore>();
-    for path in store.paths() {
-        match open_project_window(app, path.clone()) {
-            Ok(()) => {}
-            Err(OpenError::Server(message)) => show_error(app, message),
-            Err(e) => {
-                eprintln!("jam-board: {e}");
-                store.remove(&path);
-            }
-        }
+/// Finds `jam-factory-mcp` in `{home}/.local/bin`, else in the first folder of `path_var` that has it.
+pub fn find_server(home: &Path, path_var: Option<&OsStr>) -> Option<PathBuf> {
+    let local = home.join(".local").join("bin").join(SERVER_BINARY);
+    if local.is_file() {
+        return Some(local);
     }
 
-    if app.state::<Windows>().is_empty() {
-        open_welcome_window(app);
-    }
-}
-
-/// Stops the closing window's server and forgets its project.
-pub fn on_close_requested(window: &tauri::Window) {
-    let app = window.app_handle();
-
-    let windows = app.state::<Windows>();
-    let Some(path) = windows.remove(window.label()) else {
-        return;
-    };
-
-    app.state::<ProjectStore>().remove(&path);
-    if windows.is_empty() {
-        open_welcome_window(app);
-    }
-}
-
-/// Builds the default menu with an Open Project… item in File.
-pub fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
-    let menu = Menu::default(app)?;
-    let open = MenuItem::with_id(
-        app,
-        OPEN_PROJECT,
-        "Open Project…",
-        true,
-        Some("CmdOrCtrl+O"),
-    )?;
-
-    for item in menu.items()? {
-        if let MenuItemKind::Submenu(submenu) = item
-            && submenu.text()? == "File"
-        {
-            submenu.insert(&open, 0)?;
-        }
-    }
-
-    Ok(menu)
-}
-
-#[tauri::command]
-pub async fn open_project_folder(app: AppHandle) {
-    pick_project(&app);
-}
-
-/// Lists the recent projects as `path`, `name` and `display` entries, most recent first.
-#[tauri::command]
-pub fn recent_factories(app: AppHandle) -> Vec<serde_json::Value> {
-    let home = app.path().home_dir().ok();
-
-    app.state::<RecentStore>()
-        .paths()
-        .iter()
-        .map(|path| {
-            let full = path.display().to_string();
-            let name = path
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_else(|| full.clone());
-            let display = match &home {
-                Some(home) => display_path(path, home),
-                None => full.clone(),
-            };
-
-            serde_json::json!({ "path": full, "name": name, "display": display })
-        })
-        .collect()
-}
-
-/// Opens the recent project at `path`, and drops it from the list when it has no `.factory` folder.
-#[tauri::command]
-pub async fn open_recent_factory(app: AppHandle, path: String) {
-    let path = PathBuf::from(&path);
-
-    if let Err(e) = open_project_window(&app, path.clone()) {
-        if drops_recent(&e) {
-            app.state::<RecentStore>().remove(&path);
-        }
-        show_error(&app, e.to_string());
-    }
-}
-
-/// Tells whether `e` removes the project from the recent list.
-fn drops_recent(e: &OpenError) -> bool {
-    matches!(e, OpenError::Factory(FactoryError::NoFactory(_)))
+    env::split_paths(path_var?)
+        .map(|dir| dir.join(SERVER_BINARY))
+        .find(|candidate| candidate.is_file())
 }
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
+    use std::ffi::OsString;
+    use std::fs;
+    use std::net::TcpListener;
+
     use super::*;
 
-    #[test]
-    fn a_missing_factory_drops_the_entry() {
-        let e = OpenError::Factory(FactoryError::NoFactory(PathBuf::from("/src/a")));
+    fn binary_in(dir: &Path) -> PathBuf {
+        fs::create_dir_all(dir).unwrap();
+        let binary = dir.join(SERVER_BINARY);
+        fs::write(&binary, "").unwrap();
+        binary
+    }
 
-        assert!(drops_recent(&e));
+    fn path_var(dirs: &[&Path]) -> OsString {
+        env::join_paths(dirs).unwrap()
     }
 
     #[test]
-    fn other_errors_keep_the_entry() {
-        let errors = [
-            OpenError::Factory(FactoryError::Config {
-                path: PathBuf::from("/src/a/.factory/config.json"),
-                reason: "bad port".into(),
-            }),
-            OpenError::Server("port in use".into()),
-            OpenError::Window("no window".into()),
-        ];
+    fn prefers_local_bin() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let local = binary_in(&home.join(".local").join("bin"));
+        let on_path = dir.path().join("bin");
+        binary_in(&on_path);
 
-        for e in errors {
-            assert!(!drops_recent(&e), "{e:?}");
-        }
+        let found = find_server(&home, Some(&path_var(&[&on_path])));
+
+        assert_eq!(found, Some(local));
+    }
+
+    #[test]
+    fn falls_back_to_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let empty = dir.path().join("empty");
+        fs::create_dir_all(&empty).unwrap();
+        let first = dir.path().join("first");
+        let expected = binary_in(&first);
+        let second = dir.path().join("second");
+        binary_in(&second);
+
+        let found = find_server(&home, Some(&path_var(&[&empty, &first, &second])));
+
+        assert_eq!(found, Some(expected));
+    }
+
+    #[test]
+    fn none_when_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let empty = dir.path().join("empty");
+        fs::create_dir_all(&empty).unwrap();
+        fs::create_dir_all(home.join(".local").join("bin").join(SERVER_BINARY)).unwrap();
+
+        assert_eq!(find_server(&home, Some(&path_var(&[&empty]))), None);
+        assert_eq!(find_server(&home, None), None);
+    }
+
+    #[test]
+    fn uses_the_port_when_it_is_free() {
+        let tried = RefCell::new(Vec::new());
+
+        let port = with_fallback_port(DEFAULT_PORT, |port| {
+            tried.borrow_mut().push(port);
+            Ok(port)
+        })
+        .unwrap();
+
+        assert_eq!(port, DEFAULT_PORT);
+        assert_eq!(tried.into_inner(), vec![DEFAULT_PORT]);
+    }
+
+    #[test]
+    fn falls_back_to_a_free_port_when_taken() {
+        let taken = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let taken_port = taken.local_addr().unwrap().port();
+
+        let listener =
+            with_fallback_port(taken_port, |port| TcpListener::bind(("127.0.0.1", port))).unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        assert_ne!(port, taken_port);
+        assert_ne!(port, 0);
+    }
+
+    #[test]
+    fn other_errors_do_not_fall_back() {
+        let tried = RefCell::new(Vec::new());
+
+        let result: io::Result<()> = with_fallback_port(DEFAULT_PORT, |port| {
+            tried.borrow_mut().push(port);
+            Err(io::ErrorKind::PermissionDenied.into())
+        });
+
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(tried.into_inner(), vec![DEFAULT_PORT]);
     }
 }

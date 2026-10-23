@@ -35,7 +35,16 @@ class Target {
   }
 }
 
-function dashboard({ script = source, pageWidth = 1200, pageLeft = 0, splitterWidth = 6, fetcher } = {}) {
+// Returns the `.row.card` rows of `html`, each with its decoded `data-dir`.
+function cardRows(html) {
+  return [...html.matchAll(/class="row card[^"]*" data-dir="([^"]*)"/g)].map((match) => ({
+    dataset: { dir: match[1].replace(/&#(\d+);/g, (_, code) => String.fromCharCode(code)) },
+    classList: { toggle: () => {} },
+    scrollIntoView: () => {},
+  }))
+}
+
+function dashboard({ script = source, pageWidth = 1200, pageLeft = 0, splitterWidth = 6, fetcher, storage = new Map() } = {}) {
   const elements = new Map()
   const calls = []
   const geometry = { pageWidth, pageLeft, splitterWidth }
@@ -64,12 +73,18 @@ function dashboard({ script = source, pageWidth = 1200, pageLeft = 0, splitterWi
     return el
   }
 
-  for (const id of ['page', 'font-down', 'font-up', 'font-value']) element(id)
+  for (const id of ['page', 'status', 'problems', 'font-down', 'font-up', 'font-value']) element(id)
 
+  let pageHtml = ''
+  elements.get('page').querySelectorAll = () => cardRows(pageHtml)
   Object.defineProperty(elements.get('page'), 'innerHTML', {
+    get: () => pageHtml,
     set(value) {
-      this.firstElementChild = null
-      if (!value.includes('class="session-page"')) return
+      pageHtml = value
+      if (!value.includes('class="session-page"')) {
+        this.firstElementChild = element('list')
+        return
+      }
 
       this.firstElementChild = element('session-page')
       for (const id of ['metro-pane', 'session-card', 'metro', 'splitter', 'viewer-head', 'view']) {
@@ -86,18 +101,15 @@ function dashboard({ script = source, pageWidth = 1200, pageLeft = 0, splitterWi
   const context = vm.createContext({
     document,
     window,
-    localStorage: { getItem: () => null },
-    fetch: async (url) => {
+    location: { hash: '' },
+    localStorage: {
+      getItem: (key) => storage.get(key) ?? null,
+      setItem: (key, value) => storage.set(key, String(value)),
+    },
+    fetch: async (url, options) => {
       calls.push(url)
       if (!fetcher) throw new Error(`unexpected fetch: ${url}`)
-      return fetcher(url)
-    },
-    DOMParser: class {
-      parseFromString(text) {
-        return {
-          querySelectorAll: () => [...text.matchAll(/href="([^"]*)"/g)].map((match) => ({ getAttribute: () => match[1] })),
-        }
-      }
+      return fetcher(url, options)
     },
   })
   const run = (code) => vm.runInContext(code, context, { filename: 'dashboard.html' })
@@ -105,8 +117,11 @@ function dashboard({ script = source, pageWidth = 1200, pageLeft = 0, splitterWi
   return { run, context, elements, window, calls, geometry }
 }
 
-const session = { repo: 'repo', id: 'session', dir: 'repo/sessions/session/', flow: 'build', stage: 'implement', round: 0 }
+const session = { org: 'org', repo: 'repo', id: 'session', dir: 'api/file/org/repo/session/', flow: 'build', stage: 'implement', round: 0 }
+const filesUrl = 'api/files/org/repo/session'
 const response = (text, ok = true) => ({ ok, status: ok ? 200 : 500, text: async () => text })
+const filesReply = (files) => response(JSON.stringify({ files }))
+const sessionsReply = (sessions) => response(JSON.stringify({ sessions }))
 const plain = (value) => JSON.parse(JSON.stringify(value))
 
 function modelGate(app) {
@@ -128,21 +143,21 @@ test('the model gate rejects integerOrNull returning zero', () => {
 })
 
 test('rendering an old session lists files and never fetches an absent run log', async () => {
-  const app = dashboard({ fetcher: () => response('<a href="session.json">session.json</a>') })
+  const app = dashboard({ fetcher: () => filesReply(['session.json']) })
   app.context.session = session
   await app.run('renderSessionPage(session, null)')
-  assert.deepEqual(app.calls, [session.dir])
+  assert.deepEqual(app.calls, [filesUrl])
 })
 
 test('a listed run log is parsed after listing and tolerates a truncated line', async () => {
   const app = dashboard({
-    fetcher: (url) => response(url.endsWith('runs.jsonl')
-      ? '{"stop":"spec","round":0,"agent":"writer","tokens":5}\n{"stop":"pl'
-      : '<a href="runs.jsonl">runs.jsonl</a>'),
+    fetcher: (url) => url.endsWith('runs.jsonl')
+      ? response('{"stop":"spec","round":0,"agent":"writer","tokens":5}\n{"stop":"pl')
+      : filesReply(['runs.jsonl']),
   })
   app.context.session = session
   await app.run('renderSessionPage(session, null)')
-  assert.deepEqual(app.calls, [session.dir, `${session.dir}runs.jsonl`])
+  assert.deepEqual(app.calls, [filesUrl, `${session.dir}runs.jsonl`])
   assert.match(app.elements.get('session-card').innerHTML, /5 agent tokens/)
   const runs = await app.run('loadRuns("a space/", ["runs.jsonl"])')
   assert.equal(runs.length, 1)
@@ -271,8 +286,7 @@ test('finalize skips the following Implement while the next-round outcome retain
 
 test('rendering a session reads each round triage outcome and skips Implement after finalize', async () => {
   const pages = {
-    [session.dir]: '<a href="round-1/">round-1/</a>',
-    [`${session.dir}round-1/`]: '<a href="triage.md">triage.md</a>',
+    [filesUrl]: JSON.stringify({ files: ['round-1/triage.md'] }),
     [`${session.dir}round-1/triage.md`]: '# Triage: round 1\n\n- F1: dismiss → D1\n\noutcome: finalize\n',
   }
   const app = dashboard({ fetcher: (url) => response(pages[url] ?? '', Object.hasOwn(pages, url)) })
@@ -299,4 +313,146 @@ test('parallel Review time spans all runs and falls back to durations when any t
     app.context.entries[1].started = started
     assert.equal(review().durationMs, 825000)
   }
+})
+
+test('loads sessions from the api in one call', async () => {
+  const entries = [
+    { org: 'a', repo: 'a b%c', session: 's1', data: { repo: 'other', id: 'other', stage: 'implement' } },
+    { org: 'b', repo: 'repo', session: 's2', data: { stage: 'spec' } },
+  ]
+  const app = dashboard({ fetcher: (url) => (url === 'api/sessions' ? sessionsReply(entries) : filesReply([])) })
+  const { sessions, problems } = plain(await app.run('loadSessions()'))
+
+  assert.deepEqual(app.calls, ['api/sessions'])
+  assert.deepEqual(problems, [])
+  assert.deepEqual(
+    sessions.map(({ org, repo, id, dir, stage }) => ({ org, repo, id, dir, stage })),
+    [
+      { org: 'a', repo: 'a b%c', id: 's1', dir: 'api/file/a/a b%c/s1/', stage: 'implement' },
+      { org: 'b', repo: 'repo', id: 's2', dir: 'api/file/b/repo/s2/', stage: 'spec' },
+    ],
+  )
+
+  app.context.loaded = sessions
+  await app.run('loadRuns(loaded[0].dir, ["runs.jsonl"])')
+  await app.run('listFiles(loaded[0])')
+  assert.deepEqual(app.calls.slice(1), ['api/file/a/a%20b%25c/s1/runs.jsonl', 'api/files/a/a%20b%25c/s1'])
+})
+
+test('lists a broken session as a problem', async () => {
+  const entries = [
+    { org: 'a', repo: 'repo', session: 'broken', error: 'expected value at line 1 column 1' },
+    { org: 'a', repo: 'repo', session: 'fine', data: { flow: 'build', stage: 'spec' } },
+    { org: 'b', repo: 'repo', session: 'odd', data: { flow: 'build', stage: 'nope' } },
+  ]
+  const app = dashboard({ fetcher: () => sessionsReply(entries) })
+  const { sessions, problems } = plain(await app.run('loadSessions()'))
+
+  assert.deepEqual(sessions.map((s) => s.id), ['fine', 'odd'])
+  assert.deepEqual(problems, ['a/repo/broken: expected value at line 1 column 1'])
+
+  await app.run('poll()')
+  const shown = app.elements.get('problems').innerHTML
+  assert.ok(shown.includes('<div>a/repo/broken: expected value at line 1 column 1</div>'), shown)
+  assert.ok(shown.includes('<div>b/repo/odd: unknown stage &#34;nope&#34;</div>'), shown)
+  assert.equal(app.elements.get('status').textContent, '2 sessions')
+})
+
+test('parses routes with the org', () => {
+  const app = dashboard()
+  assert.equal(app.run('parseRoute("#/")'), null)
+  assert.deepEqual(plain(app.run('parseRoute("#/org/a%20b%25c/s1")')), { org: 'org', repo: 'a b%c', id: 's1', path: null })
+  assert.deepEqual(
+    plain(app.run('parseRoute("#/org/repo/s1/round-1/report.md")')),
+    { org: 'org', repo: 'repo', id: 's1', path: 'round-1/report.md' },
+  )
+
+  app.context.session = { org: 'org', repo: 'a b%c', id: 's1' }
+  assert.equal(app.run('sessionHref(session)'), '#/org/a%20b%25c/s1')
+  assert.equal(app.run('fileHref(session, "round-1/report.md")'), '#/org/a%20b%25c/s1/round-1/report.md')
+  assert.equal(app.run('sessionHref(parseRoute(sessionHref(session)))'), '#/org/a%20b%25c/s1')
+})
+
+test('groups sessions by org and filters them', () => {
+  const at = (org, id, updated) => ({ ...session, org, id, dir: `api/file/${org}/repo/${id}/`, updated })
+  const sessions = [at('b', 'b1', '2026-10-22T10:00:00Z'), at('a', 'a1', '2026-10-22T09:00:00Z'), at('a', 'a2', '2026-10-22T11:00:00Z')]
+  const [b1, a1, a2] = sessions.map((s) => s.dir)
+
+  // Returns the org headings and the session dirs of the list, in page order.
+  const list = (app) => [...app.elements.get('page').innerHTML.matchAll(/<h2 class="org">([^<]*)<\/h2>|data-dir="([^"]*)"/g)]
+    .map((match) => match[1] ?? match[2])
+
+  // Returns the labels of the org filter, with `*` after the pressed one.
+  const filter = (app) => [...app.elements.get('page').innerHTML.matchAll(/data-org="[^"]*" aria-pressed="(true|false)">([^<]*)</g)]
+    .map((match) => `${match[2]}${match[1] === 'true' ? '*' : ''}`)
+
+  const choose = (app, org) => app.elements.get('list').dispatch('click', {
+    target: { closest: (selector) => (selector === 'button[data-org]' ? { dataset: { org } } : null) },
+  })
+
+  const storage = new Map()
+  const app = dashboard({ storage })
+  app.context.sessions = sessions
+  app.run('state.sessions = sessions; renderList()')
+  assert.deepEqual(list(app), ['a', a2, a1, 'b', b1])
+  assert.deepEqual(filter(app), ['All*', 'a', 'b'])
+
+  app.run('listKey("ArrowDown")')
+  assert.equal(app.run('selectedDir'), a2)
+
+  choose(app, 'b')
+  assert.equal(storage.get('jam-board-org'), 'b')
+  assert.deepEqual(list(app), ['b', b1])
+  assert.deepEqual(filter(app), ['All', 'a', 'b*'])
+  assert.equal(app.run('selectedDir'), null, 'the filter clears a hidden selection')
+
+  app.run('listKey("ArrowDown"); listKey("ArrowDown")')
+  assert.equal(app.run('selectedDir'), b1)
+  app.run('listKey("ArrowUp")')
+  assert.equal(app.run('selectedDir'), b1)
+  assert.equal(app.run(`selectedDir = ${JSON.stringify(a2)}; listKey("Enter")`), false, 'a hidden session takes no key')
+
+  const restored = dashboard({ storage })
+  restored.context.sessions = sessions
+  restored.run('state.sessions = sessions; renderList()')
+  assert.deepEqual(list(restored), ['b', b1])
+
+  restored.run('state.sessions = state.sessions.filter((s) => s.org === "a"); renderList()')
+  assert.deepEqual(list(restored), ['a', a2, a1], 'a stored org without sessions shows every org')
+  assert.deepEqual(filter(restored), ['All*', 'a'])
+
+  choose(app, '')
+  assert.equal(storage.get('jam-board-org'), '')
+  assert.deepEqual(list(app), ['a', a2, a1, 'b', b1])
+
+  app.run('state.sessions = []; renderList()')
+  assert.deepEqual(filter(app), [])
+  assert.match(app.elements.get('page').innerHTML, /No sessions yet\./)
+})
+
+test('archive and open post to the api routes with the org', async () => {
+  const posts = []
+  const app = dashboard({
+    fetcher: (url, options) => {
+      if (options?.method === 'POST') posts.push(url)
+      return url === 'api/sessions' ? sessionsReply([]) : response('')
+    },
+  })
+  app.context.messages = []
+  app.context.session = { ...session, org: 'my org', repo: 'a b%c', id: 's1' }
+  app.run('ask = async (message) => { messages.push(message); return true }')
+
+  await app.run('archiveSession(session)')
+  await app.run('openTool(session, "zed")')
+  await new Promise(setImmediate)
+  assert.deepEqual(posts, ['api/archive/my%20org/a%20b%25c/s1', 'api/open/zed/my%20org/a%20b%25c/s1'])
+  assert.match(app.context.messages[0], /^Archive my org\/a b%c\/s1\?/)
+  assert.equal(app.context.location.hash, '#/')
+
+  const failing = dashboard({ fetcher: () => response('zed is missing', false) })
+  failing.context.messages = []
+  failing.context.session = app.context.session
+  failing.run('tell = async (message) => { messages.push(message) }')
+  await failing.run('openTool(session, "zed")')
+  assert.deepEqual(failing.context.messages, ['Could not open my org/a b%c/s1 in Zed: zed is missing'])
 })

@@ -97,9 +97,30 @@ mod tests {
     fn dashboard_reads_sessions() {
         let html = std::str::from_utf8(embedded("/dashboard.html").unwrap().bytes).unwrap();
 
-        assert!(html.contains("sessions/"));
         assert!(html.contains("session.json"));
         assert!(!html.to_lowercase().contains("job"));
+    }
+
+    #[test]
+    fn dashboard_reads_the_api() {
+        let html = std::str::from_utf8(embedded("/dashboard.html").unwrap().bytes).unwrap();
+
+        assert!(html.contains("'api/sessions'"));
+        assert!(html.contains("`api/files/"));
+        assert!(html.contains("`api/file/"));
+        assert!(html.contains("`api/archive/"));
+        assert!(html.contains("`api/open/"));
+        assert!(!html.contains("listDir("));
+        assert!(!html.contains("DOMParser"));
+    }
+
+    #[test]
+    fn dashboard_filters_by_org() {
+        let html = std::str::from_utf8(embedded("/dashboard.html").unwrap().bytes).unwrap();
+
+        assert!(html.contains("'jam-board-org'"));
+        assert!(html.contains("class=\"org-filter\""));
+        assert!(html.contains("class=\"org\""));
     }
 
     #[test]

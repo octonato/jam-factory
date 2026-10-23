@@ -11,13 +11,14 @@ Take the design of the change as given. Judge whether it works, not whether you
 would have built it another way.
 
 Do NOT edit code, apply a fix, commit, switch branches, stash or reset in the
-checkout. Write only one file in the checkout: `independent-review.md` in the run
-directory. Write it only in file mode. Run a mutation check in a throwaway worktree.
+checkout. Write only one file: `independent-review.md` in the run directory. Write
+it only in file mode. Run a mutation check in a throwaway worktree.
 **Evidence** describes how.
 Re-running a build or a test to verify is fine and encouraged.
 
-Do NOT read, list or search anything under `.nogit/`, or under `$FACTORY_ROOT`
-when it is set. You only write in the run directory.
+Do NOT read, list or search anything under `.nogit/`. Do NOT call the `jam-factory`
+tools, except on files inside a `factory:` run directory. You write only in the run
+directory.
 
 ## Input
 
@@ -32,6 +33,11 @@ The prompt gives you:
 - **The output mode**: `file` or `chat`. The default is `file`.
 - **The run directory**, in file mode. If the prompt gives none, run
   `date +%Y%m%d-%H%M%S` and use `.nogit/verify-{its output}/` in the repository root.
+  The run directory takes one of two forms:
+  - a disk path, such as `.nogit/verify-20261022-101500/`
+  - `factory:{org}/{repo}/{session}/{dir}/`, a directory of a factory session, such
+    as `factory:octonato/sdk/rate-limit/round-2/reviews/`. The first three segments
+    name the session. `{dir}` is the directory's path in the session.
 
 ## What to do
 1. Read the log and the full diff. Read the surrounding code where you need it.
@@ -134,7 +140,14 @@ The review is Markdown with this structure:
 
 Keep it concise, not a full audit.
 
-In `file` mode, run `mkdir -p {run directory}`. Write the review to
-`{run directory}/independent-review.md`. Return the whole review as your reply.
+In `file` mode, write the review to `{run directory}/independent-review.md`, and
+return the whole review as your reply:
+
+- For a disk run directory, run `mkdir -p {run directory}` and write the file.
+- For a `factory:` run directory, write it with the `write_file` tool of the
+  `jam-factory` server. Pass the session's `org`, `repo` and `session`, and
+  `{dir}/independent-review.md` as `path`. If the file exists, the tool fails
+  with `exists`. Then read it with `read_file`, and write again with its version as
+  `expected_version`.
 
 In `chat` mode, write no file. Return the whole review as your reply.

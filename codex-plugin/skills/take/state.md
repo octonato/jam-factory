@@ -1,13 +1,41 @@
 # Factory state files
 
-The factory keeps all the state of one session in its session folder, `$FACTORY_ROOT/<repo>/sessions/<id>/`. A new conversation reads these files to pick up the work. The dashboard reads them too.
+The factory keeps all the state of one session in its session folder. The `jam-factory` MCP server owns the folder. A new conversation reads these files to pick up the work. The dashboard reads them too.
 
-Write every file in the session folder with the **Write** or **Edit** tool, never with Bash. Re-read a file before you change it. I may have edited it by hand. The feedback capture procedure may create its destination directories and atomically rename a complete staging file with the shell; its contents still use file editing tools.
+## Tools
+
+Read and write the session's files only with the tools of the `jam-factory` server. Never use file edits or the shell on them. Codex names the tools `mcp__jam-factory__<tool>`.
+
+Each tool names the session with `org`, `repo` and `session`, the session id. A file tool adds `path`, relative to the session folder, such as `round-2/reviews/independent-review.md`.
+
+| Tool | What it does |
+|---|---|
+| `read_file` | Returns the file's `content` and its `version`. |
+| `list_files` | Returns the session's `files`, as relative paths. |
+| `write_file` | Writes the whole file. Leave out `expected_version` to create a file. Pass the current version as `expected_version` to replace one. |
+| `edit_file` | Replaces `old_str` with `new_str`. `old_str` must occur once in the file. |
+| `append_file` | Adds `content` to the end of the file. Creates the file when missing. |
+| `move_file` | Renames the file `from` to `to`. Fails when `to` exists. |
+| `delete_file` | Deletes the file when its version is `expected_version`. |
+| `update_session` | Merges `fields` into `session.json` and sets `updated`. |
+
+- A file exists when `list_files` lists it. `read_file` of a missing file or session fails with `not_found`.
+- The version is the SHA-256 of the file. Every write returns the new `version`.
+- `write_file` without `expected_version` fails with `exists` when the file exists.
+- A `conflict` error means the file changed since you read it. Re-read it, apply your change to the new content and retry.
+- Writes create the missing folders.
+- An error reply holds a `code`, a `message` and the `current_version` on a conflict.
+
+Re-read a file before you change it. I may have edited it by hand.
 
 ## Layout
 
+The server keeps every session under its root: `root` in `~/.jam-factory/config.json`, or `~/.jam-factory/factory`.
+
+A file of a session is written `factory:{org}/{repo}/{session}/{path}`. On disk, it is `{root}/{org}/{repo}/sessions/{session}/{path}`. A run directory in a session is written `factory:{org}/{repo}/{session}/round-{N}/`.
+
 ```
-<session folder>/
+{root}/{org}/{repo}/sessions/{id}/
   session.json
   request.md
   spec.md
@@ -36,7 +64,9 @@ A vibe session writes only `session.json`, `request.md`, `tasks.md` and `runs.js
 
 ## session.json
 
-Only the factory skill writes it, with two exceptions. The dashboard's Archive button sets `archived` and `updated`. I may edit `mode` by hand. Rewrite the whole file on every change, and set `updated` to the current UTC time.
+Only the factory skill writes it, with two exceptions. The dashboard's Archive button sets `archived` and `updated`. I may edit `mode` by hand.
+
+Create it once with `write_file`, with `updated` set to the current UTC time. After that, change it only with `update_session`. Pass only the fields that change. `update_session` replaces each field whole, merges `counts` per key and sets `updated`. To change `blocked` or `feedbackImport`, pass the whole object.
 
 ```json
 {
@@ -178,7 +208,7 @@ Each line is one JSON object: one agent run or one main-conversation stage.
 | `outcome` | string | `done`, `failed` or `blocked` |
 
 - Only append lines. Never change or remove a line.
-- To append, re-read the file and write it back with the new line at the end. The first line creates the file.
+- Add each line with `append_file`, ending with a newline. The first line creates the file.
 - Every field other than `stop` and `round` may be missing or `null`.
 - Write `null` for a field the CLI does not report. Never estimate a value.
 - Store only a reported `durationMs`; write `durationMs: null` when the runtime reports none, including main-conversation stages. Never store a duration calculated from timestamps. The dashboard may derive positive elapsed time from valid `started` and `ended` values for display. Request lines always store `durationMs: null`; the dashboard hides their timing.
@@ -195,7 +225,13 @@ The open round is the round a line belongs to. Set `round` to it:
 
 ## Feedback import checkpoint
 
-Only build sessions use `feedbackImport`: null (also the meaning of a missing field), or `{ "round": N, "phase": "normalize" | "triage" }`. No new stage is introduced. While it is set, `round` is N and `stage` is `triage`; resume routes through `feedback.md` before ordinary stage dispatch. Clear it in the same session rewrite that applies triage's outcome. `round` counts both verify and imported-feedback rounds. Each successful feedback import resets `lastRound` to false; normal triage may set it true again.
+Only build sessions use `feedbackImport`.
+
+- Its value is null (a missing field also means null) or `{ "round": N, "phase": "normalize" | "triage" }`.
+- While it is set, `round` is N and `stage` is `triage`. Resume routes through `feedback.md` before ordinary stage dispatch.
+- Clear it in the same `update_session` call that applies triage's outcome.
+
+`round` counts both verify rounds and imported-feedback rounds. Each successful feedback import resets `lastRound` to false. Normal triage may set it true again.
 
 `feedback-pending.md` is a staging snapshot, not a consumed-source ledger. A complete staging snapshot or an installed capture in `round-{round + 1}` is also a resume checkpoint, covering interruption before the session journal is written. The procedure in `feedback.md` validates and attaches it without allocating a second round. An installed capture is immutable. Only complete snapshots participate in dedup; failed fetches and calls with no unseen versions write nothing.
 

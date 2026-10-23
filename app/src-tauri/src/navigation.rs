@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Decides where a project window's navigations go.
+//! Decides where the board window's navigations go.
 
 use std::process::Command;
 use std::thread;

@@ -1,4 +1,9 @@
 {
   "name": "jam",
-  "version": "1.0.0"
+  "version": "1.1.0",
+  "mcpServers": {
+    "jam-factory": {
+      "command": "jam-factory-mcp"
+    }
+  }
 }

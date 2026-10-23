@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "jam-factory": {
+      "command": "jam-factory-mcp"
+    }
+  }
+}

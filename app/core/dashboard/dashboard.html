@@ -126,6 +126,36 @@
   .rows { display: grid; gap: 8px; }
   .empty { color: var(--muted); }
 
+  .org-filter {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-bottom: 16px;
+  }
+
+  .org-filter button {
+    padding: 2px 10px;
+    color: var(--ink-2);
+    font: inherit;
+    font-size: 0.857rem;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    cursor: pointer;
+  }
+
+  .org-filter button:hover { border-color: var(--accent); }
+  .org-filter button[aria-pressed="true"] { color: var(--ink); border-color: var(--accent); }
+
+  .org-group + .org-group { margin-top: 24px; }
+
+  .org-group .org {
+    margin: 0 0 8px;
+    color: var(--ink-2);
+    font-size: 0.857rem;
+    font-weight: 600;
+  }
+
   .row {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
@@ -721,6 +751,8 @@ const STOP_LABELS = {
   done: 'Done',
 }
 
+const ORG_KEY = 'jam-board-org'
+
 const FONT_KEY = 'jam-board-font-size'
 const FONT_MIN = 12
 const FONT_MAX = 24
@@ -763,6 +795,7 @@ let renderSeq = 0
 let fontSize = FONT_DEFAULT
 let leftWidth = null
 let selectedDir = null
+let orgFilter = null
 
 function escape(text) {
   return String(text).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)
@@ -774,27 +807,14 @@ async function fetchText(url) {
   return res.text()
 }
 
-// Lists the entries of a directory from the server's HTML listing.
-async function listDir(url) {
-  let html
+// Returns the file paths of `session`, or none when the list cannot be fetched.
+async function listFiles(session) {
   try {
-    html = await fetchText(url)
+    const { files } = JSON.parse(await fetchText(`api/files/${sessionPath(session)}`))
+    return Array.isArray(files) ? files : []
   } catch {
     return []
   }
-  const doc = new DOMParser().parseFromString(html, 'text/html')
-  return [...doc.querySelectorAll('a')]
-    .map((a) => decodeURIComponent(a.getAttribute('href')))
-    .filter((href) => !href.startsWith('?') && !href.startsWith('/') && !href.startsWith('.'))
-}
-
-async function listFiles(dir, prefix = '') {
-  const files = []
-  for (const entry of await listDir(encodePath(dir + prefix))) {
-    if (entry.endsWith('/')) files.push(...(await listFiles(dir, prefix + entry)))
-    else files.push(prefix + entry)
-  }
-  return files
 }
 
 function stringOrNull(value) {
@@ -876,25 +896,19 @@ async function loadOutcomes(dir, files) {
   return outcomes
 }
 
+// Returns the sessions of the `api/sessions` reply, and a problem line for each entry with an error.
 async function loadSessions() {
-  const repos = (await listDir('./')).filter((e) => e.endsWith('/'))
+  const { sessions: entries } = JSON.parse(await fetchText('api/sessions'))
   const sessions = []
   const problems = []
 
-  for (const repo of repos) {
-    const ids = (await listDir(`${repo}sessions/`)).filter((e) => e.endsWith('/'))
-    for (const id of ids) {
-      const dir = `${repo}sessions/${id}`
-      try {
-        const session = JSON.parse(await fetchText(`${dir}session.json`))
-        if (session.archived === true) continue
-
-        session.dir = dir
-        sessions.push(session)
-      } catch (err) {
-        problems.push(`${dir}: ${err.message}`)
-      }
+  for (const { org, repo, session: id, data, error } of entries) {
+    if (error !== undefined) {
+      problems.push(`${org}/${repo}/${id}: ${error}`)
+      continue
     }
+
+    sessions.push({ ...data, org, repo, id, dir: `api/file/${org}/${repo}/${id}/` })
   }
   return { sessions, problems }
 }
@@ -911,12 +925,21 @@ function parseRoute(hash) {
   const segments = hash.replace(/^#\/?/, '').split('/').filter((s) => s !== '').map(decode)
   if (segments.length === 0) return null
 
-  const [repo, id = '', ...rest] = segments
-  return { repo, id, path: rest.length > 0 ? rest.join('/') : null }
+  const [org, repo = '', id = '', ...rest] = segments
+  return { org, repo, id, path: rest.length > 0 ? rest.join('/') : null }
+}
+
+// Returns `{org}/{repo}/{id}` of `session`, each segment percent-encoded.
+function sessionPath(session) {
+  return [session.org, session.repo, session.id].map(encodeURIComponent).join('/')
+}
+
+function sessionName(session) {
+  return `${session.org}/${session.repo}/${session.id}`
 }
 
 function sessionHref(session) {
-  return `#/${encodeURIComponent(session.repo)}/${encodeURIComponent(session.id)}`
+  return `#/${sessionPath(session)}`
 }
 
 function encodePath(path) {
@@ -998,7 +1021,7 @@ function stepLabel(session) {
 
 function rowContent(session) {
   return `
-    <span class="name"><span class="id">${escape(session.id)}</span> <span class="path">${escape(shortPath(session.worktree))}</span></span>
+    <span class="name"><span class="id">${escape(sessionName(session))}</span> <span class="path">${escape(shortPath(session.worktree))}</span></span>
     <span class="steps">${indicator(session)}</span>
     <span class="label">${stepLabel(session)}</span>`
 }
@@ -1010,25 +1033,70 @@ function cardActions(session) {
     </button>`).join('')
 }
 
-function renderList() {
-  const sessions = [...state.sessions].sort((a, b) => String(b.updated || '').localeCompare(String(a.updated || '')))
-  const rows = sessions.map((session) => `
+// Returns the distinct orgs of `sessions`, sorted.
+function sessionOrgs(sessions) {
+  return [...new Set(sessions.map((session) => session.org))].sort((a, b) => a.localeCompare(b))
+}
+
+// Returns the org the list shows, or null for every org when the filter names none or an org without sessions.
+function shownOrg() {
+  return sessionOrgs(state.sessions).includes(orgFilter) ? orgFilter : null
+}
+
+function shownSessions() {
+  const org = shownOrg()
+  return state.sessions.filter((session) => org === null || session.org === org)
+}
+
+// Returns the org filter: an `All` button, then one button per org.
+function orgFilterHtml(orgs, shown) {
+  const button = (org, label) => `
+    <button type="button" data-org="${escape(org ?? '')}" aria-pressed="${org === shown}">${escape(label)}</button>`
+  return `<nav class="org-filter">${[button(null, 'All'), ...orgs.map((org) => button(org, org))].join('')}</nav>`
+}
+
+function rowHtml(session) {
+  return `
     <div class="row card ${tint(session)}" data-dir="${escape(session.dir)}">
       <a class="body" href="${escape(sessionHref(session))}">${rowContent(session)}</a>
       <span class="actions">${cardActions(session)}</span>
-    </div>`).join('')
-  const html = `<div class="column rows">${rows || '<p class="empty">No sessions yet.</p>'}</div>`
+    </div>`
+}
+
+// Renders the shown sessions under one heading per org, with the org filter above them.
+function renderList() {
+  const sessions = shownSessions().sort((a, b) => String(b.updated || '').localeCompare(String(a.updated || '')))
+  const groups = sessionOrgs(sessions).map((org) => `
+    <section class="org-group">
+      <h2 class="org">${escape(org)}</h2>
+      <div class="rows">${sessions.filter((session) => session.org === org).map(rowHtml).join('')}</div>
+    </section>`).join('')
+
+  const orgs = sessionOrgs(state.sessions)
+  const filter = orgs.length > 0 ? orgFilterHtml(orgs, shownOrg()) : ''
+  const html = `<div class="column">${filter}${groups || '<p class="empty">No sessions yet.</p>'}</div>`
   if (listView.el === $('page').firstElementChild && listView.html === html) return showSelection()
 
   $('page').innerHTML = html
   listView = { html, el: $('page').firstElementChild }
   listView.el.addEventListener('click', onCardAction)
+  listView.el.addEventListener('click', onOrgFilter)
   showSelection()
 }
 
-// Clears the selection when its session is gone and outlines the selected row.
+// Shows the org of the clicked filter button and stores the choice.
+function onOrgFilter(event) {
+  const button = event.target.closest('button[data-org]')
+  if (!button) return
+
+  orgFilter = button.dataset.org || null
+  writeOrgFilter(orgFilter)
+  renderList()
+}
+
+// Clears the selection when its session is gone or hidden and outlines the selected row.
 function showSelection() {
-  if (!state.sessions.some((session) => session.dir === selectedDir)) selectedDir = null
+  if (!shownSessions().some((session) => session.dir === selectedDir)) selectedDir = null
 
   for (const row of $('page').querySelectorAll('.row.card')) {
     row.classList.toggle('selected', row.dataset.dir === selectedDir)
@@ -1588,7 +1656,7 @@ function sessionCardHtml(session, runs) {
 
   return `
     <div class="session-card" data-dir="${escape(session.dir)}">
-      <div class="id">${escape(session.repo)} / ${escape(session.id)}</div>
+      <div class="id">${escape(sessionName(session))}</div>
       <div class="path">${escape(shortPath(session.worktree))}</div>
       <div class="facts">${facts.map((fact) => `<span class="pill">${escape(fact)}</span>`).join('')}</div>
       <div class="actions">${cardActions(session)}</div>
@@ -1766,13 +1834,13 @@ async function tell(message) {
 }
 
 async function archiveSession(session) {
-  if (!(await ask(`Archive ${session.repo}/${session.id}? The dashboard will no longer list it.`))) return
+  if (!(await ask(`Archive ${sessionName(session)}? The dashboard will no longer list it.`))) return
 
   try {
-    const res = await fetch(`archive/${encodeURIComponent(session.repo)}/${encodeURIComponent(session.id)}`, { method: 'POST' })
+    const res = await fetch(`api/archive/${sessionPath(session)}`, { method: 'POST' })
     if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
   } catch (err) {
-    await tell(`Could not archive ${session.repo}/${session.id}: ${err.message}`)
+    await tell(`Could not archive ${sessionName(session)}: ${err.message}`)
     return
   }
 
@@ -1784,10 +1852,10 @@ async function openTool(session, tool) {
   const label = TOOL_LABELS[tool]
 
   try {
-    const res = await fetch(`open/${tool}/${encodeURIComponent(session.repo)}/${encodeURIComponent(session.id)}`, { method: 'POST' })
+    const res = await fetch(`api/open/${tool}/${sessionPath(session)}`, { method: 'POST' })
     if (!res.ok) throw new Error((await res.text()).trim() || `${res.status} ${res.statusText}`)
   } catch (err) {
-    await tell(`Could not open ${session.repo}/${session.id} in ${label}: ${err.message}`)
+    await tell(`Could not open ${sessionName(session)} in ${label}: ${err.message}`)
   }
 }
 
@@ -1907,7 +1975,7 @@ async function renderSessionPage(session, path) {
     lastView = { key: null, text: null }
   }
 
-  const files = await listFiles(session.dir)
+  const files = await listFiles(session)
   const runs = await loadRuns(session.dir, files)
   const outcomes = await loadOutcomes(session.dir, files)
   if (seq !== renderSeq) return
@@ -1964,7 +2032,7 @@ function listKey(key) {
     return true
   }
 
-  const session = state.sessions.find((s) => s.dir === selectedDir)
+  const session = shownSessions().find((s) => s.dir === selectedDir)
   if (!session) return false
 
   if (key === 'Enter') {
@@ -2034,12 +2102,27 @@ function stepFontSize(step) {
   writeFontSize(size)
 }
 
+// Returns the stored org filter, or null for every org.
+function readOrgFilter() {
+  try {
+    return localStorage.getItem(ORG_KEY) || null
+  } catch {
+    return null
+  }
+}
+
+function writeOrgFilter(org) {
+  try {
+    localStorage.setItem(ORG_KEY, org ?? '')
+  } catch {}
+}
+
 async function poll() {
   try {
     const { sessions, problems } = await loadSessions()
     for (const session of sessions) {
       const problem = sessionProblem(session)
-      if (problem !== null) problems.push(`${session.repo}/${session.id}: ${problem}`)
+      if (problem !== null) problems.push(`${sessionName(session)}: ${problem}`)
     }
     problems.push(...missingScripts())
     if (state.failedChecks.length > 0) problems.push(`metro self-check failed: ${state.failedChecks.join(', ')}`)
@@ -2057,6 +2140,7 @@ async function poll() {
 $('font-down').addEventListener('click', () => stepFontSize(-1))
 $('font-up').addEventListener('click', () => stepFontSize(1))
 showFontSize(readFontSize())
+orgFilter = readOrgFilter()
 
 window.addEventListener('hashchange', render)
 window.addEventListener('resize', onSessionResize)

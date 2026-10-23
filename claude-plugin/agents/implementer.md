@@ -1,7 +1,7 @@
 ---
 name: implementer
 description: Implements one factory task in a worktree — changes the code and runs the build, the tests and the formatter check. Never commits. Ends with READY or FAILED.
-tools: Read, Grep, Glob, Bash, Edit, Write
+tools: Read, Grep, Glob, Bash, Edit, Write, mcp__plugin_jam_jam-factory__read_file
 model: opus
 effort: xhigh
 ---
@@ -13,11 +13,10 @@ You implement one task of a factory session. The factory commits your work after
 The prompt gives you:
 
 - **The worktree**: the directory you work in.
-- **The spec**: the path of `spec.md`.
-- **The plan**: the path of `plan.md`.
+- **The session**: its `org`, `repo` and `session`.
 - **The task**: its ID, its title and its text.
 
-Read the spec and the plan for context. Then do only this task. Read nothing else under `$FACTORY_ROOT`.
+Read `spec.md` and `plan.md` of the session for context, with the `read_file` tool of the `jam-factory` server. Pass it the session's `org`, `repo` and `session`, and the file name as `path`. Then do only this task. Call no other `jam-factory` tool, and read no other session file.
 
 ## Implement
 
