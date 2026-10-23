@@ -15,6 +15,7 @@ Write every file in the session folder with the **Write** or **Edit** tool, neve
   tasks.md
   decisions.md
   deferred.md
+  runs.jsonl
   feedback-pending.md          # only while staging a feedback import
   round-<N>/
     reviews/
@@ -29,9 +30,9 @@ Write every file in the session folder with the **Write** or **Edit** tool, neve
 
 `round-N/extras.md` lists the extra reviewer candidates and my decision on them. `skills/verify/review.md` defines its format.
 
-A review session writes only `session.json`, `request.md` and the round folders. Its round folders add `submit.md`, the PR comment, and hold no `triage.md`. `skills/submit-review/submit.md` defines its format.
+A review session writes only `session.json`, `request.md`, `runs.jsonl` and the round folders. Its round folders add `submit.md`, the PR comment, and hold no `triage.md`. `skills/submit-review/submit.md` defines its format.
 
-A vibe session writes only `session.json`, `request.md` and `tasks.md`.
+A vibe session writes only `session.json`, `request.md`, `tasks.md` and `runs.jsonl`.
 
 ## session.json
 
@@ -153,6 +154,43 @@ A vibe session holds one task, `T1`, with the source `request`. Its text points 
 
 outcome: {next round | last round | finalize}
 ```
+
+## runs.jsonl
+
+Each line is one JSON object: one agent run or one main-conversation stage.
+
+```json
+{"stop":"implement","round":1,"agent":"jam:implementer","task":"T3","model":"opus","started":"2026-10-22T18:02:11Z","ended":"2026-10-22T18:03:12Z","durationMs":60110,"tokens":35550,"toolUses":23,"file":null,"outcome":"done"}
+```
+
+| Field | Type | Meaning |
+|---|---|---|
+| `stop` | string, required | `request`, `spec`, `plan`, `implement`, `review`, `report`, `triage`, `comment` |
+| `round` | integer, required | the open round when the run started, or `0` before round 1 |
+| `agent` | string | the agent name, or `main` for the main conversation |
+| `task` | string | the task ID, for an Implement run |
+| `model` | string | the model the run used, as the skill knows it |
+| `started`, `ended` | UTC ISO-8601 string | from `date -u +%Y-%m-%dT%H:%M:%SZ` |
+| `durationMs` | integer | the duration the CLI reports |
+| `tokens` | integer | the total tokens the CLI reports for the run |
+| `toolUses` | integer | the tool uses the CLI reports |
+| `file` | string | the review file a reviewer wrote, relative to the session folder |
+| `outcome` | string | `done`, `failed` or `blocked` |
+
+- Only append lines. Never change or remove a line.
+- To append, re-read the file and write it back with the new line at the end. The first line creates the file.
+- Every field other than `stop` and `round` may be missing or `null`.
+- Write `null` for a field the CLI does not report. Never estimate a value.
+- Take `started` right before the run or stage starts. Take `ended` right after it ends.
+- `model`: for an agent, the model the **collaboration** tools report for the run, or `null` when they report none. For the main conversation, the model name the CLI states as its own.
+- `outcome`: how the run or stage ended.
+
+The open round is the round a line belongs to. Set `round` to it:
+
+- `request`, `spec` and `plan`: `0`.
+- `implement`: the `round` in `session.json` plus one.
+- `review`, `report`, `triage` and `comment`: the `round` in `session.json`.
+- Every line of a vibe session: `0`.
 
 ## Feedback import checkpoint
 

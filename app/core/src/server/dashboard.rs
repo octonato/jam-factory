@@ -101,4 +101,46 @@ mod tests {
         assert!(html.contains("session.json"));
         assert!(!html.to_lowercase().contains("job"));
     }
+
+    #[test]
+    fn dashboard_builds_stops_from_runs() {
+        let html = std::str::from_utf8(embedded("/dashboard.html").unwrap().bytes).unwrap();
+
+        assert!(html.contains("function parseRuns("));
+        assert!(html.contains("function buildStops("));
+        assert!(html.contains("function runTotals("));
+        assert!(html.contains("function metroSelfCheck("));
+        assert!(html.contains("runs.jsonl"));
+    }
+
+    #[test]
+    fn session_page_has_no_flow_strip() {
+        let html = std::str::from_utf8(embedded("/dashboard.html").unwrap().bytes).unwrap();
+
+        assert!(!html.contains("flow-strip"));
+        assert!(!html.contains("flow-toggle"));
+        assert!(!html.contains("data-round"));
+        assert!(!html.contains("class=\"chip"));
+        assert!(!html.contains("jam-board-flow-collapsed"));
+    }
+
+    #[test]
+    fn session_card_holds_the_actions() {
+        let html = std::str::from_utf8(embedded("/dashboard.html").unwrap().bytes).unwrap();
+        let start = html.find("function sessionCardHtml(").unwrap();
+        let rest = &html[start..];
+        let end = rest.find("\nfunction ").unwrap_or(rest.len());
+
+        assert!(rest[..end].contains("cardActions(session)"));
+    }
+
+    #[test]
+    fn dashboard_runs_the_metro_self_check() {
+        let html = std::str::from_utf8(embedded("/dashboard.html").unwrap().bytes).unwrap();
+        let calls = html
+            .match_indices("metroSelfCheck()")
+            .filter(|(i, _)| !html[..*i].ends_with("function "));
+
+        assert!(calls.count() > 0);
+    }
 }

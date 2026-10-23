@@ -16,6 +16,11 @@
     --warning: #fab219;
     --critical: #d03b3b;
     --accent: #2f6fdb;
+    --done: var(--good);
+    --pending: #c4c4bc;
+    --rail: 4px;
+    --node: 18px;
+    --node-top: 16px;
   }
 
   @media (prefers-color-scheme: dark) {
@@ -27,6 +32,7 @@
       --muted: #85857e;
       --line: #2e2e2b;
       --accent: #6c9cf0;
+      --pending: #4a4a45;
     }
   }
 
@@ -38,6 +44,7 @@
     --muted: #85857e;
     --line: #2e2e2b;
     --accent: #6c9cf0;
+    --pending: #4a4a45;
   }
 
   * { box-sizing: border-box; }
@@ -218,10 +225,31 @@
   #page:has(> .session-page) { overflow: hidden; }
 
   .session-page {
+    display: grid;
+    grid-template-columns: minmax(320px, var(--left, 30%)) 6px minmax(0, 1fr);
+    height: 100%;
+  }
+
+  #metro-pane {
+    overflow: auto;
+    padding: 0 16px 48px;
+  }
+
+  #splitter {
+    cursor: col-resize;
+    touch-action: none;
+    background: var(--line);
+    border-inline: 2px solid var(--bg);
+  }
+
+  #splitter:hover, #splitter.dragging { background: var(--accent); }
+
+  .viewer {
     display: flex;
     flex-direction: column;
-    gap: 12px;
-    height: calc(100% - 32px);
+    min-width: 0;
+    overflow: hidden;
+    background: var(--surface);
   }
 
   #modal {
@@ -251,44 +279,6 @@
 
   #modal button:hover { border-color: var(--accent); }
 
-  .flow-pane,
-  #view {
-    background: var(--surface);
-    border: 1px solid var(--line);
-    border-radius: 6px;
-  }
-
-  .flow-pane {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr);
-    flex: none;
-  }
-
-  .flow-pane > * { grid-area: 1 / 1; }
-
-  .flow-toggle {
-    z-index: 2;
-    align-self: start;
-    justify-self: end;
-    margin: 4px;
-    background: var(--surface);
-  }
-
-  .flow-pane.collapsed .flow-toggle svg { transform: rotate(180deg); }
-
-  .flow-strip {
-    overflow-x: auto;
-    overflow-y: hidden;
-    scrollbar-width: none;
-  }
-
-  .flow-strip::-webkit-scrollbar { display: none; }
-
-  .flow-pane.collapsed > .flow-strip {
-    height: 0;
-    visibility: hidden;
-  }
-
   #view {
     flex: 1;
     min-height: 0;
@@ -307,209 +297,279 @@
 
   #view code { font: 0.857rem/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 
-  .flow {
-    --node-h: 3em;
-    --back-h: 1.25em;
-    --edge: 2px solid var(--muted);
-    display: grid;
-    grid-template-rows: auto var(--back-h) auto auto;
-    align-items: center;
-    width: max-content;
-    margin: 0 auto;
-    padding: 1.5em 1em;
-    font-size: 1.071rem;
-  }
-
-  .flow > * { grid-row: 1; }
-  .flow > .loop { grid-row: 1 / -1; }
-
-  .edge {
-    width: 2em;
-    border-top: var(--edge);
-  }
-
-  .stub {
-    flex: 1;
-    min-width: 1em;
-    border-top: var(--edge);
-  }
-
-  .node {
-    --tone: var(--ink-2);
-    position: relative;
-    z-index: 1;
-    display: flex;
-    align-items: center;
-    height: var(--node-h);
-    padding: 0 1.5em;
-    white-space: nowrap;
-    color: var(--ink);
-    text-decoration: none;
-    background: var(--surface);
-    border: 1px solid var(--tone);
-    border-radius: 6px;
-  }
-
-  a.node:hover { color: var(--accent); }
-
-  .node.current {
-    --tone: var(--accent);
-    font-weight: 600;
-    box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--tone);
-  }
-
-  .node.future {
-    --tone: var(--muted);
-    color: var(--muted);
-    border-style: dashed;
-  }
-
-  .node.waiting { --tone: var(--warning); }
-  .node.blocked { --tone: var(--critical); }
-  .node.done { --tone: var(--good); }
-
-  .node.selected,
-  .chip.selected {
-    outline: 2px solid var(--ink-2);
-  }
-
-  .node.selected { outline-offset: 6px; }
-  .chip.selected { outline-offset: 3px; }
-
-  .branches {
-    display: grid;
-    grid-auto-rows: 1fr;
-  }
-
-  .branches.ends { justify-items: start; }
-
-  .branch {
-    position: relative;
-    display: flex;
-    align-items: center;
-    padding: 0.4em 0;
-  }
-
-  .branch::before,
-  .fan-in > .branch::after {
-    content: '';
-    position: absolute;
+  .session-card-wrap {
+    position: sticky;
     top: 0;
-    bottom: 0;
-    border-left: var(--edge);
+    z-index: 3;
+    padding: 16px 0 12px;
+    background: var(--bg);
   }
 
-  .branch::before { left: 0; }
-  .fan-in > .branch::after { right: 0; }
-  .branch:first-child::before, .branch:first-child::after { top: calc(50% - 1px); }
-  .branch:last-child::before, .branch:last-child::after { bottom: calc(50% - 1px); }
-
-  .loop {
-    display: grid;
-    grid-template-columns: repeat(5, auto);
-    grid-template-rows: subgrid;
-    align-items: center;
+  .session-card {
+    padding: 12px 14px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 8px;
   }
 
-  .loop > * { grid-row: 1; }
+  .session-card .id { font-size: 1.1rem; font-weight: 600; }
+  .session-card .path { color: var(--muted); font-size: 0.85rem; overflow-wrap: anywhere; }
 
-  .loop > .loop-end {
-    grid-row: 1 / 3;
-    align-self: stretch;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-  }
-
-  .loop-end::before,
-  .loop-end::after {
-    content: '';
-    flex: 1 0 0;
-    box-sizing: border-box;
-  }
-
-  .loop-end::after {
-    flex-basis: var(--back-h);
-    align-self: stretch;
-    border-bottom: var(--edge);
-  }
-
-  .loop-end.start::after {
-    margin-left: calc(50% - 1px);
-    border-left: var(--edge);
-    border-bottom-left-radius: 8px;
-  }
-
-  .loop-end.finish::after {
-    margin-right: calc(50% - 1px);
-    border-right: var(--edge);
-    border-bottom-right-radius: 8px;
-  }
-
-  .loop-end > .branches { margin: -0.4em 0; }
-
-  .loop > .back-edge {
-    grid-row: 2;
-    grid-column: 2 / 5;
-    align-self: end;
-    border-bottom: var(--edge);
-  }
-
-  .loop > .chips,
-  .loop > .rounds {
-    grid-column: 1 / -1;
+  .session-card .facts {
     display: flex;
     flex-wrap: wrap;
-    justify-content: center;
-    width: 0;
-    min-width: 100%;
-  }
-
-  .loop > .chips {
-    grid-row: 3;
-    gap: 0.5em 0.75em;
-    margin-top: 1em;
-  }
-
-  .loop > .rounds {
-    grid-row: 4;
     gap: 6px;
-    margin-top: 0.75em;
+    margin-top: 8px;
   }
 
-  .chip {
-    padding: 0.2em 0.75em;
+  .session-card .actions {
+    display: flex;
+    gap: 2px;
+    margin: 8px 0 0 -4px;
+  }
+
+  .pill {
+    padding: 1px 8px;
     color: var(--ink-2);
-    font-size: 0.8em;
-    white-space: nowrap;
-    text-decoration: none;
-    background: var(--surface);
+    font-size: 0.8rem;
+    background: var(--bg);
     border: 1px solid var(--line);
     border-radius: 999px;
   }
 
-  .chip:hover { color: var(--accent); border-color: var(--accent); }
+  .metro { display: flex; flex-direction: column; }
 
-  .rounds button {
-    width: 2em;
-    height: 2em;
-    padding: 0;
-    font: inherit;
-    font-size: 0.929rem;
-    color: var(--ink-2);
-    cursor: pointer;
+  .stop {
+    display: grid;
+    grid-template-columns: 44px minmax(0, 1fr);
+  }
+
+  .rail { position: relative; }
+
+  .seg {
+    position: absolute;
+    left: calc(50% - var(--rail) / 2);
+    width: var(--rail);
+  }
+
+  .seg.up { top: 0; height: calc(var(--node-top) + var(--node) / 2); }
+  .seg.down { top: calc(var(--node-top) + var(--node) / 2); bottom: 0; }
+  .seg.full { top: 0; bottom: 0; }
+
+  .seg.travelled { background: var(--tone, var(--done)); }
+
+  .seg.todo {
+    background: repeating-linear-gradient(to bottom, var(--pending) 0 8px, transparent 8px 13px);
+  }
+
+  .stop.done { --tone: var(--done); }
+  .stop.current { --tone: var(--accent); }
+  .stop.waiting { --tone: var(--warning); }
+  .stop.blocked { --tone: var(--critical); }
+  .stop.pending { --tone: var(--pending); }
+
+  .seg.down.travelled, .seg.full.travelled { --tone: var(--done); }
+
+  .node {
+    position: absolute;
+    z-index: 1;
+    top: var(--node-top);
+    left: calc(50% - var(--node) / 2);
+    display: grid;
+    place-items: center;
+    width: var(--node);
+    height: var(--node);
+    color: var(--surface);
     background: var(--surface);
-    border: 1px solid var(--muted);
+    border: 4px solid var(--tone);
     border-radius: 50%;
   }
 
-  .rounds button:hover { border-color: var(--accent); }
-
-  .rounds button.picked {
-    color: var(--surface);
-    background: var(--accent);
-    border-color: var(--accent);
+  .node svg {
+    width: 12px;
+    height: 12px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2.5;
+    stroke-linecap: round;
+    stroke-linejoin: round;
   }
+
+  .done > .rail .node { background: var(--tone); border-width: 0; }
+  .blocked > .rail .node { background: var(--tone); border-width: 0; border-radius: 4px; }
+  .waiting > .rail .node { background: var(--tone); border-width: 0; }
+
+  .current > .rail .node { animation: pulse 1.6s ease-out infinite; }
+
+  @keyframes pulse {
+    0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 55%, transparent); }
+    100% { box-shadow: 0 0 0 12px transparent; }
+  }
+
+  .node.interchange {
+    height: calc(var(--node) + 14px);
+    border-radius: 9px;
+  }
+
+  .node.terminus {
+    --node: 22px;
+    top: calc(var(--node-top) - 2px);
+    left: calc(50% - 11px);
+    box-shadow: 0 0 0 3px var(--surface), 0 0 0 6px var(--tone);
+  }
+
+  .stop .card {
+    display: grid;
+    gap: 6px;
+    width: 100%;
+    margin: 6px 0 14px;
+    padding: 10px 14px;
+    text-align: left;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--tone);
+    border-radius: 8px;
+    cursor: pointer;
+  }
+
+  .stop .card:hover { border-color: var(--accent); border-left-color: var(--tone); }
+  .stop .card:not([data-path]) { cursor: default; }
+
+  .stop .card.selected {
+    outline: 2px solid var(--ink-2);
+    outline-offset: 2px;
+  }
+
+  .stop.pending .card {
+    color: var(--muted);
+    background: transparent;
+    border-style: dashed;
+    border-left-style: solid;
+  }
+
+  .card-head {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+  }
+
+  .card-head .title { font-weight: 600; font-size: 1.05rem; }
+  .card-head .when { margin-left: auto; color: var(--muted); font-size: 0.85rem; font-variant-numeric: tabular-nums; }
+
+  .badge {
+    padding: 0 7px;
+    color: var(--tone);
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    border: 1px solid currentColor;
+    border-radius: 999px;
+  }
+
+  .meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 14px;
+    color: var(--ink-2);
+    font-size: 0.85rem;
+  }
+
+  .meta b { color: var(--ink); font-weight: 500; }
+  .pending .meta b { color: var(--muted); }
+
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.8rem; }
+
+  .bar {
+    height: 4px;
+    overflow: hidden;
+    background: var(--bg);
+    border-radius: 2px;
+  }
+
+  .bar > span { display: block; height: 100%; background: var(--tone); }
+
+  .note { color: var(--ink-2); font-size: 0.85rem; }
+  .blocked .note, .waiting .note { color: var(--tone); }
+
+  .file {
+    padding: 0;
+    color: var(--accent);
+    font: inherit;
+    font-size: 0.8rem;
+    background: none;
+    border: 0;
+    cursor: pointer;
+  }
+
+  .file:hover { text-decoration: underline; }
+
+  .reviewers {
+    display: grid;
+    gap: 2px;
+    margin-top: 2px;
+    padding-left: 4px;
+    border-left: 2px solid var(--line);
+  }
+
+  .reviewer {
+    display: grid;
+    grid-template-columns: 12px minmax(0, 1fr);
+    align-items: center;
+    gap: 2px 8px;
+    padding: 4px 6px;
+    color: inherit;
+    font: inherit;
+    font-size: 0.85rem;
+    text-align: left;
+    background: none;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+
+  .reviewer:hover { border-color: var(--accent); }
+  .reviewer.selected { outline: 2px solid var(--ink-2); }
+
+  .reviewer .dot {
+    width: 10px;
+    height: 10px;
+    background: var(--done);
+    border-radius: 50%;
+  }
+
+  .reviewer .agent { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .reviewer .facts { grid-column: 2; color: var(--ink-2); font-size: 0.8rem; }
+
+  .stop.round .label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 0;
+    color: var(--muted);
+    font-size: 0.8rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .stop.round .label::after {
+    content: '';
+    flex: 1;
+    border-top: 1px dashed var(--line);
+  }
+
+  .viewer-head {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    padding: 12px 24px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .viewer-head:empty { display: none; }
+  .viewer-head .path { font-weight: 600; overflow-wrap: anywhere; }
+  .viewer-head .by { color: var(--muted); font-size: 0.85rem; }
 
   .markdown { line-height: 1.55; overflow-wrap: break-word; }
   .markdown > :first-child { margin-top: 0; }
@@ -574,6 +634,12 @@
 
   .markdown hr { border: 0; border-top: 1px solid var(--line); }
   .markdown img { max-width: 100%; }
+
+  @media (max-width: 800px) {
+    .session-page { grid-template-columns: minmax(0, 1fr); grid-template-rows: 55% 45%; }
+    #splitter { display: none; }
+    .viewer { border-top: 1px solid var(--line); }
+  }
 
   @media (max-width: 640px) {
     .column { max-width: none; margin: 16px; }
@@ -643,14 +709,33 @@ const STAGE_FILE = {
   implement: 'tasks.md',
   done: 'deferred.md',
 }
+const STOP_LABELS = {
+  request: 'Request',
+  spec: 'Spec',
+  plan: 'Plan',
+  implement: 'Implement',
+  review: 'Review',
+  report: 'Report',
+  triage: 'Triage',
+  comment: 'Comment',
+  done: 'Done',
+}
 
 const FONT_KEY = 'jam-board-font-size'
 const FONT_MIN = 12
 const FONT_MAX = 24
 const FONT_DEFAULT = 18
 
-const FLOW_KEY = 'jam-board-flow-collapsed'
-const FLOW_ICON = '<path d="M8 12.5v-9M4 7.5l4-4 4 4"/>'
+const NODE_ICONS = {
+  done: '<path d="M3.5 8.5l3 3 6-7"/>',
+  blocked: '<path d="M4.5 4.5l7 7M11.5 4.5l-7 7"/>',
+  waiting: '<path d="M8 4v5M8 12v.01"/>',
+}
+const BADGES = { done: 'done', current: 'running', waiting: 'needs you', blocked: 'blocked', pending: 'next' }
+const TRIAGE_LABELS = { mustFix: 'must fix', shouldFix: 'should fix', nit: 'nit' }
+const COUNT_FORMAT = new Intl.NumberFormat('en', { notation: 'compact', maximumSignificantDigits: 3 })
+const LEFT_MIN = 320
+const RIGHT_MIN = 300
 
 const CARD_ACTIONS = [
   {
@@ -670,14 +755,13 @@ const TOOL_LABELS = { intellij: 'IntelliJ', zed: 'Zed', iterm: 'iTerm', github: 
 const ACTION_KEYS = { a: 'archive', t: 'iterm', e: 'zed', i: 'intellij', o: 'github' }
 
 const $ = (id) => document.getElementById(id)
-const state = { sessions: [], problems: [] }
+const state = { sessions: [], problems: [], failedChecks: [] }
 let listView = { html: '', el: null }
-let sessionView = { dir: null, el: null, row: '', graph: null }
+let sessionView = { dir: null, el: null, card: '', metro: '', head: '', stops: [], selected: -1 }
 let lastView = { key: null, text: null }
-let pickedRound = null
 let renderSeq = 0
 let fontSize = FONT_DEFAULT
-let flowCollapsed = false
+let leftWidth = null
 let selectedDir = null
 
 function escape(text) {
@@ -711,6 +795,83 @@ async function listFiles(dir, prefix = '') {
     else files.push(prefix + entry)
   }
   return files
+}
+
+function stringOrNull(value) {
+  return typeof value === 'string' ? value : null
+}
+
+function integerOrNull(value) {
+  return Number.isInteger(value) ? value : null
+}
+
+// Returns the milliseconds from `started` to `ended` when both are valid times and `ended` comes after `started`, else null.
+function spanMs(started, ended) {
+  const start = Date.parse(started ?? '')
+  const end = Date.parse(ended ?? '')
+  return Number.isFinite(start) && Number.isFinite(end) && end > start ? end - start : null
+}
+
+// Returns the runs of a `runs.jsonl` text and skips each line without a string `stop` and an integer `round`.
+function parseRuns(text) {
+  const runs = []
+  for (const line of String(text).split('\n')) {
+    let value
+    try {
+      value = JSON.parse(line)
+    } catch {
+      continue
+    }
+    if (value === null || typeof value !== 'object') continue
+    if (typeof value.stop !== 'string' || !Number.isInteger(value.round)) continue
+
+    const started = stringOrNull(value.started)
+    const ended = stringOrNull(value.ended)
+    runs.push({
+      stop: value.stop,
+      round: value.round,
+      agent: stringOrNull(value.agent),
+      task: stringOrNull(value.task),
+      model: stringOrNull(value.model),
+      started,
+      ended,
+      durationMs: integerOrNull(value.durationMs) ?? spanMs(started, ended),
+      tokens: integerOrNull(value.tokens),
+      toolUses: integerOrNull(value.toolUses),
+      file: stringOrNull(value.file),
+      outcome: stringOrNull(value.outcome),
+    })
+  }
+  return runs
+}
+
+// Returns the runs of the session in `dir`, or none when its `runs.jsonl` cannot be fetched.
+async function loadRuns(dir) {
+  try {
+    return parseRuns(await fetchText(encodePath(`${dir}runs.jsonl`)))
+  } catch {
+    return []
+  }
+}
+
+// Returns the value of the last `outcome:` line of a `triage.md` text, or null.
+function triageOutcome(text) {
+  const match = [...String(text).matchAll(/^outcome:\s*(.+?)\s*$/gm)].at(-1)
+  return match ? match[1] : null
+}
+
+// Returns the triage outcome of each round in `files` whose `triage.md` can be fetched, keyed by round.
+async function loadOutcomes(dir, files) {
+  const outcomes = {}
+  const reads = files.map(async (path) => {
+    const round = path.match(/^round-(\d+)\/triage\.md$/)?.[1]
+    if (round === undefined) return
+
+    const text = await fetchText(encodePath(dir + path)).catch(() => null)
+    if (text !== null) outcomes[round] = triageOutcome(text)
+  })
+  await Promise.all(reads)
+  return outcomes
 }
 
 async function loadSessions() {
@@ -891,7 +1052,7 @@ function onCardAction(event) {
   const button = event.target.closest('button[data-action]')
   if (!button) return
 
-  const dir = button.closest('.card')?.dataset.dir
+  const dir = button.closest('[data-dir]')?.dataset.dir
   const session = state.sessions.find((s) => s.dir === dir)
   if (!session) return
 
@@ -927,22 +1088,6 @@ function fileHtml(path, text) {
   return codeBlock(text)
 }
 
-function nodeState(session, phase) {
-  const phases = flowOf(session)?.phases ?? []
-  const current = phases.indexOf(currentPhase(session))
-  const i = phases.indexOf(phase)
-  if (i < current) return 'past'
-  if (i > current || current < 0) return 'future'
-  return `current ${tint(session)}`
-}
-
-function graphNode(session, open, label, state, path = null) {
-  if (path === null) return `<span class="node ${state}">${escape(label)}</span>`
-
-  const selected = path === open ? ' selected' : ''
-  return `<a class="node ${state}${selected}" href="${escape(fileHref(session, path))}">${escape(label)}</a>`
-}
-
 function reviewNames(files, round) {
   const prefix = `round-${round}/reviews/`
   return files
@@ -951,69 +1096,8 @@ function reviewNames(files, round) {
     .sort((a, b) => a.localeCompare(b))
 }
 
-function reviewNodes(session, files, round, state, open) {
-  const names = round > 0 ? reviewNames(files, round) : []
-  if (names.length > 0) {
-    return names.map((name) => graphNode(session, open, name, state, `round-${round}/reviews/${name}.md`))
-  }
-
-  const running = round > 0 && round === session.round && session.stage === 'verify'
-  return [graphNode(session, open, running ? 'review · running' : 'review', state)]
-}
-
 function displayName(path) {
   return path.endsWith('.md') ? path.slice(0, -3) : path
-}
-
-// Returns the chips whose file exists: triage, extras, the other files of round `round` without a node, then decisions.
-function chips(files, round) {
-  const list = []
-  if (round > 0) {
-    const prefix = `round-${round}/`
-    const named = [
-      { label: 'triage', path: `${prefix}triage.md` },
-      { label: 'extras', path: `${prefix}extras.md` },
-    ]
-    const covered = new Set([
-      `${prefix}report.md`,
-      `${prefix}submit.md`,
-      ...named.map((chip) => chip.path),
-      ...reviewNames(files, round).map((name) => `${prefix}reviews/${name}.md`),
-    ])
-    const others = files
-      .filter((path) => path.startsWith(prefix) && !covered.has(path))
-      .sort((a, b) => a.localeCompare(b))
-      .map((path) => ({ label: displayName(path.slice(prefix.length)), path }))
-    list.push(...named, ...others)
-  }
-
-  list.push({ label: 'decisions', path: 'decisions.md' })
-  return list.filter((chip) => files.includes(chip.path))
-}
-
-function chipsHtml(session, files, round, open) {
-  const links = chips(files, round).map(({ label, path }) => {
-    const selected = path === open ? ' selected' : ''
-    return `<a class="chip${selected}" href="${escape(fileHref(session, path))}">${escape(label)}</a>`
-  })
-  return links.length > 0 ? `<div class="chips">${links.join('')}</div>` : ''
-}
-
-function roundButtons(session) {
-  if (!(session.round > 0)) return ''
-
-  const shown = pickedRound ?? session.round
-  const buttons = []
-  for (let round = 1; round <= session.round; round += 1) {
-    const picked = round === shown ? ' class="picked"' : ''
-    buttons.push(`<button type="button" data-round="${round}" title="round ${round}"${picked}>${round}</button>`)
-  }
-  return `<div class="rounds">${buttons.join('')}</div>`
-}
-
-// Returns the round the graph shows: the picked one, else the last one, or 0 before the first round.
-function shownRound(session) {
-  return session.round > 0 ? (pickedRound ?? session.round) : 0
 }
 
 // Returns the file the pane shows when the route names none.
@@ -1048,120 +1132,589 @@ function vibeDefaultFile(session) {
   return null
 }
 
-function graphHtml(session, files, round, open) {
-  if (sessionFlow(session) === 'review') return reviewGraphHtml(session, files, round, open)
-  if (sessionFlow(session) === 'vibe') return vibeGraphHtml(session, open)
+function sessionRound(session) {
+  return Number.isInteger(session.round) && session.round > 0 ? session.round : 0
+}
 
-  const phases = FLOWS.build.phases
-  const phase = phases.indexOf(currentPhase(session))
-  const fixing = round > 0 && phase >= 0 && phase < phases.indexOf('review')
-  const finished = round < session.round || fixing
-  const reviewState = finished ? 'past' : nodeState(session, 'review')
-  const triageState = finished ? 'past' : nodeState(session, 'triage')
-  const doneState = session.stage === 'done' ? nodeState(session, 'done') : 'future'
-  const blockedState = session.stage === 'blocked' ? 'current blocked' : 'future'
+// Returns true when `round` has its `triage.md`, or for a review session its `submit.md` or a done `comment` run.
+function roundClosed(session, round, files, runs) {
+  if (sessionFlow(session) !== 'review') return files.includes(`round-${round}/triage.md`)
 
-  const edge = '<span class="edge"></span>'
-  const stub = '<span class="stub"></span>'
-  const reviews = reviewNodes(session, files, round, reviewState, open)
-    .map((node) => `<div class="branch">${stub}${node}${stub}</div>`)
-    .join('')
-  const triagePath = round > 0 ? `round-${round}/report.md` : null
+  const commented = runs.some((run) => run.stop === 'comment' && run.round === round && run.outcome === 'done')
+  return commented || files.includes(`round-${round}/submit.md`)
+}
+
+// Returns `round` while it is not closed, else the next round.
+function openRound(session, files, runs) {
+  const round = sessionRound(session)
+  return round > 0 && !roundClosed(session, round, files, runs) ? round : round + 1
+}
+
+// Returns true when a build session implements once more after its last round.
+function hasFinalImplement(session, files) {
+  const round = sessionRound(session)
+  return session.lastRound === true && round > 0 && files.includes(`round-${round}/triage.md`)
+}
+
+// Returns the rounds the line shows, in order.
+function shownRounds(session, files, runs) {
+  const round = sessionRound(session)
+  const open = openRound(session, files, runs)
+  const rounds = []
+  for (let n = 1; n <= round; n += 1) rounds.push(n)
+
+  const working = ['implement', 'verify'].includes(phaseStage(session))
+  if (open > round && working && !hasFinalImplement(session, files)) rounds.push(open)
+  if (rounds.length === 0) rounds.push(1)
+  return rounds
+}
+
+// Returns a pending stop of `kind`, with `file` as its main file when the file exists.
+function newStop(kind, round, file, files) {
+  return {
+    kind,
+    round,
+    label: STOP_LABELS[kind],
+    state: 'pending',
+    file: files.includes(file) ? file : null,
+    links: [],
+    reviewers: null,
+    runs: [],
+    durationMs: null,
+    note: null,
+    progress: null,
+    triage: null,
+  }
+}
+
+// Attaches to `stop` the runs of its kind in `round` and returns it.
+function withRuns(stop, runs, round = stop.round) {
+  stop.runs = runs.filter((run) => run.stop === stop.kind && run.round === round)
+  return stop
+}
+
+function existingLinks(files, links) {
+  return links.filter((link) => files.includes(link.path))
+}
+
+function findStop(stops, kind, round) {
+  return stops.findIndex((stop) => stop.kind === kind && stop.round === round)
+}
+
+function taskProgress(session) {
+  const done = integerOrNull(session.counts?.tasksDone)
+  const open = integerOrNull(session.counts?.tasksOpen)
+  if (done === null || open === null || done + open === 0) return null
+  return { done, total: done + open }
+}
+
+function triageCounts(session) {
+  const triage = {
+    mustFix: integerOrNull(session.counts?.mustFix),
+    shouldFix: integerOrNull(session.counts?.shouldFix),
+    nit: integerOrNull(session.counts?.nit),
+  }
+  return Object.values(triage).some((count) => count !== null) ? triage : null
+}
+
+// Returns the Review stop of `round`, with one reviewer per review file, the runs of `kinds` that no reviewer claims, and the time of all its runs.
+function reviewStop(round, files, runs, kinds) {
+  const stop = newStop('review', round, `round-${round}/report.md`, files)
+  stop.links = existingLinks(files, [{ label: 'extras', path: `round-${round}/extras.md` }])
+
+  const reviews = runs.filter((run) => run.stop === 'review' && run.round === round)
+  stop.reviewers = reviewNames(files, round).map((name) => {
+    const path = `round-${round}/reviews/${name}.md`
+    return { name, path, run: reviews.findLast((run) => run.file === path) ?? null }
+  })
+
+  const owned = runs.filter((run) => kinds.includes(run.stop) && run.round === round)
+  const claimed = new Set(stop.reviewers.map((reviewer) => reviewer.path))
+  const claims = (run) => run.stop === 'review' && claimed.has(run.file)
+  stop.runs = owned.filter((run) => !claims(run))
+  stop.durationMs = elapsedMs(owned)
+  return stop
+}
+
+// Returns the Triage stop of `round`, linking each round file that no other stop shows.
+function triageStop(session, round, files, runs) {
+  const prefix = `round-${round}/`
+  const stop = withRuns(newStop('triage', round, `${prefix}triage.md`, files), runs)
+
+  const shown = new Set([
+    ...['report.md', 'triage.md', 'extras.md', 'submit.md'].map((name) => prefix + name),
+    ...reviewNames(files, round).map((name) => `${prefix}reviews/${name}.md`),
+  ])
+  stop.links = files
+    .filter((path) => path.startsWith(prefix) && !shown.has(path))
+    .sort((a, b) => a.localeCompare(b))
+    .map((path) => ({ label: displayName(path.slice(prefix.length)), path }))
+
+  if (round === sessionRound(session) && stop.file !== null) stop.triage = triageCounts(session)
+  return stop
+}
+
+function doneStop(files) {
+  const stop = newStop('done', 0, 'deferred.md', files)
+  stop.links = existingLinks(files, [{ label: 'decisions', path: 'decisions.md' }])
+  return stop
+}
+
+// Returns the stops of a build session and the index of its current stop.
+function buildFlowStops(session, files, runs, outcomes) {
+  const stops = [
+    withRuns(newStop('request', 0, 'request.md', files), runs),
+    withRuns(newStop('spec', 0, 'spec.md', files), runs),
+    withRuns(newStop('plan', 0, 'plan.md', files), runs),
+  ]
+  const open = openRound(session, files, runs)
+  const progress = taskProgress(session)
+
+  for (const round of shownRounds(session, files, runs)) {
+    // A round after a `finalize` triage starts at its Review.
+    if (outcomes[round - 1] !== 'finalize') {
+      const implement = withRuns(newStop('implement', round, 'tasks.md', files), runs)
+      if (round === open) implement.progress = progress
+      stops.push(implement)
+    }
+    stops.push(reviewStop(round, files, runs, ['review', 'report']), triageStop(session, round, files, runs))
+  }
+
+  const final = hasFinalImplement(session, files)
+  if (final) {
+    const implement = withRuns(newStop('implement', 0, 'tasks.md', files), runs, open)
+    implement.progress = progress
+    stops.push(implement)
+  }
+  stops.push(doneStop(files))
+
+  const stage = phaseStage(session)
+  let current = -1
+  if (stage === 'spec' || stage === 'plan') current = findStop(stops, stage, 0)
+  if (stage === 'implement') current = findStop(stops, 'implement', final ? 0 : open)
+  if (stage === 'verify') current = findStop(stops, 'review', open)
+  if (stage === 'triage') current = findStop(stops, 'triage', sessionRound(session))
+  if (stage === 'done') current = findStop(stops, 'done', 0)
+  return { stops, current }
+}
+
+// Returns the stops of a review session and the index of its current stop.
+function reviewFlowStops(session, files, runs) {
+  const stops = [withRuns(newStop('request', 0, 'request.md', files), runs)]
+  for (const round of shownRounds(session, files, runs)) {
+    stops.push(
+      reviewStop(round, files, runs, ['review']),
+      withRuns(newStop('report', round, `round-${round}/report.md`, files), runs),
+      withRuns(newStop('comment', round, `round-${round}/submit.md`, files), runs),
+    )
+  }
+  stops.push(doneStop(files))
+
+  const stage = phaseStage(session)
+  const open = openRound(session, files, runs)
+  let current = -1
+  if (stage === 'verify') current = findStop(stops, files.includes(`round-${open}/report.md`) ? 'report' : 'review', open)
+  if (stage === 'submit') current = findStop(stops, 'comment', sessionRound(session))
+  if (stage === 'done') current = findStop(stops, 'done', 0)
+  return { stops, current }
+}
+
+// Returns the stops of a vibe session and the index of its current stop.
+function vibeFlowStops(session, files, runs) {
+  const implement = withRuns(newStop('implement', 0, 'tasks.md', files), runs)
+  implement.progress = taskProgress(session)
+  const stops = [withRuns(newStop('request', 0, 'request.md', files), runs), implement, doneStop(files)]
+
+  const stage = phaseStage(session)
+  let current = -1
+  if (stage === 'implement') current = 1
+  if (stage === 'done') current = 2
+  return { stops, current }
+}
+
+function currentState(session, stop) {
+  if (session.stage === 'blocked') return 'blocked'
+  if (session.stage === 'done' && stop.kind === 'done') return 'done'
+  if ((session.stage === 'triage' || session.stage === 'submit') && sessionMode(session) === 'interactive') return 'waiting'
+  return 'current'
+}
+
+// Returns the stops of the session's line, with their states, files and runs.
+function buildStops(session, files, runs, outcomes = {}) {
+  const flow = sessionFlow(session)
+  const flowStops = flow === 'review' ? reviewFlowStops : flow === 'vibe' ? vibeFlowStops : buildFlowStops
+  const { stops, current } = flowStops(session, files, runs, outcomes)
+
+  stops.forEach((stop, i) => {
+    if (stop.kind === 'request' || (current >= 0 && i < current)) stop.state = 'done'
+    else if (i === current) stop.state = currentState(session, stop)
+    else stop.state = 'pending'
+  })
+
+  const blocked = stops[current]
+  if (blocked?.state === 'blocked') {
+    blocked.file = 'session.json'
+    blocked.note = stringOrNull(session.blocked?.reason)
+  }
+  return stops
+}
+
+function distinct(values) {
+  return [...new Set(values.filter((value) => value !== null))]
+}
+
+function sumOrNull(values) {
+  const present = values.filter((value) => value !== null)
+  return present.length > 0 ? present.reduce((sum, value) => sum + value, 0) : null
+}
+
+// Returns the span from the earliest `started` to the latest `ended` of `runs` when every run has both, else the sum of `durationMs`.
+function elapsedMs(runs) {
+  const starts = runs.map((run) => Date.parse(run.started ?? ''))
+  const ends = runs.map((run) => Date.parse(run.ended ?? ''))
+  if (runs.length > 0 && [...starts, ...ends].every(Number.isFinite)) return Math.max(...ends) - Math.min(...starts)
+  return sumOrNull(runs.map((run) => run.durationMs))
+}
+
+// Returns the distinct agents and models of `runs`, and each sum over the runs that record it.
+function runTotals(runs) {
+  return {
+    agents: distinct(runs.map((run) => run.agent)),
+    models: distinct(runs.map((run) => run.model)),
+    tokens: sumOrNull(runs.map((run) => run.tokens)),
+    durationMs: sumOrNull(runs.map((run) => run.durationMs)),
+    toolUses: sumOrNull(runs.map((run) => run.toolUses)),
+  }
+}
+
+// Returns true when `stop` opens `path` as its main file, a link or a reviewer.
+function stopShows(stop, path) {
+  if (stop === undefined || path === null) return false
+
+  return (
+    stop.file === path ||
+    stop.links.some((link) => link.path === path) ||
+    (stop.reviewers ?? []).some((reviewer) => reviewer.path === path)
+  )
+}
+
+// Returns the index of the last non-pending stop that shows `path`, else of the first stop that shows it, else -1.
+function stopIndexForFile(stops, path) {
+  const matches = stops.flatMap((stop, i) => (stopShows(stop, path) ? [i] : []))
+  const reached = matches.filter((i) => stops[i].state !== 'pending')
+  return reached.at(-1) ?? matches[0] ?? -1
+}
+
+// Returns the names of the stop model cases that fail.
+function metroSelfCheck() {
+  const buildSession = (fields) => ({ flow: 'build', mode: 'default', round: 0, lastRound: false, blocked: null, ...fields })
+  const kinds = (stops) => stops.map((stop) => stop.kind).join(' ')
+  const line = (stops) => stops.map((stop) => `${stop.kind}${stop.round}:${stop.state}`).join(' ')
+
+  const cases = {
+    'no-runs': () => {
+      const stops = buildStops(buildSession({ stage: 'verify', round: 1 }), ['request.md', 'round-1/triage.md'], parseRuns(''))
+      return parseRuns('').length === 0 && stops.every((stop) => stop.runs.length === 0)
+    },
+
+    'truncated-line': () => {
+      const runs = parseRuns('{"stop":"spec","round":0,"tokens":5}\n{"stop":"pl')
+      return runs.length === 1 && runs[0].tokens === 5
+    },
+
+    'bad-types': () => parseRuns('{"stop":"spec","round":0,"tokens":"many"}')[0].tokens === null,
+
+    'run-duration': () => {
+      const duration = (fields) => parseRuns(JSON.stringify({ stop: 'implement', round: 1, ...fields }))[0].durationMs
+      const started = '2026-10-22T10:00:00Z'
+      const ended = '2026-10-22T10:01:30Z'
+      return (
+        duration({ started, ended, durationMs: null }) === 90000 &&
+        duration({ started, ended, durationMs: 1000 }) === 1000 &&
+        duration({ started: ended, ended: started }) === null &&
+        duration({ started: 'soon', ended }) === null
+      )
+    },
+
+    'verify-before-bump': () => {
+      const stops = buildStops(buildSession({ stage: 'verify', round: 1 }), ['round-1/triage.md'], [])
+      const current = stops.find((stop) => stop.state === 'current')
+      return current?.kind === 'review' && current.round === 2
+    },
+
+    blocked: () => {
+      const session = buildSession({ stage: 'blocked', round: 1, blocked: { stage: 'implement', reason: 'x' } })
+      const stops = buildStops(session, ['round-1/triage.md'], [])
+      const i = stops.findIndex((stop) => stop.state === 'blocked')
+      return (
+        stops[i]?.kind === 'implement' &&
+        stops[i].note === 'x' &&
+        stops[i].file === 'session.json' &&
+        stops.slice(i + 1).every((stop) => stop.state === 'pending')
+      )
+    },
+
+    waiting: () => {
+      const stops = buildStops(buildSession({ stage: 'triage', round: 1, mode: 'interactive' }), ['round-1/report.md'], [])
+      return stops.find((stop) => stop.kind === 'triage')?.state === 'waiting'
+    },
+
+    'last-round': () => {
+      const session = buildSession({ stage: 'implement', round: 2, lastRound: true })
+      const stops = buildStops(session, ['round-1/triage.md', 'round-2/triage.md'], [])
+      const i = stops.findIndex((stop) => stop.state === 'current')
+      return stops[i]?.kind === 'implement' && stops[i - 1]?.kind === 'triage' && stops[i + 1]?.kind === 'done'
+    },
+
+    'review-flow': () => {
+      const stops = buildStops({ flow: 'review', stage: 'submit', round: 1 }, ['round-1/report.md'], [])
+      return kinds(stops) === 'request review report comment done'
+    },
+
+    'no-findings-round': () => {
+      const session = { flow: 'review', stage: 'blocked', round: 1, blocked: { stage: 'verify' } }
+      const runs = parseRuns('{"stop":"comment","round":1,"outcome":"done"}')
+      const stops = buildStops(session, ['request.md', 'round-1/report.md'], runs)
+      const expected = 'request0:done review1:done report1:done comment1:done review2:blocked report2:pending comment2:pending done0:pending'
+      return line(stops) === expected
+    },
+
+    'verify-after-finalize': () => {
+      const outcomes = { 1: 'next round', 2: triageOutcome('# Triage: round 2\n\n- F1: dismiss → D1\n\noutcome: finalize\n') }
+      const stops = buildStops(buildSession({ stage: 'verify', round: 2 }), ['round-1/triage.md', 'round-2/triage.md'], [], outcomes)
+      const expected =
+        'request0:done spec0:done plan0:done implement1:done review1:done triage1:done implement2:done review2:done triage2:done ' +
+        'review3:current triage3:pending done0:pending'
+      return line(stops) === expected
+    },
+
+    'verify-after-last-round': () => {
+      const outcomes = { 1: 'next round', 2: 'last round' }
+      const stops = buildStops(buildSession({ stage: 'verify', round: 2 }), ['round-1/triage.md', 'round-2/triage.md'], [], outcomes)
+      return line(stops).endsWith('triage2:done implement3:done review3:current triage3:pending done0:pending')
+    },
+
+    'feedback-after-finalize': () => {
+      const session = buildSession({ stage: 'triage', round: 2, feedbackImport: { round: 2, phase: 'normalize' } })
+      const files = ['round-1/triage.md', 'round-2/reviews/github-feedback.md']
+      const stops = buildStops(session, files, [], { 1: 'finalize' })
+      const expected =
+        'request0:done spec0:done plan0:done implement1:done review1:done triage1:done review2:done triage2:current done0:pending'
+      return line(stops) === expected
+    },
+
+    'vibe-flow': () => {
+      const stops = buildStops({ flow: 'vibe', stage: 'implement', round: 0 }, [], [])
+      return kinds(stops) === 'request implement done'
+    },
+
+    'reviewer-run': () => {
+      const path = 'round-1/reviews/a.md'
+      const runs = parseRuns(`{"stop":"review","round":1,"file":"${path}"}\n{"stop":"review","round":1,"file":null}`)
+      const review = buildStops(buildSession({ stage: 'triage', round: 1 }), [path], runs).find((stop) => stop.kind === 'review')
+      return review.reviewers[0]?.run?.file === path && review.runs.length === 1 && review.runs[0].file === null
+    },
+
+    'review-time': () => {
+      const files = ['round-1/reviews/a.md', 'round-1/reviews/b.md']
+      const a = '{"stop":"review","round":1,"file":"round-1/reviews/a.md","started":"2026-10-22T10:00:00Z","ended":"2026-10-22T10:05:00Z"}'
+      const b = '{"stop":"review","round":1,"file":"round-1/reviews/b.md","started":"2026-10-22T10:01:00Z","ended":"2026-10-22T10:09:00Z","durationMs":480000}'
+      const report = '{"stop":"report","round":1,"started":"2026-10-22T10:09:00Z","ended":"2026-10-22T10:09:45Z","durationMs":45000}'
+      const untimed = '{"stop":"review","round":1,"durationMs":1000}'
+
+      const time = (lines) => {
+        const stops = buildStops(buildSession({ stage: 'triage', round: 1 }), files, parseRuns(lines.join('\n')))
+        return stops.find((stop) => stop.kind === 'review').durationMs
+      }
+      return time([a, b, report]) === 585000 && time([b, report, untimed]) === 526000
+    },
+
+    'run-totals': () => {
+      const totals = runTotals(parseRuns('{"stop":"spec","round":0,"model":"m","tokens":2}\n{"stop":"spec","round":0,"model":"m"}'))
+      return totals.models.join() === 'm' && totals.agents.length === 0 && totals.tokens === 2 && totals.toolUses === null
+    },
+  }
+
+  return Object.keys(cases).filter((name) => {
+    try {
+      return !cases[name]()
+    } catch {
+      return true
+    }
+  })
+}
+
+// Returns `count` in short form, such as 35.6k.
+function formatCount(count) {
+  return COUNT_FORMAT.format(count).replace('K', 'k')
+}
+
+// Returns `ms` as hours, minutes and seconds, such as 4m 12s.
+function formatDuration(ms) {
+  const seconds = Math.round(ms / 1000)
+  if (seconds < 60) return `${seconds}s`
+
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `${minutes}m ${seconds % 60}s`
+  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`
+}
+
+// Returns the earliest valid `started` time of `runs`, or null.
+function firstStarted(runs) {
+  const times = runs.map((run) => Date.parse(run.started ?? '')).filter(Number.isFinite)
+  return times.length > 0 ? new Date(Math.min(...times)) : null
+}
+
+// Returns the session card: the session's name, worktree, facts and actions.
+function sessionCardHtml(session, runs) {
+  const facts = [sessionFlow(session), sessionMode(session)]
+  if (sessionRound(session) > 0) facts.push(`round ${sessionRound(session)}`)
+
+  const started = firstStarted(runs)
+  if (started !== null) facts.push(`started ${started.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}`)
+
+  const tokens = runTotals(runs).tokens
+  if (tokens !== null) facts.push(`${formatCount(tokens)} tokens`)
 
   return `
-    <div class="flow">
-      ${graphNode(session, open, 'request', 'past', 'request.md')}
-      ${edge}
-      ${graphNode(session, open, 'spec', nodeState(session, 'spec'), 'spec.md')}
-      ${edge}
-      ${graphNode(session, open, 'plan', nodeState(session, 'plan'), 'plan.md')}
-      ${edge}
-      <div class="loop">
-        <div class="loop-end start">${graphNode(session, open, 'impl', nodeState(session, 'impl'), 'tasks.md')}</div>
-        ${edge}
-        <div class="branches fan-in">${reviews}</div>
-        ${edge}
-        <div class="loop-end finish">${graphNode(session, open, 'triage', triageState, triagePath)}</div>
-        <span class="back-edge"></span>
-        ${chipsHtml(session, files, round, open)}
-        ${roundButtons(session)}
-      </div>
-      ${edge}
-      <div class="branches ends">
-        <div class="branch">${stub}${graphNode(session, open, 'done', doneState, 'deferred.md')}</div>
-        <div class="branch">${stub}${graphNode(session, open, 'blocked', blockedState, 'session.json')}</div>
-      </div>
+    <div class="session-card" data-dir="${escape(session.dir)}">
+      <div class="id">${escape(session.repo)} / ${escape(session.id)}</div>
+      <div class="path">${escape(shortPath(session.worktree))}</div>
+      <div class="facts">${facts.map((fact) => `<span class="pill">${escape(fact)}</span>`).join('')}</div>
+      <div class="actions">${cardActions(session)}</div>
     </div>`
 }
 
-function reviewGraphHtml(session, files, round, open) {
-  const finished = round < session.round
-  const reviewState = finished ? 'past' : nodeState(session, 'review')
-  const commentState = finished ? 'past' : nodeState(session, 'submit')
-  const doneState = session.stage === 'done' ? nodeState(session, 'done') : 'future'
-  const blockedState = session.stage === 'blocked' ? 'current blocked' : 'future'
+// Returns the node of `stop`: a capsule for Review, a double ring for Done, else a circle.
+function nodeHtml(stop) {
+  const shape = stop.kind === 'review' ? ' interchange' : stop.kind === 'done' ? ' terminus' : ''
+  const icon = Object.hasOwn(NODE_ICONS, stop.state)
+    ? `<svg viewBox="0 0 16 16" aria-hidden="true">${NODE_ICONS[stop.state]}</svg>`
+    : ''
+  return `<span class="node${shape}">${icon}</span>`
+}
 
-  const edge = '<span class="edge"></span>'
-  const stub = '<span class="stub"></span>'
-  const reviews = reviewNodes(session, files, round, reviewState, open)
-    .map((node) => `<div class="branch">${stub}${node}${stub}</div>`)
-    .join('')
-  const reportPath = round > 0 ? `round-${round}/report.md` : null
-  const commentPath = round > 0 ? `round-${round}/submit.md` : null
-  const donePath = session.round > 0 ? `round-${session.round}/submit.md` : null
+function segHtml(position, reached) {
+  return `<span class="seg ${position} ${reached ? 'travelled' : 'todo'}"></span>`
+}
 
+function metaHtml(facts) {
+  return `<div class="meta">${facts.map((fact) => `<span>${fact}</span>`).join('')}</div>`
+}
+
+// Returns the models, tokens and tool uses of `totals` that have data, as HTML.
+function usageFacts({ models, tokens, toolUses }) {
+  const facts = []
+  if (models.length > 0) facts.push(`<b>${escape(models.join(', '))}</b>`)
+  if (tokens !== null) facts.push(`${formatCount(tokens)} tokens`)
+  if (toolUses !== null) facts.push(`${toolUses} tool uses`)
+  return facts
+}
+
+// Returns one button per reviewer: its agent, then the model, tokens and duration of its run.
+function reviewersHtml(reviewers, open) {
+  const rows = reviewers.map(({ name, path, run }) => {
+    const facts = []
+    if (run?.model) facts.push(escape(run.model))
+    if (Number.isInteger(run?.tokens)) facts.push(`${formatCount(run.tokens)} tokens`)
+    if (Number.isInteger(run?.durationMs)) facts.push(formatDuration(run.durationMs))
+
+    const selected = path === open ? ' selected' : ''
+    const line = facts.length > 0 ? `<span class="facts">${facts.join(' · ')}</span>` : ''
+    return `
+      <button type="button" class="reviewer${selected}" data-path="${escape(path)}" title="${escape(path)}">
+        <span class="dot"></span>
+        <span class="agent">${escape(run?.agent ?? name)}</span>
+        ${line}
+      </button>`
+  })
+  return `<div class="reviewers">${rows.join('')}</div>`
+}
+
+// Returns the card of `stop`: its title, its badge and the facts the session has data for.
+function stopCardHtml(stop, open, selected) {
+  const totals = runTotals(stop.runs)
+  const lines = []
+
+  if (totals.agents.length > 0) lines.push(`<div class="meta mono">${escape(totals.agents.join(', '))}</div>`)
+
+  const usage = usageFacts(totals)
+  if (usage.length > 0) lines.push(metaHtml(usage))
+
+  if (stop.progress !== null) {
+    const { done, total } = stop.progress
+    lines.push(metaHtml([`tasks <b>${done}/${total}</b>`]))
+    lines.push(`<div class="bar"><span style="width: ${Math.round((100 * done) / total)}%"></span></div>`)
+  }
+
+  if (stop.triage !== null) {
+    const counts = Object.entries(TRIAGE_LABELS)
+      .filter(([key]) => stop.triage[key] !== null)
+      .map(([key, label]) => `<b>${stop.triage[key]}</b> ${label}`)
+    lines.push(metaHtml(counts))
+  }
+
+  if ((stop.reviewers ?? []).length > 0) lines.push(reviewersHtml(stop.reviewers, open))
+  if (stop.note !== null) lines.push(`<div class="note">${escape(stop.note)}</div>`)
+
+  if (stop.links.length > 0) {
+    const links = stop.links.map(
+      ({ label, path }) => `<button type="button" class="file" data-path="${escape(path)}">${escape(label)}</button>`,
+    )
+    lines.push(`<div class="meta">${links.join('')}</div>`)
+  }
+
+  const durationMs = stop.durationMs ?? totals.durationMs
+  const when = durationMs !== null ? `<span class="when">${formatDuration(durationMs)}</span>` : ''
+  const path = stop.file !== null ? ` data-path="${escape(stop.file)}"` : ''
   return `
-    <div class="flow">
-      ${graphNode(session, open, 'request', 'past', 'request.md')}
-      ${edge}
-      <div class="loop">
-        <div class="loop-end start"><div class="branches fan-in">${reviews}</div></div>
-        ${edge}
-        ${graphNode(session, open, 'report', reviewState, reportPath)}
-        ${edge}
-        <div class="loop-end finish">${graphNode(session, open, 'comment', commentState, commentPath)}</div>
-        <span class="back-edge"></span>
-        ${chipsHtml(session, files, round, open)}
-        ${roundButtons(session)}
+    <div class="card${selected ? ' selected' : ''}"${path}>
+      <div class="card-head">
+        <span class="title">${escape(stop.label)}</span>
+        <span class="badge">${BADGES[stop.state]}</span>
+        ${when}
       </div>
-      ${edge}
-      <div class="branches ends">
-        <div class="branch">${stub}${graphNode(session, open, 'done', doneState, donePath)}</div>
-        <div class="branch">${stub}${graphNode(session, open, 'blocked', blockedState, 'session.json')}</div>
-      </div>
+      ${lines.join('')}
     </div>`
 }
 
-function vibeGraphHtml(session, open) {
-  const doneState = session.stage === 'done' ? nodeState(session, 'done') : 'future'
-  const blockedState = session.stage === 'blocked' ? 'current blocked' : 'future'
+// Returns the metro line: a round label before each round's first stop, then one row per stop.
+function metroHtml(stops, open, selected) {
+  const reached = (stop) => stop !== undefined && stop.state !== 'pending'
+  const rows = []
+  let labelled = 0
 
-  const edge = '<span class="edge"></span>'
-  const stub = '<span class="stub"></span>'
+  stops.forEach((stop, i) => {
+    if (stop.round > 0 && stop.round !== labelled) {
+      labelled = stop.round
+      rows.push(`
+        <div class="stop round">
+          <div class="rail">${segHtml('full', reached(stop))}</div>
+          <div class="label">Round ${stop.round}</div>
+        </div>`)
+    }
 
-  return `
-    <div class="flow">
-      ${graphNode(session, open, 'request', 'past', 'request.md')}
-      ${edge}
-      ${graphNode(session, open, 'impl', nodeState(session, 'impl'), 'tasks.md')}
-      ${edge}
-      <div class="branches ends">
-        <div class="branch">${stub}${graphNode(session, open, 'done', doneState)}</div>
-        <div class="branch">${stub}${graphNode(session, open, 'blocked', blockedState, 'session.json')}</div>
-      </div>
-    </div>`
+    const up = i > 0 ? segHtml('up', reached(stop)) : ''
+    const down = i < stops.length - 1 ? segHtml('down', reached(stops[i + 1])) : ''
+    rows.push(`
+      <div class="stop ${stop.state}" data-index="${i}">
+        <div class="rail">${up}${down}${nodeHtml(stop)}</div>
+        ${stopCardHtml(stop, open, i === selected)}
+      </div>`)
+  })
+  return rows.join('')
 }
 
-function onPickRound(event) {
-  const button = event.target.closest('button[data-round]')
-  if (!button) return
+// Returns the viewer head: the open path, then the label and agents of `stop`.
+function viewerHeadHtml(stop, open) {
+  if (open === null) return ''
 
-  pickedRound = Number(button.dataset.round)
+  const path = `<span class="path">${escape(open)}</span>`
+  if (stop === undefined) return path
 
-  const route = parseRoute(location.hash)
-  const match = /^round-\d+\/(.+)$/.exec(route.path ?? '')
-  if (match) location.hash = fileHref(route, `round-${pickedRound}/${match[1]}`)
-  render()
+  const reviewer = (stop.reviewers ?? []).find((r) => r.path === open)
+  const agents = reviewer ? (reviewer.run?.agent ? [reviewer.run.agent] : []) : runTotals(stop.runs).agents
+  return `${path}<span class="by">${escape([stop.label, ...agents].join(' · '))}</span>`
 }
 
 // Shows `path` in the pane, or a blank pane when it is null or missing.
@@ -1238,50 +1791,127 @@ function sessionAction(session, key) {
   return true
 }
 
+// Scrolls the metro pane to show the card of stop `index` below the session card.
+function revealStop(index) {
+  const card = $('metro').querySelector(`.stop[data-index="${index}"] > .card`)
+  if (!card) return
+
+  card.style.scrollMarginTop = `${$('session-card').offsetHeight}px`
+  card.scrollIntoView({ block: 'nearest' })
+}
+
+// Shows `path` of `session`, and renders again when the route already names it.
+function openPath(session, path) {
+  if (parseRoute(location.hash)?.path === path) render()
+  else location.hash = fileHref(session, path)
+}
+
+// Selects the stop of the clicked card, reviewer or link, and opens its file.
+function onMetroClick(event) {
+  const target = event.target.closest('[data-path]')
+  const stop = event.target.closest('.stop[data-index]')
+  if (!target || !stop) return
+
+  const session = state.sessions.find((s) => s.dir === sessionView.dir)
+  if (!session) return
+
+  sessionView.selected = Number(stop.dataset.index)
+  openPath(session, target.dataset.path)
+}
+
+// Selects the nearest stop with a file in direction `step`, opens the file and returns true when one exists.
+function moveStop(session, step) {
+  if (sessionView.dir !== session.dir) return false
+
+  const { stops, selected } = sessionView
+  let next = selected < 0 && step < 0 ? stops.length - 1 : selected + step
+  while (next >= 0 && next < stops.length && stops[next].file === null) next += step
+  if (next < 0 || next >= stops.length) return false
+
+  sessionView.selected = next
+  revealStop(next)
+  openPath(session, stops[next].file)
+  return true
+}
+
+// Resizes the left column while the splitter is dragged.
+function onSplitterDown(event) {
+  const splitter = event.currentTarget
+  const page = splitter.parentElement
+  const resize = (move) => {
+    const left = move.clientX - page.getBoundingClientRect().left
+    leftWidth = Math.round(Math.min(innerWidth - RIGHT_MIN, Math.max(LEFT_MIN, left)))
+    page.style.setProperty('--left', `${leftWidth}px`)
+  }
+
+  event.preventDefault()
+  splitter.setPointerCapture(event.pointerId)
+  splitter.classList.add('dragging')
+  splitter.addEventListener('pointermove', resize)
+  splitter.addEventListener(
+    'lostpointercapture',
+    () => {
+      splitter.classList.remove('dragging')
+      splitter.removeEventListener('pointermove', resize)
+    },
+    { once: true },
+  )
+}
+
 async function renderSessionPage(session, path) {
   const seq = renderSeq
-  const row = rowContent(session)
 
   if (sessionView.el !== $('page').firstElementChild || sessionView.dir !== session.dir) {
     $('page').innerHTML = `
-      <div class="column session-page">
-        <div class="row card ${tint(session)}" id="session-row" data-dir="${escape(session.dir)}">
-          <div class="body">${row}</div>
-          <span class="actions">${cardActions(session)}</span>
-        </div>
-        <section class="flow-pane" id="flow-pane">
-          <button type="button" class="icon flow-toggle" id="flow-toggle">
-            <svg viewBox="0 0 16 16" aria-hidden="true">${FLOW_ICON}</svg>
-          </button>
-          <div class="flow-strip" id="flow"></div>
+      <div class="session-page">
+        <section id="metro-pane">
+          <div class="session-card-wrap" id="session-card"></div>
+          <div class="metro" id="metro"></div>
         </section>
-        <section id="view"></section>
+        <div id="splitter"></div>
+        <section class="viewer">
+          <div class="viewer-head" id="viewer-head"></div>
+          <div id="view"></div>
+        </section>
       </div>`
-    $('flow').addEventListener('click', onPickRound)
-    $('flow-toggle').addEventListener('click', toggleFlow)
-    $('session-row').addEventListener('click', onCardAction)
-    showFlowCollapsed()
-    sessionView = { dir: session.dir, el: $('page').firstElementChild, row, graph: null }
+    const page = $('page').firstElementChild
+    if (leftWidth !== null) page.style.setProperty('--left', `${leftWidth}px`)
+    $('session-card').addEventListener('click', onCardAction)
+    $('metro').addEventListener('click', onMetroClick)
+    $('splitter').addEventListener('pointerdown', onSplitterDown)
+    sessionView = { dir: session.dir, el: page, card: '', metro: '', head: '', stops: [], selected: -1 }
     lastView = { key: null, text: null }
-    pickedRound = null
-  } else if (sessionView.row !== row) {
-    $('session-row').querySelector('.body').innerHTML = row
-    $('session-row').className = `row card ${tint(session)}`
-    sessionView.row = row
   }
 
-  const files = await listFiles(session.dir)
+  const [files, runs] = await Promise.all([listFiles(session.dir), loadRuns(session.dir)])
+  const outcomes = await loadOutcomes(session.dir, files)
   if (seq !== renderSeq) return
 
-  const round = shownRound(session)
-  const open = path ?? defaultFile(session, files, round)
+  const card = sessionCardHtml(session, runs)
+  if (sessionView.card !== card) {
+    $('session-card').innerHTML = card
+    sessionView.card = card
+  }
 
-  const graph = graphHtml(session, files, round, open)
-  if (sessionView.graph !== graph) {
-    const first = sessionView.graph === null
-    $('flow').innerHTML = graph
-    if (first) $('flow').scrollLeft = $('flow').scrollWidth
-    sessionView.graph = graph
+  const stops = buildStops(session, files, runs, outcomes)
+  const open = path ?? defaultFile(session, files, sessionRound(session))
+  if (!stopShows(stops[sessionView.selected], open)) sessionView.selected = stopIndexForFile(stops, open)
+  sessionView.stops = stops
+
+  const metro = metroHtml(stops, open, sessionView.selected)
+  if (sessionView.metro !== metro) {
+    const first = sessionView.metro === ''
+    const top = $('metro-pane').scrollTop
+    $('metro').innerHTML = metro
+    $('metro-pane').scrollTop = top
+    sessionView.metro = metro
+    if (first) revealStop(sessionView.selected)
+  }
+
+  const head = viewerHeadHtml(stops[sessionView.selected], open)
+  if (sessionView.head !== head) {
+    $('viewer-head').innerHTML = head
+    sessionView.head = head
   }
 
   await showFile(session, files, open, seq)
@@ -1327,13 +1957,7 @@ function sessionKey(key, session) {
     return true
   }
 
-  if (key === 'ArrowDown' || key === 'ArrowUp') {
-    const collapse = key === 'ArrowUp'
-    if (flowCollapsed === collapse) return false
-
-    toggleFlow()
-    return true
-  }
+  if (key === 'ArrowDown' || key === 'ArrowUp') return moveStop(session, key === 'ArrowDown' ? 1 : -1)
 
   return sessionAction(session, key)
 }
@@ -1385,32 +2009,6 @@ function stepFontSize(step) {
   writeFontSize(size)
 }
 
-// Returns true when the stored flow state is collapsed.
-function readFlowCollapsed() {
-  try {
-    return localStorage.getItem(FLOW_KEY) === 'true'
-  } catch {
-    return false
-  }
-}
-
-function writeFlowCollapsed(collapsed) {
-  try {
-    localStorage.setItem(FLOW_KEY, String(collapsed))
-  } catch {}
-}
-
-function showFlowCollapsed() {
-  $('flow-pane').classList.toggle('collapsed', flowCollapsed)
-  $('flow-toggle').title = flowCollapsed ? 'Expand flow' : 'Collapse flow'
-}
-
-function toggleFlow() {
-  flowCollapsed = !flowCollapsed
-  showFlowCollapsed()
-  writeFlowCollapsed(flowCollapsed)
-}
-
 async function poll() {
   try {
     const { sessions, problems } = await loadSessions()
@@ -1419,6 +2017,7 @@ async function poll() {
       if (problem !== null) problems.push(`${session.repo}/${session.id}: ${problem}`)
     }
     problems.push(...missingScripts())
+    if (state.failedChecks.length > 0) problems.push(`metro self-check failed: ${state.failedChecks.join(', ')}`)
 
     state.sessions = sessions
     state.problems = problems
@@ -1433,10 +2032,10 @@ async function poll() {
 $('font-down').addEventListener('click', () => stepFontSize(-1))
 $('font-up').addEventListener('click', () => stepFontSize(1))
 showFontSize(readFontSize())
-flowCollapsed = readFlowCollapsed()
 
 window.addEventListener('hashchange', render)
 document.addEventListener('keydown', onKey)
+state.failedChecks = metroSelfCheck()
 poll()
 setInterval(poll, POLL_MS)
 </script>

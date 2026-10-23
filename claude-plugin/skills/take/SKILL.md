@@ -95,7 +95,8 @@ Show this list when a step says to show the usage:
    - **Anything else**: the request is the argument, verbatim.
 6. Write `{session folder}/request.md` with the request, as `state.md` shows.
 7. Write `{session folder}/session.json` with this worktree, the current branch and the base. Set `mode` from the flag, or `default` without one. Set `flow: build`, `stage: spec`, `round: 0`, `lastRound: false`, every count `0`, `blocked: null` and `archived: false`. The Write tool creates the folders.
-8. Go to **Spec**.
+8. Append a `request` line to `runs.jsonl` with `agent: "main"`. Set its `started` and `ended` to the current time.
+9. Go to **Spec**.
 
 ## Resume
 
@@ -119,6 +120,8 @@ Tell me the session id, the mode, the stage and the round in one line before you
 
 ## Spec
 
+Take the `started` time for `runs.jsonl`.
+
 If `spec.md` exists:
 
 - **`autonomous`**: accept it.
@@ -139,9 +142,11 @@ To brainstorm it with me, load `superpowers:brainstorming` with the **Skill** to
 
 To write it alone, read the request and the code it touches. Ask me nothing. Write `{session folder}/spec.md`, sized to the task. A small, obvious task gets a short spec: the problem, the change and how to check it. List each choice the request left open under **Assumptions**. Never commit the spec.
 
-Once the spec is approved, accepted or written, set `stage: plan` and go to **Plan**.
+Once the spec is approved, accepted or written, append a `spec` line to `runs.jsonl` with `agent: "main"`. Set `stage: plan` and go to **Plan**.
 
 ## Plan
+
+Take the `started` time for `runs.jsonl`.
 
 If `plan.md` exists:
 
@@ -155,7 +160,7 @@ Otherwise load `superpowers:writing-plans` with the **Skill** tool, and follow i
 - Never commit the plan.
 - Skip its execution handoff. In `interactive` mode, ask me to approve the plan instead. In the other modes, ask me nothing and accept the plan.
 
-When I approve the plan or you accept it, write `tasks.md`. Add one `open` task per `### Task N` heading in the plan, in order. Give each task the heading's title and the source `plan task N`. Set its text to the task's full text. Set `tasksOpen`, set `stage: implement`, and go to **Implement**.
+When I approve the plan or you accept it, write `tasks.md`. Add one `open` task per `### Task N` heading in the plan, in order. Give each task the heading's title and the source `plan task N`. Set its text to the task's full text. Append a `plan` line to `runs.jsonl` with `agent: "main"`. Set `tasksOpen`, set `stage: implement`, and go to **Implement**.
 
 ## Implement
 
@@ -165,7 +170,7 @@ Set every `failed` task in `tasks.md` back to `open`. Then take each `open` task
 
 ### 1. Implement
 
-Run the `jam:implementer` agent with the **Agent** tool. Pass it only:
+Take the `started` time for `runs.jsonl`. Run the `jam:implementer` agent with the **Agent** tool. Pass it only:
 
 - the worktree
 - the path of `spec.md`
@@ -173,6 +178,8 @@ Run the `jam:implementer` agent with the **Agent** tool. Pass it only:
 - the task's ID, title and text
 
 Pass nothing else from this conversation. Read the last line of its reply.
+
+Append an `implement` line to `runs.jsonl` with `agent: "jam:implementer"`, `round` set to the open round, the task's ID as `task`, and `outcome: "done"` on `READY` or `outcome: "failed"` on `FAILED`.
 
 ### 2. On `FAILED`
 
@@ -205,16 +212,16 @@ If `round-{round}/report.md` exists and `round-{round}/triage.md` does not, the 
 2. Add one to `round`. The round folder is `{session folder}/round-{round}/`.
 3. The target is the range `{merge base}..HEAD`, where the merge base is `git merge-base {base} HEAD`. If the base branch is not local, use `{remote}/{base}`.
 4. Write a problem statement from `spec.md`, as Step 2 of `${CLAUDE_PLUGIN_ROOT}/skills/independent-reviewer/SKILL.md` describes. Keep only the problem and the intended behaviour. Cut the design.
-5. Read `${CLAUDE_PLUGIN_ROOT}/skills/verify/review.md` and follow its steps 1 to 3. Use the target, the round folder as the run directory, and the problem statement.
+5. Read `${CLAUDE_PLUGIN_ROOT}/skills/verify/review.md` and follow its steps 1 to 3. Use the target, the round folder as the run directory, and the problem statement. Take the `started` time for `runs.jsonl` before each dispatch. When a reviewer returns, append a `review` line with the reviewer's name as `agent` and `file` set to its review file, such as `round-{round}/reviews/independent-review.md`. When `jam:report-writer` returns, append a `report` line.
 6. If `report.md` is missing from the round folder, set `stage: blocked` and `blocked: { "stage": "verify", "reason": "no report" }`. Lower `round` by one. Stop.
-7. Follow step 4 of `review.md`, **Extra reviewers**, with the same target and the round folder as the run directory. `round-{round}/extras.md` holds the decision. Before you follow it, re-read `mode`. If it is not `interactive` and the decision is `pending`, set `decision: none`.
+7. Follow step 4 of `review.md`, **Extra reviewers**, with the same target and the round folder as the run directory. `round-{round}/extras.md` holds the decision. Before you follow it, re-read `mode`. If it is not `interactive` and the decision is `pending`, set `decision: none`. Append the `review` and `report` lines of the agents it runs, as in step 5.
 8. Set `stage: triage` and go to **Triage**.
 
 ## Triage
 
-Re-read `mode`. If `feedbackImport` is not null, read `${CLAUDE_PLUGIN_ROOT}/skills/take/feedback.md` and follow **Triage imported feedback**. Otherwise follow the ordinary procedure: Read `${CLAUDE_PLUGIN_ROOT}/skills/take/triage.md` and follow it, with the session folder, the current round and the mode.
+Take the `started` time for `runs.jsonl`. Re-read `mode`. If `feedbackImport` is not null, read `${CLAUDE_PLUGIN_ROOT}/skills/take/feedback.md` and follow **Triage imported feedback**. Otherwise follow the ordinary procedure: Read `${CLAUDE_PLUGIN_ROOT}/skills/take/triage.md` and follow it, with the session folder, the current round and the mode.
 
-Then update the counts. `mustFix`, `shouldFix` and `nit` count the findings left after triage step 2, by severity. For a feedback import, use **Triage imported feedback** in `feedback.md` in place of the ordinary triage call above; on resume it reconciles existing decisions before processing the remainder. Clear `feedbackImport` in the same session rewrite that applies the outcome below. Then branch on the outcome:
+Then update the counts. `mustFix`, `shouldFix` and `nit` count the findings left after triage step 2, by severity. For a feedback import, use **Triage imported feedback** in `feedback.md` in place of the ordinary triage call above; on resume it reconciles existing decisions before processing the remainder. Clear `feedbackImport` in the same session rewrite that applies the outcome below. Append a `triage` line to `runs.jsonl` with `agent: "main"`. Then branch on the outcome:
 
 - `next round`: set `stage: implement` and go to **Implement**.
 - `last round`: set `lastRound: true` and `stage: implement`. Go to **Implement**.
@@ -236,5 +243,6 @@ If any deferred finding has no issue, tell me that `/jam:gh-issue-create` opens 
 - You never merge, push or open a PR.
 - A review session never commits, never checks out a branch and never posts the comment.
 - Update `session.json` on every stage change, as `state.md` says.
+- Append a line to `runs.jsonl` as `state.md` defines it: one per agent run, and one per main-conversation stage. For an agent run, take `tokens`, `toolUses` and `durationMs` from the `totalTokens`, `toolUses` and `durationMs` the **Agent** tool reports when the agent finishes.
 - Ask me only where the session's mode allows it. A blocked session is the one exception.
 - Keep me posted with one short line per stage change. For example: `feature-1: round 2 verify done, 1 must-fix, 2 should-fix → triage`.
