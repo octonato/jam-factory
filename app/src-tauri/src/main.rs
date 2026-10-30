@@ -14,12 +14,15 @@
 
 //! Tauri entry point for the Jam Board desktop app.
 
+mod menu;
 mod navigation;
 mod windows;
 
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .menu(menu::build)
+        .on_menu_event(menu::on_event)
         .setup(|app| {
             windows::open_board_window(app.handle());
             Ok(())

@@ -26,10 +26,30 @@ use jam_factory_store::sessions::SESSION_FILE;
 use jam_factory_store::{FileRead, SessionEntry, SessionRef, StoreError};
 use serde_json::{Map, Value, json};
 
+/// The content of a fake file and the number of times it was written.
+#[derive(Default)]
+struct FakeFile {
+    content: String,
+    writes: u32,
+}
+
+impl FakeFile {
+    /// Replaces the content and counts the write.
+    fn set(&mut self, content: &str) {
+        self.content = content.to_string();
+        self.writes += 1;
+    }
+
+    /// `v<n>`, where `n` is the number of writes.
+    fn version(&self) -> String {
+        format!("v{}", self.writes)
+    }
+}
+
 /// A store over an in-memory map from each session to its files, which fails every call once `failure` is set.
 #[derive(Default)]
 struct FakeStore {
-    sessions: Mutex<HashMap<SessionRef, BTreeMap<String, String>>>,
+    sessions: Mutex<HashMap<SessionRef, BTreeMap<String, FakeFile>>>,
     failure: Mutex<Option<StoreError>>,
 }
 
@@ -37,12 +57,13 @@ impl FakeStore {
     fn write(&self, s: &SessionRef, path: &str, content: &str) {
         let mut sessions = self.sessions.lock().unwrap();
         let files = sessions.entry(s.clone()).or_default();
-        files.insert(path.to_string(), content.to_string());
+        files.entry(path.to_string()).or_default().set(content);
     }
 
     fn read(&self, s: &SessionRef, path: &str) -> Option<String> {
         let sessions = self.sessions.lock().unwrap();
-        sessions.get(s)?.get(path).cloned()
+        let file = sessions.get(s)?.get(path)?;
+        Some(file.content.clone())
     }
 
     fn fail_with(&self, error: StoreError) {
@@ -65,7 +86,7 @@ impl Store for FakeStore {
 
         let mut entries: Vec<SessionEntry> = sessions
             .iter()
-            .filter_map(|(s, files)| entry(s, files.get(SESSION_FILE)?))
+            .filter_map(|(s, files)| entry(s, &files.get(SESSION_FILE)?.content))
             .collect();
         entries.sort_by(|a, b| (&a.org, &a.repo, &a.session).cmp(&(&b.org, &b.repo, &b.session)));
 
@@ -85,12 +106,42 @@ impl Store for FakeStore {
         self.check()?;
         check_path(path)?;
 
-        let content = self.read(s, path).ok_or_else(|| not_found(s, path))?;
+        let sessions = self.sessions.lock().unwrap();
+        let file = sessions
+            .get(s)
+            .and_then(|files| files.get(path))
+            .ok_or_else(|| not_found(s, path))?;
 
         Ok(FileRead {
-            content,
-            version: "v1".to_string(),
+            content: file.content.clone(),
+            version: file.version(),
         })
+    }
+
+    fn write_file(
+        &self,
+        s: &SessionRef,
+        path: &str,
+        content: &str,
+        expected_version: &str,
+    ) -> Result<String, StoreError> {
+        self.check()?;
+        check_path(path)?;
+
+        let mut sessions = self.sessions.lock().unwrap();
+        let file = sessions
+            .get_mut(s)
+            .and_then(|files| files.get_mut(path))
+            .ok_or_else(|| not_found(s, path))?;
+
+        let current = file.version();
+        if expected_version != current {
+            return Err(StoreError::Conflict { current });
+        }
+
+        file.set(content);
+
+        Ok(file.version())
     }
 
     fn archive_session(&self, s: &SessionRef) -> Result<(), StoreError> {
@@ -148,6 +199,11 @@ impl Fixture {
     fn session_json(&self) -> String {
         self.store.read(&session_a(), SESSION_FILE).unwrap()
     }
+
+    /// The `spec.md` text of the session `o/stack/a`.
+    fn spec(&self) -> String {
+        self.store.read(&session_a(), "spec.md").unwrap()
+    }
 }
 
 /// A server on a free port over an empty fake store.
@@ -168,6 +224,15 @@ fn session_a() -> SessionRef {
 fn session_fixture() -> Fixture {
     let f = fixture();
     f.store.write(&session_a(), SESSION_FILE, SESSION);
+    f
+}
+
+const SPEC: &str = "/api/file/o/stack/a/spec.md";
+
+/// A fixture whose session `o/stack/a` also holds `spec.md` with the text `old`, at version `v1`.
+fn spec_fixture() -> Fixture {
+    let f = session_fixture();
+    f.store.write(&session_a(), "spec.md", "old");
     f
 }
 
@@ -196,15 +261,31 @@ impl Reply {
 
 /// Sends a request with `Host: 127.0.0.1:<port>` and `headers`.
 fn request(port: u16, method: &str, target: &str, headers: &[(&str, &str)]) -> Reply {
+    request_body(port, method, target, headers, "")
+}
+
+/// Sends a request with `Host: 127.0.0.1:<port>`, `headers` and `body`.
+fn request_body(
+    port: u16,
+    method: &str,
+    target: &str,
+    headers: &[(&str, &str)],
+    body: &str,
+) -> Reply {
     let host = format!("127.0.0.1:{port}");
     let mut all = vec![("Host", host.as_str())];
     all.extend_from_slice(headers);
 
-    send(port, method, target, &all)
+    send_body(port, method, target, &all, body)
 }
 
 /// Sends a request with exactly `headers`.
 fn send(port: u16, method: &str, target: &str, headers: &[(&str, &str)]) -> Reply {
+    send_body(port, method, target, headers, "")
+}
+
+/// Sends a request with exactly `headers`, plus `Content-Length` and `body` when `body` is not empty.
+fn send_body(port: u16, method: &str, target: &str, headers: &[(&str, &str)], body: &str) -> Reply {
     let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
     stream
         .set_read_timeout(Some(Duration::from_secs(5)))
@@ -214,8 +295,13 @@ fn send(port: u16, method: &str, target: &str, headers: &[(&str, &str)]) -> Repl
     for (name, value) in headers {
         head.push_str(&format!("{name}: {value}\r\n"));
     }
+    if !body.is_empty() {
+        head.push_str(&format!("Content-Length: {}\r\n", body.len()));
+    }
     head.push_str("\r\n");
+
     stream.write_all(head.as_bytes()).unwrap();
+    stream.write_all(body.as_bytes()).unwrap();
 
     let mut bytes = Vec::new();
     stream.read_to_end(&mut bytes).unwrap();
@@ -238,6 +324,10 @@ fn get(port: u16, target: &str) -> Reply {
 
 fn post(port: u16, target: &str) -> Reply {
     request(port, "POST", target, &[])
+}
+
+fn put(port: u16, target: &str, headers: &[(&str, &str)], body: &str) -> Reply {
+    request_body(port, "PUT", target, headers, body)
 }
 
 #[test]
@@ -297,6 +387,16 @@ fn file_route_reads_nested_paths() {
 
     assert_eq!(reply.status, 200);
     assert_eq!(reply.text(), "fine");
+}
+
+#[test]
+fn file_route_returns_the_version_as_etag() {
+    let f = spec_fixture();
+
+    let reply = get(f.port(), SPEC);
+
+    assert_eq!(reply.status, 200);
+    assert_eq!(reply.header("ETag"), Some("\"v1\""));
 }
 
 #[test]
@@ -581,7 +681,7 @@ fn query_string_is_ignored() {
 fn wrong_method_is_405() {
     let f = fixture();
 
-    let reply = request(f.port(), "PUT", "/api/sessions", &[]);
+    let reply = request(f.port(), "DELETE", "/api/sessions", &[]);
 
     assert_eq!(reply.status, 405);
 }
@@ -597,6 +697,148 @@ fn post_elsewhere_is_404() {
     }
 
     assert_eq!(f.session_json(), SESSION);
+}
+
+#[test]
+fn put_writes_and_returns_the_new_version() {
+    let f = spec_fixture();
+
+    let reply = put(f.port(), SPEC, &[("If-Match", "\"v1\"")], "new");
+
+    assert_eq!(reply.status, 200);
+    assert_eq!(reply.header("ETag"), Some("\"v2\""));
+    assert_eq!(f.spec(), "new");
+
+    let read = get(f.port(), SPEC);
+    assert_eq!(read.header("ETag"), Some("\"v2\""));
+    assert_eq!(read.text(), "new");
+}
+
+#[test]
+fn put_accepts_a_bare_if_match() {
+    let f = spec_fixture();
+
+    let reply = put(f.port(), SPEC, &[("If-Match", "v1")], "new");
+
+    assert_eq!(reply.status, 200);
+    assert_eq!(reply.header("ETag"), Some("\"v2\""));
+    assert_eq!(f.spec(), "new");
+}
+
+#[test]
+fn put_conflict_is_409_with_the_current_version() {
+    let f = spec_fixture();
+
+    let reply = put(f.port(), SPEC, &[("If-Match", "\"v0\"")], "new");
+
+    assert_eq!(reply.status, 409);
+    assert_eq!(reply.header("ETag"), Some("\"v1\""));
+    assert_eq!(f.spec(), "old");
+}
+
+#[test]
+fn put_without_if_match_is_428() {
+    let f = spec_fixture();
+
+    let reply = put(f.port(), SPEC, &[], "new");
+
+    assert_eq!(reply.status, 428);
+    assert_eq!(f.spec(), "old");
+}
+
+#[test]
+fn put_non_markdown_is_403() {
+    let f = spec_fixture();
+    f.store.write(&session_a(), "spec.md.txt", "old");
+
+    for path in [SESSION_FILE, "spec.md.txt"] {
+        let target = format!("/api/file/o/stack/a/{path}");
+        let before = f.store.read(&session_a(), path);
+
+        let reply = put(f.port(), &target, &[("If-Match", "\"v1\"")], "{}");
+
+        assert_eq!(reply.status, 403, "{path}");
+        assert_eq!(f.store.read(&session_a(), path), before, "{path}");
+    }
+}
+
+#[test]
+fn put_foreign_origin_is_403() {
+    let f = spec_fixture();
+    let headers = [("If-Match", "\"v1\""), ("Origin", "http://evil")];
+
+    let reply = put(f.port(), SPEC, &headers, "new");
+
+    assert_eq!(reply.status, 403);
+    assert_eq!(f.spec(), "old");
+}
+
+#[test]
+fn put_accepts_same_origin() {
+    let f = spec_fixture();
+    let origin = format!("http://127.0.0.1:{}", f.port());
+    let headers = [("If-Match", "\"v1\""), ("Origin", origin.as_str())];
+
+    let reply = put(f.port(), SPEC, &headers, "new");
+
+    assert_eq!(reply.status, 200);
+    assert_eq!(f.spec(), "new");
+}
+
+#[test]
+fn put_missing_file_is_404() {
+    let f = spec_fixture();
+    let headers = [("If-Match", "\"v1\"")];
+
+    let missing_file = put(f.port(), "/api/file/o/stack/a/nope.md", &headers, "new");
+    let missing_session = put(f.port(), "/api/file/o/stack/nope/spec.md", &headers, "new");
+
+    assert_eq!(missing_file.status, 404);
+    assert_eq!(missing_session.status, 404);
+    assert_eq!(f.store.read(&session_a(), "nope.md"), None);
+    assert_eq!(
+        f.store.read(&session("o", "stack", "nope"), "spec.md"),
+        None
+    );
+}
+
+#[test]
+fn put_bad_name_is_404() {
+    let f = spec_fixture();
+
+    for target in [
+        "/api/file/o/%2e%2e/a/spec.md",
+        "/api/file/o/stack/../spec.md",
+        "/api/file/o/stack/a/%2e%2e/a/spec.md",
+        "/api/file/o/stack/a/.hidden.md",
+        "/api/file/o/stack/a/%FF.md",
+        "/api/file/o//a/spec.md",
+    ] {
+        let reply = put(f.port(), target, &[("If-Match", "\"v1\"")], "new");
+
+        assert_eq!(reply.status, 404, "{target}");
+        assert_eq!(f.spec(), "old", "{target}");
+    }
+}
+
+#[test]
+fn put_elsewhere_is_404() {
+    let f = spec_fixture();
+
+    for target in [
+        "/api/sessions",
+        "/api/files/o/stack/a",
+        "/api/file/o/stack/a",
+        "/api/archive/o/stack/a",
+        "/dashboard.html",
+    ] {
+        let reply = put(f.port(), target, &[("If-Match", "\"v1\"")], "new");
+
+        assert_eq!(reply.status, 404, "{target}");
+    }
+
+    assert_eq!(f.session_json(), SESSION);
+    assert_eq!(f.spec(), "old");
 }
 
 #[test]

@@ -52,6 +52,7 @@ function dashboard({ script = source, pageWidth = 1200, pageLeft = 0, splitterWi
   const element = (id) => {
     const properties = new Map()
     const classes = new Set()
+    let html = ''
     const el = Object.assign(new Target(), {
       id,
       style: {
@@ -61,19 +62,54 @@ function dashboard({ script = source, pageWidth = 1200, pageLeft = 0, splitterWi
       classList: { add: (name) => classes.add(name), remove: (name) => classes.delete(name) },
       setPointerCapture: () => {},
       querySelector: () => null,
+      closest: (selector) => (selector === `#${id}` ? el : el.parentElement?.closest(selector) ?? null),
+      replaceChildren: (...nodes) => {
+        html = ''
+        el.children = nodes
+        for (const node of nodes) node.parentElement = el
+      },
+      children: [],
       scrollTop: 0,
       firstElementChild: null,
-      innerHTML: '',
       getBoundingClientRect: () => ({
         width: id === 'splitter' ? geometry.splitterWidth : geometry.pageWidth,
         left: geometry.pageLeft,
       }),
     })
+    Object.defineProperty(el, 'innerHTML', {
+      configurable: true,
+      get: () => html,
+      set: (value) => {
+        html = value
+        el.children = []
+      },
+    })
     elements.set(id, el)
     return el
   }
 
-  for (const id of ['page', 'status', 'problems', 'font-down', 'font-up', 'font-value', 'modal']) element(id)
+  // Returns a detached element of `tag` that takes the focus and matches `tag` and the ids of its parents. A textarea turns CRLF and CR in its value into LF.
+  const createElement = (tag) => {
+    let value = ''
+    const el = {
+      tagName: tag.toUpperCase(),
+      get value() { return value },
+      set value(text) { value = tag === 'textarea' ? text.replace(/\r\n?/g, '\n') : text },
+      focused: false,
+      parentElement: null,
+      focus: () => { el.focused = true },
+      blur: () => { el.focused = false },
+      remove: () => {
+        if (el.parentElement) el.parentElement.children = el.parentElement.children.filter((child) => child !== el)
+        el.parentElement = null
+      },
+      closest: (selector) => (selector.split(',').some((part) => part.trim() === tag) ? el : el.parentElement?.closest(selector) ?? null),
+    }
+    return el
+  }
+
+  for (const id of ['page', 'status', 'problems', 'font-down', 'font-up', 'font-value', 'modal', 'modal-text', 'modal-cancel']) element(id)
+  elements.get('modal').showModal = () => { elements.get('modal').open = true }
 
   let pageHtml = ''
   elements.get('page').querySelectorAll = () => cardRows(pageHtml)
@@ -95,6 +131,7 @@ function dashboard({ script = source, pageWidth = 1200, pageLeft = 0, splitterWi
 
   const document = Object.assign(new Target(), {
     getElementById: (id) => elements.get(id) ?? null,
+    createElement,
     documentElement: { style: {} },
   })
   const window = new Target()
@@ -119,7 +156,12 @@ function dashboard({ script = source, pageWidth = 1200, pageLeft = 0, splitterWi
 
 const session = { org: 'org', repo: 'repo', id: 'session', dir: 'api/file/org/repo/session/', flow: 'build', stage: 'implement', round: 0 }
 const filesUrl = 'api/files/org/repo/session'
-const response = (text, ok = true) => ({ ok, status: ok ? 200 : 500, text: async () => text })
+const response = (text, ok = true, { status = ok ? 200 : 500, headers = {} } = {}) => ({
+  ok,
+  status,
+  headers: new Headers(headers),
+  text: async () => text,
+})
 const filesReply = (files) => response(JSON.stringify({ files }))
 const sessionsReply = (sessions) => response(JSON.stringify({ sessions }))
 const plain = (value) => JSON.parse(JSON.stringify(value))
@@ -490,8 +532,8 @@ test('the archive action draws an archive box', () => {
   assert.equal(icon, '<rect x="2" y="2.5" width="12" height="3" rx=".5"/><path d="M3 5.5v8h10v-8M6.5 8h3"/>')
 })
 
-// Dispatches a keydown for `key` with `modifiers` and returns true when the page took it.
-function press(app, key, modifiers = {}) {
+// Dispatches a keydown for `key` with `modifiers` on `target` and returns true when the page took it.
+function press(app, key, modifiers = {}, target = { closest: () => null }) {
   let prevented = false
   app.context.document.dispatch('keydown', {
     key,
@@ -500,7 +542,7 @@ function press(app, key, modifiers = {}) {
     altKey: false,
     shiftKey: false,
     ...modifiers,
-    target: { closest: () => null },
+    target,
     preventDefault: () => { prevented = true },
   })
   return prevented
@@ -540,4 +582,372 @@ test('other modified keys, an open dialog and the list page ignore the back keys
   app.context.location.hash = '#/'
   assert.equal(press(app, 'Escape'), false)
   assert.equal(press(app, '[', { metaKey: true }), false)
+})
+
+const editSession = { ...session, org: 'o', repo: 'r', id: 's', dir: 'api/file/o/r/s/' }
+
+// Waits until the pending fetches and renders are done.
+const settle = () => new Promise(setImmediate)
+
+// Returns a fake board API over the files of `editSession`. GET answers a file with its version as `ETag`. PUT checks `If-Match` and records the call.
+function fileApi(files) {
+  const versions = new Map(Object.keys(files).map((path) => [path, 1]))
+  const puts = []
+  const etag = (path) => `"v${versions.get(path)}"`
+
+  // Changes `path` on disk to `text`.
+  const touch = (path, text) => {
+    files[path] = text
+    versions.set(path, versions.get(path) + 1)
+  }
+
+  const fetcher = (url, options = {}) => {
+    if (url === 'api/files/o/r/s') return filesReply(Object.keys(files))
+
+    const path = url.slice(editSession.dir.length)
+    if (!Object.hasOwn(files, path)) return response('', false, { status: 404 })
+    if (options.method !== 'PUT') return response(files[path], true, { headers: { ETag: etag(path) } })
+
+    const ifMatch = options.headers['If-Match']
+    puts.push({ url, ifMatch, body: options.body })
+    if (ifMatch !== etag(path)) return response('', false, { status: 409, headers: { ETag: etag(path) } })
+
+    touch(path, options.body)
+    return response('', true, { headers: { ETag: etag(path) } })
+  }
+  return { fetcher, files, puts, touch }
+}
+
+// Returns a dashboard that shows `path` of `editSession` from `api`.
+async function openFile(api, path) {
+  const app = dashboard({ fetcher: api.fetcher })
+  app.context.session = editSession
+  app.run('state.sessions = [session]')
+  app.context.location.hash = app.run(`fileHref(session, ${JSON.stringify(path)})`)
+  app.run('render()')
+  await settle()
+  return app
+}
+
+// Returns the editor field in the pane, or undefined when the pane holds none.
+const editor = (app) => app.elements.get('view').children[0]
+
+// Closes the open modal with the button of `value`.
+function closeModal(app, value) {
+  const modal = app.elements.get('modal')
+  modal.returnValue = value
+  modal.open = false
+  modal.dispatch('close')
+}
+
+test('w opens the editor on markdown', async () => {
+  const app = await openFile(fileApi({ 'spec.md': '# Spec\n' }), 'spec.md')
+
+  assert.ok(press(app, 'w'))
+  assert.equal(app.run('editing.path'), 'spec.md')
+  assert.equal(app.run('editing.editor.value()'), '# Spec\n')
+  assert.equal(editor(app).tagName, 'TEXTAREA')
+  assert.equal(editor(app).focused, true)
+})
+
+test('w ignores files that are not markdown', async () => {
+  for (const path of ['runs.jsonl', 'session.json']) {
+    const app = await openFile(fileApi({ [path]: '{}\n' }), path)
+    assert.match(app.elements.get('view').innerHTML, /\{\}/)
+
+    press(app, 'w')
+    assert.equal(app.run('editing'), null)
+    assert.equal(editor(app), undefined)
+  }
+})
+
+test('w while a new file loads leaves the editor closed', async () => {
+  const api = fileApi({ 'spec.md': '# Spec\n', 'plan.md': '# Plan\n' })
+  let release = null
+  const held = new Promise((resolve) => { release = resolve })
+  const fetcher = (url, options) => (url.endsWith('/plan.md') ? held.then(() => api.fetcher(url, options)) : api.fetcher(url, options))
+  const app = await openFile({ fetcher }, 'spec.md')
+
+  app.context.location.hash = app.run('fileHref(session, "plan.md")')
+  app.window.dispatch('hashchange')
+  await settle()
+  assert.match(app.elements.get('viewer-head').innerHTML, /plan\.md/)
+
+  press(app, 'w')
+  assert.equal(app.run('editing'), null)
+  assert.equal(editor(app), undefined)
+
+  release()
+  await settle()
+  assert.match(app.elements.get('view').innerHTML, /# Plan/)
+
+  press(app, 'w')
+  assert.equal(app.run('editing.path'), 'plan.md')
+  assert.equal(app.run('editing.editor.value()'), '# Plan\n')
+})
+
+test('Escape in the editor without changes returns to the view without a PUT', async () => {
+  const api = fileApi({ 'spec.md': '# Spec\n' })
+  const app = await openFile(api, 'spec.md')
+  const href = app.context.location.hash
+
+  press(app, 'w')
+  assert.ok(press(app, 'Escape', {}, editor(app)))
+  await settle()
+
+  assert.deepEqual(api.puts, [])
+  assert.equal(app.run('editing'), null)
+  assert.equal(editor(app), undefined)
+  assert.match(app.elements.get('view').innerHTML, /# Spec/)
+  assert.equal(app.context.location.hash, href)
+})
+
+test('a CRLF file without typing leaves the editor without a PUT or a discard prompt', async () => {
+  const api = fileApi({ 'spec.md': '# Spec\r\nBody\r\n' })
+  const app = await openFile(api, 'spec.md')
+
+  press(app, 'w')
+  assert.equal(app.run('hasUnsavedChanges()'), false)
+  press(app, 'Escape', {}, editor(app))
+  await settle()
+
+  assert.deepEqual(api.puts, [])
+  assert.equal(app.run('editing'), null)
+
+  press(app, 'w')
+  assert.equal(app.run('editing.path'), 'spec.md')
+  assert.ok(press(app, 'l'))
+  await settle()
+
+  assert.equal(app.elements.get('modal').open, undefined)
+  assert.equal(app.run('editing'), null)
+  assert.equal(app.context.location.hash, '#/')
+  assert.deepEqual(api.puts, [])
+})
+
+test('Escape in the editor with changes puts them with If-Match, then shows the new text', async () => {
+  const api = fileApi({ 'spec.md': '# Spec\n' })
+  const app = await openFile(api, 'spec.md')
+
+  press(app, 'w')
+  editor(app).value = '# Edited\n'
+  press(app, 'Escape', {}, editor(app))
+  await settle()
+
+  assert.deepEqual(api.puts, [{ url: 'api/file/o/r/s/spec.md', ifMatch: '"v1"', body: '# Edited\n' }])
+  assert.equal(api.files['spec.md'], '# Edited\n')
+  assert.equal(app.run('editing'), null)
+  assert.match(app.elements.get('view').innerHTML, /# Edited/)
+})
+
+test('Cmd+S in the editor saves and stays in edit mode', async () => {
+  const api = fileApi({ 'spec.md': '# Spec\n' })
+  const app = await openFile(api, 'spec.md')
+
+  press(app, 'w')
+  editor(app).value = '# Edited\n'
+  assert.ok(press(app, 's', { metaKey: true }, editor(app)))
+  await settle()
+
+  assert.equal(api.puts.length, 1)
+  assert.equal(api.files['spec.md'], '# Edited\n')
+  assert.equal(app.run('editing.version'), 'v2')
+  assert.equal(app.run('editing.original'), '# Edited\n')
+  assert.equal(editor(app).value, '# Edited\n')
+})
+
+test('v outside the editor does not leave edit mode', async () => {
+  const api = fileApi({ 'spec.md': '# Spec\n' })
+  const app = await openFile(api, 'spec.md')
+
+  press(app, 'w')
+  const field = editor(app)
+  field.value = '# Edited\n'
+  assert.equal(press(app, 'v'), false)
+  await settle()
+
+  assert.deepEqual(api.puts, [])
+  assert.equal(app.run('editing.path'), 'spec.md')
+  assert.equal(editor(app), field)
+  assert.equal(app.run('editing.editor.value()'), '# Edited\n')
+})
+
+test('Escape outside the editor returns to the list', async () => {
+  const app = await openFile(fileApi({ 'spec.md': '# Spec\n' }), 'spec.md')
+
+  press(app, 'w')
+  assert.ok(press(app, 'Escape'))
+
+  assert.equal(app.run('editing'), null)
+  assert.equal(app.context.location.hash, '#/')
+})
+
+test('a conflict keeps edit mode and the text, and shows a message in the viewer head', async () => {
+  const api = fileApi({ 'spec.md': '# Spec\n' })
+  const app = await openFile(api, 'spec.md')
+
+  press(app, 'w')
+  editor(app).value = '# Edited\n'
+  api.touch('spec.md', '# Changed on disk\n')
+  press(app, 'Escape', {}, editor(app))
+  await settle()
+
+  assert.equal(api.puts.length, 1)
+  assert.equal(api.files['spec.md'], '# Changed on disk\n')
+  assert.equal(app.run('editing.path'), 'spec.md')
+  assert.equal(app.run('editing.editor.value()'), '# Edited\n')
+  assert.equal(editor(app).value, '# Edited\n')
+  assert.match(
+    app.elements.get('viewer-head').innerHTML,
+    /File changed on disk\. Copy your text, click outside the editor, leave the file and discard, then reopen it and press w\./,
+  )
+})
+
+test('a poll while editing does not replace the editor', async () => {
+  const api = fileApi({ 'spec.md': '# Spec\n' })
+  const app = await openFile(api, 'spec.md')
+
+  press(app, 'w')
+  const field = editor(app)
+  field.value = '# Typed\n'
+  api.touch('spec.md', '# Changed on disk\n')
+  app.run('render()')
+  await settle()
+
+  assert.equal(editor(app), field)
+  assert.equal(app.run('editing.editor.value()'), '# Typed\n')
+  assert.doesNotMatch(app.elements.get('view').innerHTML, /Changed on disk/)
+})
+
+test('leaving with changes asks to discard them', async () => {
+  const api = fileApi({ 'spec.md': '# Spec\n' })
+  const app = await openFile(api, 'spec.md')
+  const href = app.context.location.hash
+
+  press(app, 'w')
+  editor(app).value = '# Typed\n'
+  assert.ok(press(app, 'l'))
+  assert.equal(app.elements.get('modal').open, true)
+  assert.equal(app.elements.get('modal-text').textContent, 'Discard your changes?')
+
+  closeModal(app, 'cancel')
+  await settle()
+  assert.equal(app.run('editing.editor.value()'), '# Typed\n')
+  assert.equal(app.context.location.hash, href)
+
+  press(app, 'l')
+  closeModal(app, 'ok')
+  await settle()
+  assert.equal(app.run('editing'), null)
+  assert.equal(app.context.location.hash, '#/')
+  assert.deepEqual(api.puts, [])
+})
+
+test('a route change with changes asks to discard them and restores the route on cancel', async () => {
+  const app = await openFile(fileApi({ 'spec.md': '# Spec\n' }), 'spec.md')
+  const href = app.context.location.hash
+
+  press(app, 'w')
+  const field = editor(app)
+  field.value = '# Typed\n'
+  app.context.location.hash = '#/'
+  app.window.dispatch('hashchange')
+  assert.equal(app.elements.get('modal').open, true)
+
+  app.run('render()')
+  await settle()
+  assert.match(app.elements.get('page').innerHTML, /class="session-page"/, 'a poll keeps the session page while the modal is open')
+  assert.equal(editor(app), field)
+
+  closeModal(app, 'cancel')
+  await settle()
+  assert.equal(app.context.location.hash, href)
+  assert.equal(app.run('editing.editor.value()'), '# Typed\n')
+})
+
+test('a stage change while editing the default file keeps the edited file in the pane', async () => {
+  const app = dashboard({ fetcher: fileApi({ 'spec.md': '# Spec\n', 'plan.md': '# Plan\n' }).fetcher })
+  app.context.session = { ...editSession, stage: 'spec' }
+  app.run('state.sessions = [session]')
+  app.context.location.hash = app.run('sessionHref(session)')
+  app.run('render()')
+  await settle()
+
+  press(app, 'w')
+  const field = editor(app)
+  app.run('state.sessions = [{ ...session, stage: "plan" }]')
+  app.run('render()')
+  await settle()
+
+  assert.equal(editor(app), field)
+  assert.equal(app.run('editing.path'), 'spec.md')
+  assert.match(app.elements.get('viewer-head').innerHTML, /spec\.md/)
+  assert.doesNotMatch(app.elements.get('viewer-head').innerHTML, /plan\.md/)
+})
+
+// Gives `app` a fake app window API and returns the count of its close calls.
+function appWindow(app) {
+  const closes = { count: 0 }
+  app.window.__TAURI__ = { window: { getCurrentWindow: () => ({ close: async () => { closes.count += 1 } }) } }
+  return closes
+}
+
+test('closing the app window without changes closes it at once', async () => {
+  const app = await openFile(fileApi({ 'spec.md': '# Spec\n' }), 'spec.md')
+  const closes = appWindow(app)
+
+  assert.equal(app.run('onCloseRequested()'), true)
+
+  press(app, 'w')
+  assert.equal(app.run('onCloseRequested()'), true)
+  assert.equal(app.elements.get('modal').open, undefined)
+  assert.equal(closes.count, 0)
+})
+
+test('closing the app window with changes asks to discard them, and closes it on discard', async () => {
+  const api = fileApi({ 'spec.md': '# Spec\n' })
+  const app = await openFile(api, 'spec.md')
+  const closes = appWindow(app)
+
+  press(app, 'w')
+  editor(app).value = '# Typed\n'
+  assert.equal(app.run('onCloseRequested()'), false)
+  assert.equal(app.elements.get('modal').open, true)
+  assert.equal(app.elements.get('modal-text').textContent, 'Discard your changes?')
+  assert.equal(app.run('onCloseRequested()'), false, 'a second request while the modal is open')
+
+  closeModal(app, 'cancel')
+  await settle()
+  assert.equal(closes.count, 0)
+  assert.equal(app.run('editing.editor.value()'), '# Typed\n')
+
+  assert.equal(app.run('onCloseRequested()'), false)
+  closeModal(app, 'ok')
+  await settle()
+  assert.equal(closes.count, 1)
+  assert.equal(app.run('editing'), null)
+  assert.equal(app.run('onCloseRequested()'), true)
+  assert.deepEqual(api.puts, [])
+})
+
+// Dispatches `beforeunload` to `app` and returns true when the page asks to stay.
+function unload(app) {
+  let prevented = false
+  app.window.dispatch('beforeunload', { preventDefault: () => { prevented = true } })
+  return prevented
+}
+
+test('a reload or page close asks to stay only while the editor holds unsaved changes', async () => {
+  const app = await openFile(fileApi({ 'spec.md': '# Spec\n' }), 'spec.md')
+  assert.equal(unload(app), false)
+
+  press(app, 'w')
+  assert.equal(unload(app), false)
+
+  editor(app).value = '# Typed\n'
+  assert.equal(unload(app), true)
+
+  press(app, 's', { metaKey: true }, editor(app))
+  await settle()
+  assert.equal(unload(app), false)
 })

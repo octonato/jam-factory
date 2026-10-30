@@ -55,6 +55,18 @@ pub fn post(store: &dyn Store, request: &Request) -> Response {
     }
 }
 
+/// Answers `PUT` with `store`.
+pub fn put(store: &dyn Store, request: &Request) -> Response {
+    let segments = segments(&request.target);
+
+    match segments.as_slice() {
+        ["", "api", "file", org, repo, id, path @ ..] if !path.is_empty() => {
+            write(store, request, org, repo, id, path)
+        }
+        _ => Response::error(404),
+    }
+}
+
 /// The sessions that are not archived, as `{"sessions": [...]}`.
 fn sessions(store: &dyn Store) -> Result<Response, StoreError> {
     let sessions = store.list_sessions()?;
@@ -78,20 +90,58 @@ fn file(
     path: &[&str],
 ) -> Result<Response, StoreError> {
     let session = session_ref(org, repo, id)?;
-
-    let path = path
-        .iter()
-        .map(|segment| name(segment))
-        .collect::<Result<Vec<_>, _>>()?
-        .join("/");
+    let path = file_path(path)?;
 
     let file = store.read_file(&session, &path)?;
 
-    Ok(Response::new(
+    let response = Response::new(
         200,
         content_type(Path::new(&path)),
         file.content.into_bytes(),
-    ))
+    );
+
+    Ok(response.with_header("ETag", &etag(&file.version)))
+}
+
+/// Writes the body of `request` over the `.md` file at the percent-encoded segments `path` of the session `org/repo/id`.
+fn write(
+    store: &dyn Store,
+    request: &Request,
+    org: &str,
+    repo: &str,
+    id: &str,
+    path: &[&str],
+) -> Response {
+    if !same_origin(request) {
+        return Response::error(403);
+    }
+
+    let target = session_ref(org, repo, id).and_then(|s| Ok((s, file_path(path)?)));
+
+    let (session, path) = match target {
+        Ok(target) => target,
+        Err(error) => return error_response(&error),
+    };
+
+    if !path.ends_with(".md") {
+        return Response::error(403);
+    }
+
+    let Some(expected) = request.header("If-Match") else {
+        return Response::error(428);
+    };
+
+    let Ok(content) = str::from_utf8(&request.body) else {
+        return Response::error(400);
+    };
+
+    match store.write_file(&session, &path, content, unquote(expected)) {
+        Ok(version) => Response::new(200, TEXT, Vec::new()).with_header("ETag", &etag(&version)),
+        Err(StoreError::Conflict { current }) => {
+            Response::error(409).with_header("ETag", &etag(&current))
+        }
+        Err(error) => error_response(&error),
+    }
 }
 
 /// Archives the session `org/repo/id` when `request` comes from the same origin.
@@ -137,6 +187,31 @@ pub(super) fn name(segment: &str) -> Result<String, StoreError> {
 /// The session named by the percent-encoded segments `org`, `repo` and `id`.
 pub(super) fn session_ref(org: &str, repo: &str, id: &str) -> Result<SessionRef, StoreError> {
     SessionRef::new(&name(org)?, &name(repo)?, &name(id)?)
+}
+
+/// The file path named by the percent-encoded segments `path`.
+fn file_path(path: &[&str]) -> Result<String, StoreError> {
+    let names = path
+        .iter()
+        .map(|segment| name(segment))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(names.join("/"))
+}
+
+/// The `ETag` value of the store version `version`.
+fn etag(version: &str) -> String {
+    format!("\"{version}\"")
+}
+
+/// The version in the `If-Match` value `value`, without its surrounding quotes.
+fn unquote(value: &str) -> &str {
+    let value = value.trim();
+
+    value
+        .strip_prefix('"')
+        .and_then(|value| value.strip_suffix('"'))
+        .unwrap_or(value)
 }
 
 /// `404` for a missing or misnamed session or file, else `500` with the message of `error`.

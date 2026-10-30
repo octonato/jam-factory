@@ -276,6 +276,19 @@ Without `-r`, `/jam:just-vibe` refuses to run on a branch that already has a ses
 
 The `jam-factory-mcp` server writes every file under `<root>`. A vibe session writes only `session.json`, `request.md`, `tasks.md` and `runs.jsonl`. Its `request.md` may end with two sections. `## Clarifications` holds the questions the factory asked and your answers. `## Assumptions` holds the choices the factory made alone.
 
+### Export a session
+
+To keep a session in the repo, run `jam-factory-mcp export` in the session's worktree:
+
+```sh
+jam-factory-mcp export                  # copies to factory/<session id>/
+jam-factory-mcp export docs/rate-limit  # copies to docs/rate-limit/
+```
+
+It finds the session the way the skills do: `<org>` and `<repo>` from the folder names, the session id from the branch. It copies every session file except dot files, such as `.lock`. The default destination is under the worktree root. A relative destination is relative to the current folder. It fails and copies nothing on a detached HEAD, when the session does not exist, when the destination exists or when the factory root cannot be resolved. It never stages or commits: review the files, then commit them yourself.
+
+Export after the last verify or `-f` round. Files exported earlier would sit in the worktree, where the reviewers of later rounds can read them.
+
 ## Commands
 
 The examples below use Claude Code syntax: `/jam:take`, `/jam:verify`, and so on. In Codex, use `$jam:take` and `$jam:verify`; in Gemini, use `/take` and `/verify`. The same arguments and flags apply.

@@ -162,6 +162,26 @@ impl Store for McpStore {
         })
     }
 
+    fn write_file(
+        &self,
+        s: &SessionRef,
+        path: &str,
+        content: &str,
+        expected_version: &str,
+    ) -> Result<String, StoreError> {
+        let mut arguments = session_args(s);
+        arguments.insert("path".to_string(), Value::from(path));
+        arguments.insert("content".to_string(), Value::from(content));
+        arguments.insert(
+            "expected_version".to_string(),
+            Value::from(expected_version),
+        );
+
+        let mut reply = self.call("write_file", arguments)?;
+
+        field(&mut reply, "version")
+    }
+
     fn archive_session(&self, s: &SessionRef) -> Result<(), StoreError> {
         self.call("archive_session", session_args(s))?;
 

@@ -27,6 +27,15 @@ pub trait Store: Send + Sync {
     /// Reads the file at `path` in the session `s`.
     fn read_file(&self, s: &SessionRef, path: &str) -> Result<FileRead, StoreError>;
 
+    /// Writes `content` over `path` in the session `s` when its version is `expected_version`, and returns the new version.
+    fn write_file(
+        &self,
+        s: &SessionRef,
+        path: &str,
+        content: &str,
+        expected_version: &str,
+    ) -> Result<String, StoreError>;
+
     /// Sets `archived: true` in the `session.json` of `s`.
     fn archive_session(&self, s: &SessionRef) -> Result<(), StoreError>;
 }

@@ -189,6 +189,38 @@ impl Store {
         fs::remove_file(&target).map_err(|e| io_error(&target, e))
     }
 
+    /// Copies the files of the session `s` to the new folder `dest`, and returns their count.
+    pub fn export_session(&self, s: &SessionRef, dest: &Path) -> Result<usize, StoreError> {
+        let _lock = self.lock(s)?;
+
+        if fs::exists(dest).map_err(|e| io_error(dest, e))? {
+            return Err(dest_exists(dest));
+        }
+
+        let (Some(folder), Some(_)) = (dest.parent(), dest.file_name()) else {
+            return Err(StoreError::BadName(format!(
+                "{} is not a folder path",
+                dest.display()
+            )));
+        };
+
+        let files = self.list_files(s)?;
+        let missing = topmost_missing(folder);
+        let temp = temp_path(folder, dest);
+
+        let exported = fs::create_dir_all(folder)
+            .map_err(|e| io_error(folder, e))
+            .and_then(|()| copy_files(&self.dir(s), &files, &temp))
+            .and_then(|()| fs::rename(&temp, dest).map_err(|e| io_error(dest, e)));
+
+        if let Err(e) = exported {
+            let _ = fs::remove_dir_all(missing.unwrap_or(&temp));
+            return Err(e);
+        }
+
+        Ok(files.len())
+    }
+
     pub(crate) fn root(&self) -> &Path {
         &self.root
     }
@@ -299,10 +331,7 @@ fn text<'a>(path: &str, bytes: &'a [u8]) -> Result<&'a str, StoreError> {
 /// Writes `bytes` to a temp file next to `target`, then renames it over `target`.
 fn write_atomic(target: &Path, bytes: &[u8]) -> Result<(), StoreError> {
     let folder = create_parent(target)?;
-
-    let name = target.file_name().unwrap_or_default().to_string_lossy();
-    let count = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let temp = folder.join(format!(".{name}.{}.{count}.tmp", process::id()));
+    let temp = temp_path(folder, target);
 
     let written = fs::write(&temp, bytes).and_then(|()| fs::rename(&temp, target));
 
@@ -314,12 +343,43 @@ fn write_atomic(target: &Path, bytes: &[u8]) -> Result<(), StoreError> {
     Ok(())
 }
 
+/// Returns a unique hidden path in `folder` for a temp copy of `target`.
+fn temp_path(folder: &Path, target: &Path) -> PathBuf {
+    let name = target.file_name().unwrap_or_default().to_string_lossy();
+    let count = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+
+    folder.join(format!(".{name}.{}.{count}.tmp", process::id()))
+}
+
 /// Creates the folder of `target` when missing, and returns it.
 fn create_parent(target: &Path) -> Result<&Path, StoreError> {
     let folder = target.parent().expect("a session file has a folder");
     fs::create_dir_all(folder).map_err(|e| io_error(folder, e))?;
 
     Ok(folder)
+}
+
+/// Returns the topmost of `folder` and its ancestors that does not exist.
+fn topmost_missing(folder: &Path) -> Option<&Path> {
+    folder
+        .ancestors()
+        .take_while(|a| !a.as_os_str().is_empty() && !a.exists())
+        .last()
+}
+
+/// Creates `target` and copies each of `files` from `source` to the same path under it.
+fn copy_files(source: &Path, files: &[String], target: &Path) -> Result<(), StoreError> {
+    fs::create_dir(target).map_err(|e| io_error(target, e))?;
+
+    for file in files {
+        let from = source.join(file);
+        let to = target.join(file);
+
+        create_parent(&to)?;
+        fs::copy(&from, &to).map_err(|e| io_error(&from, e))?;
+    }
+
+    Ok(())
 }
 
 /// Adds the files under `dir` to `files` as paths after `prefix`, skipping names that start with `.`.
@@ -360,6 +420,10 @@ pub(crate) fn file_not_found(s: &SessionRef, path: &str) -> StoreError {
 
 fn file_exists(s: &SessionRef, path: &str) -> StoreError {
     StoreError::Exists(format!("{path} already exists in session {s}"))
+}
+
+fn dest_exists(dest: &Path) -> StoreError {
+    StoreError::Exists(format!("{} already exists", dest.display()))
 }
 
 pub(crate) fn io_error(path: &Path, e: io::Error) -> StoreError {
@@ -648,6 +712,70 @@ mod tests {
         assert_eq!(code(store.list_files(&s)), "not_found");
         assert_eq!(code(store.edit_file(&s, "spec.md", "a", "b")), "not_found");
         assert_eq!(code(store.delete_file(&s, "spec.md", "v")), "not_found");
+        assert!(!store.dir(&s).exists());
+    }
+
+    #[test]
+    fn export_copies_files_without_dot_files() {
+        let (_root, store) = store();
+        let s = session();
+        store.write_file(&s, "spec.md", HELLO, None).unwrap();
+        store
+            .write_file(&s, "round-1/report.md", "report\n", None)
+            .unwrap();
+
+        let dir = store.dir(&s);
+        fs::write(dir.join("round-1").join(".report.md.1.2.tmp"), "partial").unwrap();
+        assert!(dir.join(".lock").is_file());
+
+        let target = tempfile::tempdir().unwrap();
+        let out = target.path().join("out");
+        let dest = out.join("s1");
+
+        let count = store.export_session(&s, &dest).unwrap();
+
+        assert_eq!(count, 2);
+        assert_eq!(fs::read_to_string(dest.join("spec.md")).unwrap(), HELLO);
+        assert_eq!(
+            fs::read_to_string(dest.join("round-1").join("report.md")).unwrap(),
+            "report\n"
+        );
+        assert!(!dest.join(".lock").exists());
+        assert!(!dest.join("round-1").join(".report.md.1.2.tmp").exists());
+        assert_eq!(fs::read_dir(&out).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn export_refuses_an_existing_dest() {
+        let (_root, store) = store();
+        let s = session();
+        store.write_file(&s, "spec.md", HELLO, None).unwrap();
+
+        let target = tempfile::tempdir().unwrap();
+        let dest = target.path().join("s1");
+        fs::create_dir(&dest).unwrap();
+        fs::write(dest.join("keep.md"), "keep").unwrap();
+
+        let result = store.export_session(&s, &dest);
+
+        assert_eq!(code(result), "exists");
+        assert!(!dest.join("spec.md").exists());
+        assert_eq!(fs::read_to_string(dest.join("keep.md")).unwrap(), "keep");
+        assert_eq!(fs::read_dir(target.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn export_of_a_missing_session_creates_nothing() {
+        let (_root, store) = store();
+        let s = session();
+
+        let target = tempfile::tempdir().unwrap();
+        let out = target.path().join("out");
+
+        let result = store.export_session(&s, &out.join("s1"));
+
+        assert_eq!(code(result), "not_found");
+        assert!(!out.exists());
         assert!(!store.dir(&s).exists());
     }
 

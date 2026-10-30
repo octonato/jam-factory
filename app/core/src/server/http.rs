@@ -176,7 +176,9 @@ fn reason(status: u16) -> &'static str {
         403 => "Forbidden",
         404 => "Not Found",
         405 => "Method Not Allowed",
+        409 => "Conflict",
         413 => "Content Too Large",
+        428 => "Precondition Required",
         500 => "Internal Server Error",
         _ => "Unknown",
     }

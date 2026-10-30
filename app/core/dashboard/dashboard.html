@@ -328,6 +328,19 @@
 
   #view code { font: 0.857rem/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 
+  #view .editor {
+    display: block;
+    width: 100%;
+    height: 100%;
+    padding: 0;
+    color: var(--ink);
+    font: 0.857rem/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    background: transparent;
+    border: 0;
+    outline: none;
+    resize: none;
+  }
+
   .session-bar {
     grid-column: 1 / -1;
     padding: 12px 16px;
@@ -604,6 +617,7 @@
   .viewer-head:empty { display: none; }
   .viewer-head .path { font-weight: 600; overflow-wrap: anywhere; }
   .viewer-head .by { color: var(--muted); font-size: 0.85rem; }
+  .viewer-head .warn { color: var(--critical); font-size: 0.85rem; }
 
   .markdown { line-height: 1.55; overflow-wrap: break-word; }
   .markdown > :first-child { margin-top: 0; }
@@ -795,7 +809,9 @@ const $ = (id) => document.getElementById(id)
 const state = { sessions: [], problems: [], failedChecks: [] }
 let listView = { html: '', el: null }
 let sessionView = { dir: null, el: null, card: '', metro: '', head: '', stops: [], selected: -1 }
-let lastView = { key: null, text: null }
+let lastView = { key: null, path: null, text: null, version: null }
+let editing = null
+let shownHash = ''
 let renderSeq = 0
 let fontSize = FONT_DEFAULT
 let leftWidth = null
@@ -810,6 +826,18 @@ async function fetchText(url) {
   const res = await fetch(url, { cache: 'no-store' })
   if (!res.ok) throw new Error(`${res.status} ${url}`)
   return res.text()
+}
+
+// Returns the text of `url` and its version.
+async function fetchFile(url) {
+  const res = await fetch(url, { cache: 'no-store' })
+  if (!res.ok) throw new Error(`${res.status} ${url}`)
+  return { text: await res.text(), version: etagVersion(res) }
+}
+
+// Returns the `ETag` of `res` without its quotes, or null when it has none.
+function etagVersion(res) {
+  return res.headers.get('ETag')?.replace(/^"(.*)"$/, '$1') ?? null
 }
 
 // Returns the file paths of `session`, or none when the list cannot be fetched.
@@ -1802,18 +1830,21 @@ function viewerHeadHtml(stop, open) {
   return `${path}<span class="by">${escape([stop.label, ...agents].join(' · '))}</span>`
 }
 
-// Shows `path` in the pane, or a blank pane when it is null or missing.
+// Shows `path` in the pane, or a blank pane when it is null or missing. Leaves the pane alone while the editor is open.
 async function showFile(session, files, path, seq) {
+  if (editing !== null) return
+
   const key = path === null ? null : session.dir + path
 
-  let text = null
-  if (path !== null && files.includes(path)) text = await fetchText(encodePath(key)).catch(() => null)
+  let file = null
+  if (path !== null && files.includes(path)) file = await fetchFile(encodePath(key)).catch(() => null)
+  const text = file?.text ?? null
 
-  if (seq !== renderSeq) return
+  if (seq !== renderSeq || editing !== null) return
   if (lastView.key === key && lastView.text === text) return
 
   const sameFile = lastView.key === key
-  lastView = { key, text }
+  lastView = { key, path, text, version: file?.version ?? null }
   $('view').innerHTML = text === null ? '' : fileHtml(path, text)
   if (!sameFile) $('view').scrollTop = 0
 }
@@ -1838,6 +1869,121 @@ async function ask(message) {
 
 async function tell(message) {
   await openModal(message, false)
+}
+
+// Returns an editor over `text` in `container`.
+function createEditor(container, text) {
+  const textarea = document.createElement('textarea')
+  textarea.className = 'editor'
+  textarea.spellcheck = false
+  textarea.value = text
+  container.replaceChildren(textarea)
+
+  return {
+    value: () => textarea.value,
+    focus: () => textarea.focus(),
+    destroy: () => textarea.remove(),
+  }
+}
+
+// Opens the shown `.md` file of the current route in the editor, or focuses the editor when it is open.
+function startEditing() {
+  if (editing !== null) return editing.editor.focus()
+
+  const { key, path, text, version } = lastView
+  if (text === null || !path.endsWith('.md')) return
+  if (!routeShows(parseRoute(location.hash), lastView)) return
+
+  const editor = createEditor($('view'), text)
+  editing = { key, path, version, original: editor.value(), editor, saving: Promise.resolve(true) }
+  editor.focus()
+}
+
+// Shows `message` after the viewer head, or the plain head when `message` is empty.
+function showEditMessage(message) {
+  const note = message === '' ? '' : `<span class="warn">${escape(message)}</span>`
+  $('viewer-head').innerHTML = sessionView.head + note
+}
+
+// Writes the text of `edit` over its file when it changed, and returns the problem, or null when the file holds the text.
+async function putFile(edit) {
+  const text = edit.editor.value()
+  if (text === edit.original) return null
+
+  try {
+    const headers = { 'If-Match': `"${edit.version}"` }
+    const res = await fetch(encodePath(edit.key), { method: 'PUT', headers, body: text })
+    if (res.status === 409) {
+      return 'File changed on disk. Copy your text, click outside the editor, leave the file and discard, then reopen it and press w.'
+    }
+    if (!res.ok) return `Could not save: ${res.status} ${res.statusText}`
+
+    edit.version = etagVersion(res)
+    edit.original = text
+    return null
+  } catch (err) {
+    return `Could not save: ${err.message}`
+  }
+}
+
+// Saves the editor text after any save in flight, shows the problem in the viewer head, and resolves true when the file holds the text.
+function saveFile() {
+  const edit = editing
+  edit.saving = edit.saving.then(async () => {
+    const problem = await putFile(edit)
+    if (editing === edit) showEditMessage(problem ?? '')
+    return problem === null
+  })
+  return edit.saving
+}
+
+// Saves a changed text, then shows the file in view mode. A failed save keeps edit mode.
+async function stopEditing() {
+  const edit = editing
+  if (edit === null) return
+
+  const saved = await saveFile()
+  if (!saved || editing !== edit) return
+
+  closeEditor()
+  render()
+}
+
+// Ends edit mode without saving. The next render shows the file again.
+function closeEditor() {
+  if (editing === null) return
+
+  editing.editor.destroy()
+  editing = null
+  lastView = { key: null, path: null, text: null, version: null }
+  showEditMessage('')
+}
+
+// Returns true when the editor holds text that differs from the saved file.
+function hasUnsavedChanges() {
+  return editing !== null && editing.editor.value() !== editing.original
+}
+
+// Ends edit mode and calls `leave` when the editor holds no unsaved changes or the user discards them, else calls `stay`.
+function confirmDiscard(leave, stay = () => {}) {
+  if (!hasUnsavedChanges()) {
+    closeEditor()
+    leave()
+    return
+  }
+
+  ask('Discard your changes?').then((discard) => {
+    if (!discard) return stay()
+
+    closeEditor()
+    leave()
+  })
+}
+
+// Returns true when `route` shows `file`, a `{ key, path }`: its session with its path or with no path.
+function routeShows(route, file) {
+  const session = route === null ? undefined : state.sessions.find((s) => sessionHref(s) === sessionHref(route))
+  return session !== undefined && file.key === session.dir + (route.path ?? file.path)
 }
 
 async function archiveSession(session) {
@@ -1899,8 +2045,14 @@ function onMetroClick(event) {
   const session = state.sessions.find((s) => s.dir === sessionView.dir)
   if (!session) return
 
-  sessionView.selected = Number(stop.dataset.index)
-  openPath(session, target.dataset.path)
+  const path = target.dataset.path
+  const select = () => {
+    sessionView.selected = Number(stop.dataset.index)
+    openPath(session, path)
+  }
+
+  if (editing?.key === session.dir + path) select()
+  else confirmDiscard(select)
 }
 
 // Selects the nearest stop with a file in direction `step`, opens the file and returns true when one exists.
@@ -1978,7 +2130,7 @@ async function renderSessionPage(session, path) {
     $('metro').addEventListener('click', onMetroClick)
     $('splitter').addEventListener('pointerdown', onSplitterDown)
     sessionView = { dir: session.dir, el: page, card: '', metro: '', head: '', stops: [], selected: -1 }
-    lastView = { key: null, text: null }
+    lastView = { key: null, path: null, text: null, version: null }
   }
 
   const files = await listFiles(session)
@@ -1993,7 +2145,7 @@ async function renderSessionPage(session, path) {
   }
 
   const stops = buildStops(session, files, runs, outcomes)
-  const open = path ?? defaultFile(session, files, sessionRound(session))
+  const open = editing !== null ? editing.path : path ?? defaultFile(session, files, sessionRound(session))
   if (!stopShows(stops[sessionView.selected], open)) sessionView.selected = stopIndexForFile(stops, open)
   sessionView.stops = stops
 
@@ -2020,15 +2172,53 @@ function renderNotFound() {
   $('page').innerHTML = '<div class="column"><p class="empty">session not found</p></div>'
 }
 
+// Shows the page of the route. While the editor is open, shows only the edited file.
 function render() {
-  renderSeq += 1
   const route = parseRoute(location.hash)
+  if (editing !== null && !routeShows(route, editing)) return
+
+  renderSeq += 1
+  shownHash = location.hash
   if (!route) return renderList()
 
   const session = state.sessions.find((s) => sessionHref(s) === sessionHref(route))
   if (!session) return renderNotFound()
 
   renderSessionPage(session, route.path)
+}
+
+// Renders the new route. Leaving the edited file asks to discard unsaved changes, and cancel restores the shown route.
+function onHashChange() {
+  if (editing === null || routeShows(parseRoute(location.hash), editing)) return render()
+
+  const back = shownHash
+  confirmDiscard(render, () => {
+    location.hash = back
+  })
+}
+
+// Answers a close request of the app window: true closes it now, false keeps it while the user answers the discard prompt.
+function onCloseRequested() {
+  if (!hasUnsavedChanges()) return true
+
+  if (!$('modal').open) confirmDiscard(closeWindow)
+  return false
+}
+
+// Asks the app to close its window. Does nothing in a browser.
+function closeWindow() {
+  window.__TAURI__?.window
+    .getCurrentWindow()
+    .close()
+    .catch((err) => tell(`Could not close the window: ${err}`))
+}
+
+// Asks the browser to confirm a reload or close while the editor holds unsaved changes.
+function onBeforeUnload(event) {
+  if (!hasUnsavedChanges()) return
+
+  event.preventDefault()
+  event.returnValue = true
 }
 
 // Runs the list shortcut for `key` and returns true when it acted.
@@ -2051,8 +2241,15 @@ function listKey(key) {
 // Runs the session page shortcut for `key` on `session` and returns true when it acted.
 function sessionKey(key, session) {
   if (BACK_KEYS.includes(key)) {
-    selectedDir = session.dir
-    location.hash = '#/'
+    confirmDiscard(() => {
+      selectedDir = session.dir
+      location.hash = '#/'
+    })
+    return true
+  }
+
+  if (key === 'w') {
+    startEditing()
     return true
   }
 
@@ -2068,8 +2265,25 @@ function shortcutKey(event) {
   return event.key
 }
 
+// Handles a key pressed in the editor, and returns true when the editor has the focus. `Escape` saves and returns to view mode, `Cmd+S` saves.
+function editorKey(event) {
+  if (editing === null || !event.target.closest('#view')) return false
+
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    stopEditing()
+  }
+  if (event.key === 's' && event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey) {
+    event.preventDefault()
+    saveFile()
+  }
+  return true
+}
+
 // Dispatches a shortcut key to the shown page.
 function onKey(event) {
+  if (editorKey(event)) return
+
   const key = shortcutKey(event)
   if (key === null) return
   if ($('modal').open) return
@@ -2156,7 +2370,8 @@ $('font-up').addEventListener('click', () => stepFontSize(1))
 showFontSize(readFontSize())
 orgFilter = readOrgFilter()
 
-window.addEventListener('hashchange', render)
+window.addEventListener('hashchange', onHashChange)
+window.addEventListener('beforeunload', onBeforeUnload)
 window.addEventListener('resize', onSessionResize)
 document.addEventListener('keydown', onKey)
 state.failedChecks = metroSelfCheck()

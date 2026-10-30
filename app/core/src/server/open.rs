@@ -296,6 +296,16 @@ mod tests {
                 .ok_or_else(|| StoreError::NotFound(format!("{s}/{path} does not exist")))
         }
 
+        fn write_file(
+            &self,
+            _s: &SessionRef,
+            _path: &str,
+            _content: &str,
+            _expected_version: &str,
+        ) -> Result<String, StoreError> {
+            unreachable!("open writes no file")
+        }
+
         fn archive_session(&self, _s: &SessionRef) -> Result<(), StoreError> {
             unreachable!("open archives no session")
         }

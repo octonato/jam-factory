@@ -12,10 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Serves the factory folder over MCP on stdio.
+//! Serves the factory folder over MCP on stdio, or exports a session with `export`.
 
+mod export;
 mod tools;
 
+use std::path::Path;
 use std::process::ExitCode;
 
 use jam_factory_store::{Store, root};
@@ -24,12 +26,22 @@ use rmcp::transport::stdio;
 
 use crate::tools::FactoryServer;
 
+const EXPORT: &str = "export";
+
 #[tokio::main]
 async fn main() -> ExitCode {
     let Some(home) = std::env::home_dir() else {
         eprintln!("Cannot find the home folder");
         return ExitCode::FAILURE;
     };
+
+    let args: Vec<String> = std::env::args().skip(1).collect();
+
+    if let Some((command, rest)) = args.split_first()
+        && command == EXPORT
+    {
+        return run_export(rest, &home);
+    }
 
     let root = match root::resolve(&home) {
         Ok(root) => root,
@@ -55,4 +67,23 @@ async fn main() -> ExitCode {
     }
 
     ExitCode::SUCCESS
+}
+
+/// Runs `export` with `args` in the current folder, and prints its result or its error.
+fn run_export(args: &[String], home: &Path) -> ExitCode {
+    let result = std::env::current_dir()
+        .map_err(|e| format!("Cannot read the current folder: {e}"))
+        .and_then(|cwd| export::run(args, home, &cwd));
+
+    match result {
+        Ok(line) => {
+            println!("{line}");
+            ExitCode::SUCCESS
+        }
+
+        Err(error) => {
+            eprintln!("{error}");
+            ExitCode::FAILURE
+        }
+    }
 }

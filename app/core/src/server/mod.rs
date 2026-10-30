@@ -91,6 +91,7 @@ pub fn handle(store: &dyn Store, port: u16, request: &Request) -> Response {
         "GET" if request.target.starts_with("/api/") => api::get(store, &request.target),
         "GET" => dashboard_file(&request.target),
         "POST" => api::post(store, request),
+        "PUT" => api::put(store, request),
         _ => Response::error(405),
     }
 }
