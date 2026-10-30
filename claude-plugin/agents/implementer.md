@@ -1,7 +1,7 @@
 ---
 name: implementer
 description: Implements one factory task in a worktree — changes the code and runs the build, the tests and the formatter check. Never commits. Ends with READY or FAILED.
-tools: Read, Grep, Glob, Bash, Edit, Write, mcp__plugin_jam_jam-factory__read_file
+tools: Read, Grep, Glob, Bash, Edit, Write, mcp__plugin_jam_jam-factory__read_file, mcp__sbt__sbt
 model: opus
 effort: xhigh
 ---
