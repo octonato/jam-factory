@@ -16,8 +16,12 @@
 
 pub mod api;
 pub mod dashboard;
+#[cfg(test)]
+mod fake_store;
 pub mod http;
 pub mod open;
+pub mod pty;
+pub mod terminal;
 
 use std::io;
 use std::net::{SocketAddr, TcpListener, TcpStream};
@@ -135,6 +139,12 @@ fn serve(store: &dyn Store, port: u16, mut stream: TcpStream) {
     }
 
     let response = match read_request(&mut stream) {
+        Ok(request) if local_host(&request, port) && terminal::is_upgrade(&request) => {
+            if stream.set_read_timeout(None).is_ok() {
+                terminal::serve(store, &request, stream);
+            }
+            return;
+        }
         Ok(request) => handle(store, port, &request),
         Err(ReadError::Status(status)) => Response::error(status),
         Err(ReadError::Closed) => return,

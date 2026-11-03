@@ -14,13 +14,12 @@
 
 //! Opens a session's worktree, or its open pull request, in a tool on `POST /api/open/<tool>/<org>/<repo>/<id>`.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 
 use jam_factory_store::sessions::SESSION_FILE;
-use serde_json::Value;
 
-use super::api::{error_response, same_origin, segments, session_ref};
+use super::api::{error_response, same_origin, segments, session_ref, worktree};
 use super::http::{Request, Response};
 use crate::store::Store;
 
@@ -151,14 +150,6 @@ pub fn post_with(store: &dyn Store, request: &Request, runner: &dyn Runner) -> R
     }
 }
 
-/// The `worktree` folder named in the session JSON `text`, if it is a string naming an existing folder.
-fn worktree(text: &str) -> Option<PathBuf> {
-    let session: Value = serde_json::from_str(text).ok()?;
-
-    let worktree = PathBuf::from(session.get("worktree")?.as_str()?);
-    worktree.is_dir().then_some(worktree)
-}
-
 /// The `open -a <app> <worktree>` command.
 fn open_app(app: &str, worktree: String) -> (String, Vec<String>) {
     let args = vec!["-a".to_string(), app.to_string(), worktree];
@@ -211,13 +202,14 @@ fn applescript_escape(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
-    use std::collections::HashMap;
     use std::fs;
-    use std::sync::Mutex;
+    use std::path::PathBuf;
 
-    use jam_factory_store::{FileRead, SessionEntry, SessionRef, StoreError};
+    use jam_factory_store::StoreError;
+    use serde_json::Value;
 
     use super::*;
+    use crate::server::fake_store::FakeStore;
 
     const TARGET: &str = "/api/open/zed/o/stack/a";
 
@@ -241,73 +233,6 @@ mod tests {
             let call = (program.to_string(), args.to_vec());
             self.calls.borrow_mut().push(call);
             self.result.clone()
-        }
-    }
-
-    /// A store holding the files of the session `o/stack/a`, which logs each read and gives `failure` when set.
-    #[derive(Default)]
-    struct FakeStore {
-        files: Mutex<HashMap<String, String>>,
-        reads: Mutex<Vec<String>>,
-        failure: Option<StoreError>,
-    }
-
-    impl FakeStore {
-        fn write(&self, path: &str, content: &str) {
-            let mut files = self.files.lock().unwrap();
-            files.insert(path.to_string(), content.to_string());
-        }
-
-        fn remove(&self, path: &str) {
-            self.files.lock().unwrap().remove(path);
-        }
-
-        fn reads(&self) -> Vec<String> {
-            self.reads.lock().unwrap().clone()
-        }
-    }
-
-    impl Store for FakeStore {
-        fn list_sessions(&self) -> Result<Vec<SessionEntry>, StoreError> {
-            unreachable!("open lists no sessions")
-        }
-
-        fn list_files(&self, _s: &SessionRef) -> Result<Vec<String>, StoreError> {
-            unreachable!("open lists no files")
-        }
-
-        fn read_file(&self, s: &SessionRef, path: &str) -> Result<FileRead, StoreError> {
-            self.reads.lock().unwrap().push(format!("{s}/{path}"));
-
-            if let Some(failure) = &self.failure {
-                return Err(failure.clone());
-            }
-
-            let content = match s.to_string().as_str() {
-                "o/stack/a" => self.files.lock().unwrap().get(path).cloned(),
-                _ => None,
-            };
-
-            content
-                .map(|content| FileRead {
-                    content,
-                    version: "v1".to_string(),
-                })
-                .ok_or_else(|| StoreError::NotFound(format!("{s}/{path} does not exist")))
-        }
-
-        fn write_file(
-            &self,
-            _s: &SessionRef,
-            _path: &str,
-            _content: &str,
-            _expected_version: &str,
-        ) -> Result<String, StoreError> {
-            unreachable!("open writes no file")
-        }
-
-        fn archive_session(&self, _s: &SessionRef) -> Result<(), StoreError> {
-            unreachable!("open archives no session")
         }
     }
 

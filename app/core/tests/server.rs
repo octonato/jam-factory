@@ -25,6 +25,7 @@ use jam_factory_store::name::check_path;
 use jam_factory_store::sessions::SESSION_FILE;
 use jam_factory_store::{FileRead, SessionEntry, SessionRef, StoreError};
 use serde_json::{Map, Value, json};
+use tungstenite::{ClientRequestBuilder, Message};
 
 /// The content of a fake file and the number of times it was written.
 #[derive(Default)]
@@ -328,6 +329,25 @@ fn post(port: u16, target: &str) -> Reply {
 
 fn put(port: u16, target: &str, headers: &[(&str, &str)], body: &str) -> Reply {
     request_body(port, "PUT", target, headers, body)
+}
+
+const LAZYGIT: &str = "/api/lazygit/o/stack/a";
+const KEY: &str = "dGhlIHNhbXBsZSBub25jZQ==";
+
+/// The WebSocket upgrade headers with `version`, plus `Origin` and `Sec-WebSocket-Key` when given.
+fn upgrade<'a>(
+    origin: Option<&'a str>,
+    version: &'a str,
+    key: Option<&'a str>,
+) -> Vec<(&'a str, &'a str)> {
+    let mut headers = vec![
+        ("Upgrade", "websocket"),
+        ("Connection", "Upgrade"),
+        ("Sec-WebSocket-Version", version),
+    ];
+    headers.extend(origin.map(|origin| ("Origin", origin)));
+    headers.extend(key.map(|key| ("Sec-WebSocket-Key", key)));
+    headers
 }
 
 #[test]
@@ -839,6 +859,89 @@ fn put_elsewhere_is_404() {
 
     assert_eq!(f.session_json(), SESSION);
     assert_eq!(f.spec(), "old");
+}
+
+#[test]
+fn lazygit_upgrade_needs_the_board_origin() {
+    let f = session_fixture();
+
+    let missing = request(f.port(), "GET", LAZYGIT, &upgrade(None, "13", Some(KEY)));
+    let foreign = upgrade(Some("http://evil"), "13", Some(KEY));
+    let foreign = request(f.port(), "GET", LAZYGIT, &foreign);
+
+    assert_eq!(missing.status, 403);
+    assert_eq!(foreign.status, 403);
+}
+
+#[test]
+fn a_session_page_cannot_open_lazygit() {
+    let f = session_fixture();
+    f.store
+        .write(&session_a(), "report.html", "<script></script>");
+
+    let page = get(f.port(), "/api/file/o/stack/a/report.html");
+    let sandboxed = upgrade(Some("null"), "13", Some(KEY));
+    let sandboxed = request(f.port(), "GET", LAZYGIT, &sandboxed);
+
+    assert_eq!(page.status, 200);
+    assert_eq!(page.header("Content-Security-Policy"), Some("sandbox"));
+    assert_eq!(sandboxed.status, 403);
+}
+
+#[test]
+fn lazygit_upgrade_needs_version_13_and_a_key() {
+    let f = session_fixture();
+    let origin = format!("http://127.0.0.1:{}", f.port());
+
+    let version_8 = upgrade(Some(&origin), "8", Some(KEY));
+    let version_8 = request(f.port(), "GET", LAZYGIT, &version_8);
+    let no_key = upgrade(Some(&origin), "13", None);
+    let no_key = request(f.port(), "GET", LAZYGIT, &no_key);
+
+    assert_eq!(version_8.status, 400);
+    assert_eq!(no_key.status, 400);
+}
+
+#[test]
+fn lazygit_on_a_foreign_host_is_403() {
+    let f = session_fixture();
+    let mut headers = vec![("Host", "evil:1")];
+    headers.extend(upgrade(Some("http://evil:1"), "13", Some(KEY)));
+
+    let reply = send(f.port(), "GET", LAZYGIT, &headers);
+
+    assert_eq!(reply.status, 403);
+}
+
+#[test]
+fn lazygit_without_upgrade_is_404() {
+    let f = session_fixture();
+
+    let reply = get(f.port(), LAZYGIT);
+
+    assert_eq!(reply.status, 404);
+}
+
+#[test]
+fn lazygit_on_an_unknown_session_closes_with_1011() {
+    let f = session_fixture();
+    let uri = format!("ws://127.0.0.1:{}/api/lazygit/o/stack/nope", f.port());
+    let origin = format!("http://127.0.0.1:{}", f.port());
+    let client = ClientRequestBuilder::new(uri.parse().unwrap()).with_header("Origin", origin);
+
+    let stream = TcpStream::connect(("127.0.0.1", f.port())).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    let (mut socket, response) = tungstenite::client(client, stream).unwrap();
+
+    assert_eq!(response.status(), 101);
+
+    let message = socket.read().unwrap();
+    let Message::Close(Some(frame)) = message else {
+        panic!("no close frame: {message:?}");
+    };
+    assert_eq!(u16::from(frame.code), 1011);
 }
 
 #[test]

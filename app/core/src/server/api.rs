@@ -14,7 +14,7 @@
 
 //! Answers the `/api/` routes with store calls.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use jam_factory_store::{SessionRef, StoreError};
 use percent_encoding::percent_decode_str;
@@ -81,7 +81,7 @@ fn files(store: &dyn Store, org: &str, repo: &str, id: &str) -> Result<Response,
     Ok(json_response(&json!({ "files": files })))
 }
 
-/// The file at the percent-encoded segments `path` of the session `org/repo/id`.
+/// The file at the percent-encoded segments `path` of the session `org/repo/id`, in a sandbox with an opaque origin.
 fn file(
     store: &dyn Store,
     org: &str,
@@ -100,7 +100,9 @@ fn file(
         file.content.into_bytes(),
     );
 
-    Ok(response.with_header("ETag", &etag(&file.version)))
+    Ok(response
+        .with_header("ETag", &etag(&file.version))
+        .with_header("Content-Security-Policy", "sandbox"))
 }
 
 /// Writes the body of `request` over the `.md` file at the percent-encoded segments `path` of the session `org/repo/id`.
@@ -187,6 +189,14 @@ pub(super) fn name(segment: &str) -> Result<String, StoreError> {
 /// The session named by the percent-encoded segments `org`, `repo` and `id`.
 pub(super) fn session_ref(org: &str, repo: &str, id: &str) -> Result<SessionRef, StoreError> {
     SessionRef::new(&name(org)?, &name(repo)?, &name(id)?)
+}
+
+/// The `worktree` folder named in the session JSON `text`, if it is a string naming an existing folder.
+pub(super) fn worktree(text: &str) -> Option<PathBuf> {
+    let session: Value = serde_json::from_str(text).ok()?;
+
+    let worktree = PathBuf::from(session.get("worktree")?.as_str()?);
+    worktree.is_dir().then_some(worktree)
 }
 
 /// The file path named by the percent-encoded segments `path`.

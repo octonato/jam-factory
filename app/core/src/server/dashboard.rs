@@ -16,6 +16,7 @@
 
 const HTML: &str = "text/html; charset=utf-8";
 const JAVASCRIPT: &str = "text/javascript; charset=utf-8";
+const CSS: &str = "text/css; charset=utf-8";
 
 /// An embedded file and its content type.
 pub struct Embedded {
@@ -29,6 +30,9 @@ pub fn embedded(path: &str) -> Option<Embedded> {
         "/dashboard.html" => (include_bytes!("../../dashboard/dashboard.html"), HTML),
         "/marked.min.js" => (include_bytes!("../../dashboard/marked.min.js"), JAVASCRIPT),
         "/purify.min.js" => (include_bytes!("../../dashboard/purify.min.js"), JAVASCRIPT),
+        "/xterm.js" => (include_bytes!("../../dashboard/xterm.js"), JAVASCRIPT),
+        "/xterm.css" => (include_bytes!("../../dashboard/xterm.css"), CSS),
+        "/addon-fit.js" => (include_bytes!("../../dashboard/addon-fit.js"), JAVASCRIPT),
         _ => return None,
     };
 
@@ -153,6 +157,66 @@ mod tests {
         let end = rest.find("\nfunction ").unwrap_or(rest.len());
 
         assert!(rest[..end].contains("cardActions(session)"));
+    }
+
+    #[test]
+    fn serves_the_xterm_files() {
+        for path in ["/xterm.js", "/addon-fit.js"] {
+            let file = embedded(path).unwrap();
+            assert_eq!(file.content_type, JAVASCRIPT);
+            assert!(!file.bytes.is_empty());
+        }
+
+        let css = embedded("/xterm.css").unwrap();
+        assert_eq!(css.content_type, "text/css; charset=utf-8");
+        assert!(!css.bytes.is_empty());
+    }
+
+    #[test]
+    fn dashboard_loads_xterm() {
+        let html = std::str::from_utf8(embedded("/dashboard.html").unwrap().bytes).unwrap();
+
+        assert!(html.contains("<link rel=\"stylesheet\" href=\"xterm.css\">"));
+        assert!(html.contains("<script src=\"xterm.js\"></script>"));
+        assert!(html.contains("<script src=\"addon-fit.js\"></script>"));
+    }
+
+    #[test]
+    fn terminal_padding_sits_on_the_xterm_element() {
+        let html = std::str::from_utf8(embedded("/dashboard.html").unwrap().bytes).unwrap();
+
+        assert_eq!(
+            css_rule(html, "#view.terminal"),
+            "padding: 0; overflow: hidden; background: #142b37;"
+        );
+        assert_eq!(
+            css_rule(html, "#view.terminal .xterm"),
+            "height: 100%; padding: 4px 8px;"
+        );
+    }
+
+    #[test]
+    fn a_zoomed_session_page_shows_only_the_view() {
+        let html = std::str::from_utf8(embedded("/dashboard.html").unwrap().bytes).unwrap();
+
+        assert_eq!(
+            css_rule(html, ".session-page.zoomed"),
+            "grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr);"
+        );
+        for hidden in [".session-bar,", "#metro-pane,", "#splitter,"] {
+            assert!(html.contains(&format!(".session-page.zoomed {hidden}\n")));
+        }
+        assert_eq!(
+            css_rule(html, ".session-page.zoomed .viewer-head"),
+            "display: none;"
+        );
+    }
+
+    /// Returns the trimmed body of the CSS rule for `selector`.
+    fn css_rule<'a>(html: &'a str, selector: &str) -> &'a str {
+        let start = html.find(&format!("{selector} {{")).unwrap() + selector.len() + 2;
+        let end = start + html[start..].find('}').unwrap();
+        html[start..end].trim()
     }
 
     #[test]

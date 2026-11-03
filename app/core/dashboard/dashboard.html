@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Jam Board</title>
+<link rel="stylesheet" href="xterm.css">
 <style>
   :root {
     --bg: #f7f7f5;
@@ -283,6 +284,15 @@
     background: var(--surface);
   }
 
+  .session-page.zoomed { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
+
+  .session-page.zoomed .session-bar,
+  .session-page.zoomed #metro-pane,
+  .session-page.zoomed #splitter,
+  .session-page.zoomed .viewer-head {
+    display: none;
+  }
+
   #modal {
     max-width: 480px;
     padding: 16px;
@@ -340,6 +350,9 @@
     outline: none;
     resize: none;
   }
+
+  #view.terminal { padding: 0; overflow: hidden; background: #142b37; }
+  #view.terminal .xterm { height: 100%; padding: 4px 8px; }
 
   .session-bar {
     grid-column: 1 / -1;
@@ -721,6 +734,8 @@
 
 <script src="marked.min.js"></script>
 <script src="purify.min.js"></script>
+<script src="xterm.js"></script>
+<script src="addon-fit.js"></script>
 <script>
 const POLL_MS = 2000
 const FLOWS = {
@@ -775,6 +790,32 @@ const FONT_KEY = 'jam-board-font-size'
 const FONT_MIN = 12
 const FONT_MAX = 24
 const FONT_DEFAULT = 18
+const MONO_FONT = 'ui-monospace, SFMono-Regular, Menlo, monospace'
+// The Octo Aurora Borealis iTerm colors.
+const TERMINAL_THEME = {
+  background: '#142b37',
+  foreground: '#e0e2e3',
+  cursor: '#8dc5e1',
+  cursorAccent: '#142b37',
+  selectionBackground: '#1e3f53',
+  selectionForeground: '#e0e2e3',
+  black: '#142b37',
+  red: '#ce5e5e',
+  green: '#46d27e',
+  yellow: '#cc9d57',
+  blue: '#4693d2',
+  magenta: '#bb719b',
+  cyan: '#049682',
+  white: '#85a2b3',
+  brightBlack: '#3f6579',
+  brightRed: '#cb4848',
+  brightGreen: '#73d379',
+  brightYellow: '#d09136',
+  brightBlue: '#7ac6f5',
+  brightMagenta: '#d193bb',
+  brightCyan: '#08b9a1',
+  brightWhite: '#e0e2e3',
+}
 
 const NODE_ICONS = {
   done: '<path d="M3.5 8.5l3 3 6-7"/>',
@@ -796,13 +837,18 @@ const CARD_ACTIONS = [
   { action: 'zed', title: 'Open in Zed (e)', icon: '<path d="M3.5 3.5h9l-9 9h9"/>' },
   { action: 'iterm', title: 'Open in iTerm (t)', icon: '<path d="M3 4.5 6.5 8 3 11.5M8.5 11.5H13"/>' },
   {
+    action: 'lazygit',
+    title: 'Open in lazygit (g)',
+    icon: '<circle cx="5" cy="3.5" r="1.5"/><circle cx="5" cy="12.5" r="1.5"/><circle cx="11" cy="5.5" r="1.5"/><path d="M5 5v6M11 7c0 2.5-6 2-6 4"/>',
+  },
+  {
     action: 'archive',
     title: 'Archive (a)',
     icon: '<rect x="2" y="2.5" width="12" height="3" rx=".5"/><path d="M3 5.5v8h10v-8M6.5 8h3"/>',
   },
 ]
 const TOOL_LABELS = { intellij: 'IntelliJ', zed: 'Zed', iterm: 'iTerm', github: 'GitHub' }
-const ACTION_KEYS = { a: 'archive', t: 'iterm', e: 'zed', i: 'intellij', o: 'github' }
+const ACTION_KEYS = { a: 'archive', t: 'iterm', e: 'zed', i: 'intellij', o: 'github', g: 'lazygit' }
 const BACK_KEYS = ['l', 'Escape', 'Meta+[']
 
 const $ = (id) => document.getElementById(id)
@@ -811,6 +857,7 @@ let listView = { html: '', el: null }
 let sessionView = { dir: null, el: null, card: '', metro: '', head: '', stops: [], selected: -1 }
 let lastView = { key: null, path: null, text: null, version: null }
 let editing = null
+let terminal = null
 let shownHash = ''
 let renderSeq = 0
 let fontSize = FONT_DEFAULT
@@ -1159,14 +1206,15 @@ function onCardAction(event) {
   const session = state.sessions.find((s) => s.dir === dir)
   if (!session) return
 
-  if (button.dataset.action === 'archive') archiveSession(session)
-  else openTool(session, button.dataset.action)
+  runAction(session, button.dataset.action)
 }
 
 function missingScripts() {
   const missing = []
   if (typeof marked === 'undefined') missing.push('marked.min.js not loaded')
   if (typeof DOMPurify === 'undefined') missing.push('purify.min.js not loaded')
+  if (typeof Terminal === 'undefined') missing.push('xterm.js not loaded')
+  if (typeof FitAddon === 'undefined') missing.push('addon-fit.js not loaded')
   return missing
 }
 
@@ -1830,9 +1878,14 @@ function viewerHeadHtml(stop, open) {
   return `${path}<span class="by">${escape([stop.label, ...agents].join(' · '))}</span>`
 }
 
-// Shows `path` in the pane, or a blank pane when it is null or missing. Leaves the pane alone while the editor is open.
+// Returns the viewer head while lazygit runs: `lazygit`, then the worktree of `session`.
+function terminalHeadHtml(session) {
+  return `<span class="path">lazygit</span><span class="by">${escape(shortPath(session.worktree))}</span>`
+}
+
+// Shows `path` in the pane, or a blank pane when it is null or missing. Leaves the pane alone while the editor or lazygit is open.
 async function showFile(session, files, path, seq) {
-  if (editing !== null) return
+  if (editing !== null || terminal !== null) return
 
   const key = path === null ? null : session.dir + path
 
@@ -1840,7 +1893,7 @@ async function showFile(session, files, path, seq) {
   if (path !== null && files.includes(path)) file = await fetchFile(encodePath(key)).catch(() => null)
   const text = file?.text ?? null
 
-  if (seq !== renderSeq || editing !== null) return
+  if (seq !== renderSeq || editing !== null || terminal !== null) return
   if (lastView.key === key && lastView.text === text) return
 
   const sameFile = lastView.key === key
@@ -2012,13 +2065,105 @@ async function openTool(session, tool) {
   }
 }
 
+function terminalFontSize() {
+  return Math.round(fontSize * 0.8)
+}
+
+// Runs lazygit on the worktree of `session` in the pane of its page, or focuses lazygit when it runs there.
+function openLazygit(session) {
+  if (terminal?.dir === session.dir) return terminal.xterm.focus()
+
+  confirmDiscard(() => {
+    const route = parseRoute(location.hash)
+    if (route === null || sessionHref(route) !== sessionHref(session)) location.hash = sessionHref(session)
+
+    render()
+    startTerminal(session)
+  })
+}
+
+// Mounts xterm in the pane and connects it to lazygit on the worktree of `session`.
+function startTerminal(session) {
+  const view = $('view')
+  view.replaceChildren()
+  view.classList.add('terminal')
+
+  const xterm = new Terminal({ fontFamily: MONO_FONT, fontSize: terminalFontSize(), theme: TERMINAL_THEME })
+  const fit = new FitAddon.FitAddon()
+  xterm.loadAddon(fit)
+  xterm.open(view)
+  fit.fit()
+
+  const socket = new WebSocket(`ws://${location.host}/api/lazygit/${sessionPath(session)}?cols=${xterm.cols}&rows=${xterm.rows}`)
+  socket.binaryType = 'arraybuffer'
+
+  const send = (data) => {
+    if (socket.readyState === WebSocket.OPEN) socket.send(data)
+  }
+  const sendSize = ({ cols, rows }) => send(JSON.stringify({ cols, rows }))
+
+  socket.onopen = () => sendSize(xterm)
+  socket.onmessage = (event) => xterm.write(new Uint8Array(event.data))
+  socket.onclose = (event) => {
+    if (terminal?.socket !== socket) return
+
+    closeTerminal()
+    render()
+    if (event.code !== 1000) tell(`lazygit stopped for ${sessionName(session)}: ${event.reason || 'the connection closed'}`)
+  }
+
+  xterm.onData((data) => send(new TextEncoder().encode(data)))
+  xterm.onBinary((data) => send(Uint8Array.from(data, (c) => c.charCodeAt(0))))
+  xterm.onResize(sendSize)
+  xterm.attachCustomKeyEventHandler((event) => zoomKey(event) === null)
+
+  const observer = new ResizeObserver(() => fit.fit())
+  observer.observe(view)
+
+  terminal = { hash: location.hash, dir: session.dir, socket, xterm, fit, observer }
+  lastView = { key: null, path: null, text: null, version: null }
+  xterm.focus()
+}
+
+// Ends lazygit and empties the pane. Does nothing when lazygit does not run.
+function closeTerminal() {
+  if (terminal === null) return
+
+  const { socket, xterm, observer } = terminal
+  terminal = null
+  socket.onclose = null
+  socket.close()
+  observer.disconnect()
+  xterm.dispose()
+  sessionView.el.classList.remove('zoomed')
+
+  const view = $('view')
+  view.classList.remove('terminal')
+  view.replaceChildren()
+  lastView = { key: null, path: null, text: null, version: null }
+}
+
+// Shows lazygit alone on the session page when `on` is true, and the whole page when false. Does nothing when lazygit does not run.
+function zoomTerminal(on) {
+  if (terminal === null) return
+
+  sessionView.el.classList.toggle('zoomed', on)
+  terminal.fit.fit()
+  terminal.xterm.focus()
+}
+
+// Runs the card action `action` on `session`.
+function runAction(session, action) {
+  if (action === 'archive') archiveSession(session)
+  else if (action === 'lazygit') openLazygit(session)
+  else openTool(session, action)
+}
+
 // Runs the action bound to `key` on `session` and returns true when `key` has one.
 function sessionAction(session, key) {
   if (!Object.hasOwn(ACTION_KEYS, key)) return false
 
-  const action = ACTION_KEYS[key]
-  if (action === 'archive') archiveSession(session)
-  else openTool(session, action)
+  runAction(session, ACTION_KEYS[key])
   return true
 }
 
@@ -2030,8 +2175,9 @@ function revealStop(index) {
   card.scrollIntoView({ block: 'nearest' })
 }
 
-// Shows `path` of `session`, and renders again when the route already names it.
+// Ends lazygit, then shows `path` of `session`, and renders again when the route already names it.
 function openPath(session, path) {
+  closeTerminal()
   if (parseRoute(location.hash)?.path === path) render()
   else location.hash = fileHref(session, path)
 }
@@ -2159,7 +2305,7 @@ async function renderSessionPage(session, path) {
     if (first) revealStop(sessionView.selected)
   }
 
-  const head = viewerHeadHtml(stops[sessionView.selected], open)
+  const head = terminal !== null ? terminalHeadHtml(session) : viewerHeadHtml(stops[sessionView.selected], open)
   if (sessionView.head !== head) {
     $('viewer-head').innerHTML = head
     sessionView.head = head
@@ -2169,13 +2315,15 @@ async function renderSessionPage(session, path) {
 }
 
 function renderNotFound() {
+  closeTerminal()
   $('page').innerHTML = '<div class="column"><p class="empty">session not found</p></div>'
 }
 
-// Shows the page of the route. While the editor is open, shows only the edited file.
+// Shows the page of the route. While the editor is open, shows only the edited file. A new route ends lazygit.
 function render() {
   const route = parseRoute(location.hash)
   if (editing !== null && !routeShows(route, editing)) return
+  if (terminal !== null && location.hash !== terminal.hash) closeTerminal()
 
   renderSeq += 1
   shownHash = location.hash
@@ -2280,9 +2428,27 @@ function editorKey(event) {
   return true
 }
 
+// Returns true for Shift+Cmd+K, false for Shift+Cmd+J, and null for any other key.
+function zoomKey(event) {
+  if (!event.metaKey || !event.shiftKey || event.ctrlKey || event.altKey) return null
+
+  const key = event.key.toLowerCase()
+  if (key === 'k') return true
+  if (key === 'j') return false
+  return null
+}
+
 // Dispatches a shortcut key to the shown page.
 function onKey(event) {
   if (editorKey(event)) return
+
+  const zoom = zoomKey(event)
+  if (terminal !== null && zoom !== null) {
+    event.preventDefault()
+    return zoomTerminal(zoom)
+  }
+
+  if (terminal !== null && event.target.closest('#view')) return
 
   const key = shortcutKey(event)
   if (key === null) return
@@ -2322,6 +2488,11 @@ function showFontSize(size) {
   $('font-value').textContent = `${size}px`
   $('font-down').disabled = size <= FONT_MIN
   $('font-up').disabled = size >= FONT_MAX
+
+  if (terminal === null) return
+
+  terminal.xterm.options.fontSize = terminalFontSize()
+  terminal.fit.fit()
 }
 
 function stepFontSize(step) {

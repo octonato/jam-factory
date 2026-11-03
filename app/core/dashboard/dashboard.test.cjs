@@ -59,7 +59,16 @@ function dashboard({ script = source, pageWidth = 1200, pageLeft = 0, splitterWi
         setProperty: (name, value) => properties.set(name, value),
         getPropertyValue: (name) => properties.get(name) ?? '',
       },
-      classList: { add: (name) => classes.add(name), remove: (name) => classes.delete(name) },
+      classList: {
+        add: (name) => classes.add(name),
+        remove: (name) => classes.delete(name),
+        toggle: (name, force = !classes.has(name)) => {
+          if (force) classes.add(name)
+          else classes.delete(name)
+          return force
+        },
+        contains: (name) => classes.has(name),
+      },
       setPointerCapture: () => {},
       querySelector: () => null,
       closest: (selector) => (selector === `#${id}` ? el : el.parentElement?.closest(selector) ?? null),
@@ -425,6 +434,12 @@ test('lists a broken session as a problem', async () => {
   assert.ok(shown.includes('<div>a/repo/broken: expected value at line 1 column 1</div>'), shown)
   assert.ok(shown.includes('<div>b/repo/odd: unknown stage &#34;nope&#34;</div>'), shown)
   assert.equal(app.elements.get('status').textContent, '2 sessions')
+})
+
+test('missing xterm files are listed as problems', () => {
+  const missing = Array.from(dashboard().run('missingScripts()'))
+  assert.ok(missing.includes('xterm.js not loaded'), missing.join(', '))
+  assert.ok(missing.includes('addon-fit.js not loaded'), missing.join(', '))
 })
 
 test('parses routes with the org', () => {
@@ -950,4 +965,423 @@ test('a reload or page close asks to stay only while the editor holds unsaved ch
   press(app, 's', { metaKey: true }, editor(app))
   await settle()
   assert.equal(unload(app), false)
+})
+
+// Returns the bytes of a `Uint8Array` from any realm, and any other value unchanged.
+const bytes = (value) => (Object.prototype.toString.call(value) === '[object Uint8Array]' ? Array.from(value) : value)
+
+// Returns a dashboard that shows `path` of `editSession` from `api`, with fake xterm, fit addon, socket and resize observer classes, and the instances it creates.
+async function lazygitApp(api, path) {
+  const app = await openFile(api, path)
+  const sockets = []
+  const terminals = []
+  const observers = []
+  const { document } = app.context
+
+  // Records what the page writes and focuses, and keeps the handlers it registers. `size` is what the next fit gives.
+  class Terminal {
+    cols = 80
+    rows = 24
+    size = { cols: 100, rows: 30 }
+    written = []
+    focused = false
+    disposed = false
+    fits = 0
+    element = null
+    handlers = { data: null, binary: null, resize: null, key: null }
+
+    constructor(options) {
+      this.options = options
+      terminals.push(this)
+    }
+
+    loadAddon(addon) { addon.activate(this) }
+
+    open(container) {
+      this.element = document.createElement('div')
+      container.replaceChildren(this.element)
+    }
+
+    write(data) { this.written.push(data) }
+    focus() { this.focused = true }
+    blur() { this.focused = false }
+    dispose() { this.disposed = true }
+    onData(handler) { this.handlers.data = handler }
+    onBinary(handler) { this.handlers.binary = handler }
+    onResize(handler) { this.handlers.resize = handler }
+    attachCustomKeyEventHandler(handler) { this.handlers.key = handler }
+  }
+
+  // Sets its terminal to the terminal's `size`, and calls the resize handler when the size changed.
+  class FitAddon {
+    activate(terminal) { this.terminal = terminal }
+
+    fit() {
+      const terminal = this.terminal
+      const { cols, rows } = terminal.size
+      terminal.fits += 1
+      if (terminal.cols === cols && terminal.rows === rows) return
+
+      terminal.cols = cols
+      terminal.rows = rows
+      terminal.handlers.resize?.({ cols, rows })
+    }
+  }
+
+  // Records its URL, binary type, sent frames and close. A test fires its handlers by hand.
+  class WebSocket {
+    static OPEN = 1
+    readyState = 1
+    binaryType = 'blob'
+    sent = []
+    closed = false
+
+    constructor(url) {
+      this.url = url
+      sockets.push(this)
+    }
+
+    send(data) { this.sent.push(data) }
+
+    close() {
+      this.closed = true
+      this.readyState = 3
+    }
+  }
+
+  // Records its target and its callback. A test calls the callback by hand.
+  class ResizeObserver {
+    target = null
+    disconnected = false
+
+    constructor(callback) {
+      this.callback = callback
+      observers.push(this)
+    }
+
+    observe(target) { this.target = target }
+    disconnect() { this.disconnected = true }
+  }
+
+  app.context.location.host = '127.0.0.1:8731'
+  Object.assign(app.context, {
+    Terminal,
+    FitAddon: { FitAddon },
+    WebSocket,
+    ResizeObserver,
+    TextEncoder,
+  })
+  return { app, sockets, terminals, observers }
+}
+
+// Returns a lazygit dashboard that shows `spec.md` of `editSession`.
+const specLazygit = () => lazygitApp(fileApi({ 'spec.md': '# Spec\n' }), 'spec.md')
+
+test('g on a session page runs lazygit in the pane', async () => {
+  const { app, sockets, terminals } = await specLazygit()
+
+  assert.ok(press(app, 'g'))
+  assert.equal(sockets.length, 1)
+  assert.equal(sockets[0].url, 'ws://127.0.0.1:8731/api/lazygit/o/r/s?cols=100&rows=30')
+  assert.equal(sockets[0].binaryType, 'arraybuffer')
+
+  const [xterm] = terminals
+  assert.equal(xterm.focused, true)
+  assert.deepEqual(app.elements.get('view').children, [xterm.element])
+  assert.equal(xterm.options.fontFamily, 'ui-monospace, SFMono-Regular, Menlo, monospace')
+  assert.equal(xterm.options.fontSize, 14)
+  assert.equal(xterm.options.theme, app.run('TERMINAL_THEME'))
+  assert.equal(xterm.options.theme.background, '#142b37')
+  assert.equal(xterm.options.theme.foreground, '#e0e2e3')
+
+  await settle()
+  assert.match(app.elements.get('viewer-head').innerHTML, /<span class="path">lazygit<\/span>/)
+  assert.doesNotMatch(app.elements.get('view').innerHTML, /# Spec/)
+})
+
+test('the lazygit card button runs lazygit', async () => {
+  const { app, sockets } = await specLazygit()
+  const actions = app.run('CARD_ACTIONS.map((entry) => `${entry.action}: ${entry.title}`).join(", ")')
+  assert.equal(actions, 'intellij: Open in IntelliJ (i), zed: Open in Zed (e), iterm: Open in iTerm (t), lazygit: Open in lazygit (g), archive: Archive (a)')
+
+  const button = { dataset: { action: 'lazygit' }, closest: () => ({ dataset: { dir: editSession.dir } }) }
+  const target = { closest: (selector) => (selector === 'button[data-action]' ? button : null) }
+  app.elements.get('session-card').dispatch('click', { target })
+  assert.equal(sockets.length, 1)
+})
+
+test('g on the list opens the session page and lazygit', async () => {
+  const { app, sockets, terminals } = await specLazygit()
+  app.context.location.hash = '#/'
+  app.window.dispatch('hashchange')
+  app.run('selectedDir = session.dir')
+
+  assert.ok(press(app, 'g'))
+  assert.equal(app.context.location.hash, app.run('sessionHref(session)'))
+  assert.match(app.elements.get('page').innerHTML, /class="session-page"/)
+  assert.equal(sockets.length, 1)
+  assert.deepEqual(app.elements.get('view').children, [terminals[0].element])
+})
+
+test('bytes flow between the socket and the terminal', async () => {
+  const { app, sockets, terminals } = await specLazygit()
+  press(app, 'g')
+  const [socket] = sockets
+  const [xterm] = terminals
+
+  socket.onmessage({ data: new Uint8Array([104, 105]).buffer })
+  assert.deepEqual(xterm.written.map(bytes), [[104, 105]])
+
+  xterm.handlers.data('q')
+  xterm.handlers.binary('\x80')
+  xterm.handlers.resize({ cols: 90, rows: 20 })
+  assert.deepEqual(socket.sent.map(bytes), [[113], [128], '{"cols":90,"rows":20}'])
+
+  socket.readyState = 0
+  xterm.handlers.data('x')
+  xterm.handlers.resize({ cols: 80, rows: 10 })
+  assert.equal(socket.sent.length, 3, 'a socket that is not open gets no frames')
+})
+
+test('the socket sends the terminal size when it opens', async () => {
+  const { app, sockets, terminals } = await specLazygit()
+  press(app, 'g')
+
+  sockets[0].readyState = 0
+  terminals[0].size = { cols: 100, rows: 27 }
+  app.run('terminal.fit.fit()')
+  assert.deepEqual(sockets[0].sent, [])
+
+  sockets[0].readyState = 1
+  sockets[0].onopen()
+  assert.deepEqual(sockets[0].sent, ['{"cols":100,"rows":27}'])
+})
+
+test('a pane resize refits the terminal and sends its size', async () => {
+  const { app, sockets, terminals, observers } = await specLazygit()
+  press(app, 'g')
+
+  assert.equal(observers.length, 1)
+  assert.equal(observers[0].target, app.elements.get('view'))
+
+  terminals[0].size = { cols: 90, rows: 25 }
+  observers[0].callback()
+  assert.deepEqual(sockets[0].sent, ['{"cols":90,"rows":25}'])
+})
+
+test('keys inside the terminal fire no board shortcut', async () => {
+  const { app, terminals } = await specLazygit()
+  press(app, 'g')
+  const href = app.context.location.hash
+
+  assert.equal(press(app, 'l', {}, terminals[0].element), false)
+  assert.equal(press(app, 'Escape', {}, terminals[0].element), false)
+  assert.equal(app.context.location.hash, href)
+})
+
+test('a poll keeps lazygit', async () => {
+  const { app, sockets, terminals } = await specLazygit()
+  press(app, 'g')
+
+  app.run('render()')
+  await settle()
+  assert.equal(sockets[0].closed, false)
+  assert.equal(terminals[0].disposed, false)
+  assert.deepEqual(app.elements.get('view').children, [terminals[0].element])
+  assert.doesNotMatch(app.elements.get('view').innerHTML, /# Spec/)
+})
+
+test('lazygit exiting shows the file again', async () => {
+  const { app, sockets, terminals } = await specLazygit()
+  press(app, 'g')
+  await settle()
+
+  sockets[0].onclose({ code: 1000, reason: '' })
+  await settle()
+  assert.equal(app.run('terminal'), null)
+  assert.equal(terminals[0].disposed, true)
+  assert.match(app.elements.get('view').innerHTML, /# Spec/)
+  assert.match(app.elements.get('viewer-head').innerHTML, /spec\.md/)
+  assert.equal(app.elements.get('modal').open, undefined)
+})
+
+test('a failed lazygit shows the reason', async () => {
+  const { app, sockets } = await specLazygit()
+  press(app, 'g')
+
+  sockets[0].onclose({ code: 1011, reason: 'session has no worktree' })
+  assert.equal(app.run('terminal'), null)
+  assert.equal(app.elements.get('modal').open, true)
+  assert.equal(app.elements.get('modal-text').textContent, 'lazygit stopped for o/r/s: session has no worktree')
+
+  closeModal(app, 'ok')
+  await settle()
+  press(app, 'g')
+  sockets[1].onclose({ code: 1006, reason: '' })
+  assert.equal(app.elements.get('modal-text').textContent, 'lazygit stopped for o/r/s: the connection closed')
+})
+
+test('a route change closes lazygit', async () => {
+  const { app, sockets, terminals, observers } = await specLazygit()
+  press(app, 'g')
+
+  app.context.location.hash = '#/'
+  app.window.dispatch('hashchange')
+  assert.equal(sockets[0].closed, true)
+  assert.equal(sockets[0].onclose, null)
+  assert.equal(terminals[0].disposed, true)
+  assert.equal(observers[0].disconnected, true)
+  assert.equal(app.run('terminal'), null)
+})
+
+test('a session that disappears closes lazygit', async () => {
+  const { app, sockets } = await specLazygit()
+  press(app, 'g')
+
+  app.run('state.sessions = []')
+  app.run('render()')
+  assert.equal(sockets[0].closed, true)
+  assert.equal(app.run('terminal'), null)
+  assert.match(app.elements.get('page').innerHTML, /session not found/)
+
+  app.context.location.hash = '#/'
+  app.window.dispatch('hashchange')
+  assert.match(app.elements.get('page').innerHTML, /No sessions yet\./)
+})
+
+test('picking a file closes lazygit', async () => {
+  const { app, sockets } = await specLazygit()
+  press(app, 'g')
+  await settle()
+
+  app.run('openPath(session, "spec.md")')
+  assert.equal(sockets[0].closed, true)
+
+  await settle()
+  assert.match(app.elements.get('view').innerHTML, /# Spec/)
+})
+
+test('g with unsaved editor changes asks to discard first', async () => {
+  const { app, sockets } = await specLazygit()
+
+  press(app, 'w')
+  editor(app).value = '# Typed\n'
+  assert.ok(press(app, 'g'))
+  assert.equal(app.elements.get('modal').open, true)
+  assert.equal(app.elements.get('modal-text').textContent, 'Discard your changes?')
+  assert.equal(sockets.length, 0)
+
+  closeModal(app, 'cancel')
+  await settle()
+  assert.equal(sockets.length, 0)
+  assert.equal(app.run('editing.editor.value()'), '# Typed\n')
+
+  press(app, 'g')
+  closeModal(app, 'ok')
+  await settle()
+  assert.equal(app.run('editing'), null)
+  assert.equal(sockets.length, 1)
+})
+
+test('g while lazygit runs focuses it', async () => {
+  const { app, sockets, terminals } = await specLazygit()
+  press(app, 'g')
+
+  terminals[0].blur()
+  assert.ok(press(app, 'g'))
+  assert.equal(sockets.length, 1)
+  assert.equal(terminals.length, 1)
+  assert.equal(terminals[0].focused, true)
+})
+
+test('a font size change resizes the terminal', async () => {
+  const { app, sockets, terminals } = await specLazygit()
+  press(app, 'g')
+  const [xterm] = terminals
+  const fits = xterm.fits
+
+  xterm.size = { cols: 120, rows: 36 }
+  app.run('stepFontSize(1)')
+  assert.equal(xterm.options.fontSize, Math.round((18 + 1) * 0.8))
+  assert.equal(xterm.fits, fits + 1)
+  assert.deepEqual(sockets[0].sent, ['{"cols":120,"rows":36}'])
+})
+
+test('a late close from an old socket leaves the new lazygit open', async () => {
+  const { app, sockets } = await specLazygit()
+  press(app, 'g')
+  const lateClose = sockets[0].onclose
+
+  app.context.location.hash = '#/'
+  app.window.dispatch('hashchange')
+  app.run('openLazygit(session)')
+  lateClose({ code: 1011, reason: '' })
+
+  assert.equal(sockets.length, 2)
+  assert.equal(sockets[1].closed, false)
+  assert.equal(app.run('terminal.socket'), sockets[1])
+  assert.equal(app.elements.get('modal').open, undefined)
+})
+
+const zoomKeys = { metaKey: true, shiftKey: true }
+
+test('Shift+Cmd+K zooms lazygit in and Shift+Cmd+J zooms it out', async () => {
+  for (const [zoomIn, zoomOut] of [['K', 'J'], ['k', 'j']]) {
+    for (const inside of [true, false]) {
+      const { app, terminals } = await specLazygit()
+      press(app, 'g')
+      const [xterm] = terminals
+      const page = app.elements.get('session-page')
+      const target = inside ? xterm.element : undefined
+      const fits = xterm.fits
+
+      xterm.blur()
+      assert.ok(press(app, zoomIn, zoomKeys, target), `${zoomIn} is taken`)
+      assert.equal(page.classList.contains('zoomed'), true)
+      assert.equal(xterm.fits, fits + 1)
+      assert.equal(xterm.focused, true)
+
+      xterm.blur()
+      assert.ok(press(app, zoomOut, zoomKeys, target), `${zoomOut} is taken`)
+      assert.equal(page.classList.contains('zoomed'), false)
+      assert.equal(xterm.fits, fits + 2)
+      assert.equal(xterm.focused, true)
+    }
+  }
+})
+
+test('the zoom keys do nothing without lazygit', async () => {
+  const { app } = await specLazygit()
+  const page = app.elements.get('session-page')
+
+  assert.equal(press(app, 'K', zoomKeys), false)
+  assert.equal(page.classList.contains('zoomed'), false)
+  assert.equal(press(app, 'J', zoomKeys), false)
+
+  app.run('zoomTerminal(true)')
+  assert.equal(page.classList.contains('zoomed'), false)
+})
+
+test('lazygit exiting leaves the zoom', async () => {
+  const { app, sockets } = await specLazygit()
+  press(app, 'g')
+  press(app, 'K', zoomKeys)
+  const page = app.elements.get('session-page')
+  assert.equal(page.classList.contains('zoomed'), true)
+
+  sockets[0].onclose({ code: 1000, reason: '' })
+  await settle()
+  assert.equal(page.classList.contains('zoomed'), false)
+  assert.match(app.elements.get('view').innerHTML, /# Spec/)
+})
+
+test('the terminal keeps the zoom keys from lazygit', async () => {
+  const { app, terminals } = await specLazygit()
+  press(app, 'g')
+  const { key } = terminals[0].handlers
+  const event = (name, modifiers = {}) => ({ key: name, metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, ...modifiers })
+
+  for (const name of ['K', 'k', 'J', 'j']) assert.equal(key(event(name, zoomKeys)), false, `${name} stays out of lazygit`)
+  assert.equal(key(event('k')), true)
+  assert.equal(key(event('k', { metaKey: true })), true)
 })
