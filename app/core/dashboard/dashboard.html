@@ -516,8 +516,10 @@
     gap: 8px;
   }
 
-  .card-head .title { font-weight: 600; font-size: 1.05rem; }
-  .card-head .when { margin-left: auto; color: var(--muted); font-size: 0.85rem; font-variant-numeric: tabular-nums; }
+  .card-head .title { min-width: 0; font-weight: 600; font-size: 1.05rem; overflow-wrap: anywhere; }
+  .card-head .when { margin-left: auto; white-space: nowrap; color: var(--muted); font-size: 0.85rem; font-variant-numeric: tabular-nums; }
+
+  .card-foot { display: flex; justify-content: flex-end; }
 
   .badge {
     padding: 0 7px;
@@ -700,6 +702,12 @@
   .markdown img { max-width: 100%; }
 
   .diff, .code { margin: 0 0 12px; }
+
+  .diff { position: relative; }
+
+  #view .d2h-file-header.d2h-sticky-header { top: -16px; }
+
+  #view .d2h-diff-table { font: 0.857rem/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 
   .diff-bar {
     display: flex;
@@ -2045,10 +2053,10 @@ function stopCardHtml(stop, open, selected) {
     <div class="card${selected ? ' selected' : ''}"${path}>
       <div class="card-head">
         <span class="title">${escape(stop.label)}</span>
-        <span class="badge">${BADGES[stop.state]}</span>
         ${when}
       </div>
       ${lines.join('')}
+      <div class="card-foot"><span class="badge">${BADGES[stop.state]}</span></div>
     </div>`
 }
 

@@ -1231,7 +1231,8 @@ test('walk stops follow walk.json and the step files', () => {
 
   app.context.stop = stops[2]
   const card = app.run('stopCardHtml(stop, null, false)')
-  assert.match(card, /<span class="title">Step 2: B<\/span>\s*<span class="badge">writing<\/span>/)
+  assert.match(card, /<span class="title">Step 2: B<\/span>/)
+  assert.match(card, /<div class="card-foot"><span class="badge">writing<\/span><\/div>\s*<\/div>$/)
   assert.match(card, /<div class="note">The wiring\.<\/div>/)
   assert.doesNotMatch(card, /data-path=/)
   assert.match(html, /\.stop\.writing \{ --tone: var\(--accent\); \}/)
