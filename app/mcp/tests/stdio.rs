@@ -15,7 +15,7 @@
 use std::collections::HashSet;
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver};
@@ -28,7 +28,9 @@ use tempfile::TempDir;
 const BINARY: &str = env!("CARGO_BIN_EXE_jam-factory-mcp");
 const TIMEOUT: Duration = Duration::from_secs(10);
 
-const TOOLS: [&str; 10] = [
+const TOOLS: [&str; 12] = [
+    "append_code",
+    "append_diff",
     "append_file",
     "archive_session",
     "delete_file",
@@ -207,6 +209,69 @@ fn task_line(worker: usize, call: usize, state: &str) -> String {
     format!("task {worker}-{call}: {state}\n")
 }
 
+/// Runs git with `args` in `dir`, with `home` as its home folder, and returns its stdout.
+fn git(home: &Path, dir: &Path, args: &[&str]) -> String {
+    let output = Command::new("git")
+        .env("HOME", home)
+        .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+        .args(["-c", "commit.gpgsign=false"])
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "git {args:?}: {output:?}");
+    String::from_utf8(output.stdout).unwrap()
+}
+
+/// The 50 lines of `src/lib.rs`, with a new text on each line in `changed`.
+fn lib_rs(changed: &[usize]) -> String {
+    (1..=50)
+        .map(|n| {
+            if changed.contains(&n) {
+                format!("// new line {n}\n")
+            } else {
+                format!("// line {n}\n")
+            }
+        })
+        .collect()
+}
+
+/// Writes `lib` to `src/lib.rs` and `readme` to `README.md` in `dir`, and commits both.
+fn commit(home: &Path, dir: &Path, lib: &str, readme: &str) {
+    fs::create_dir_all(dir.join("src")).unwrap();
+    fs::write(dir.join("src").join("lib.rs"), lib).unwrap();
+    fs::write(dir.join("README.md"), readme).unwrap();
+
+    git(home, dir, &["add", "."]);
+    git(home, dir, &["commit", "-q", "-m", "change"]);
+}
+
+/// Returns a git repo with two commits, and writes a `session.json` whose `worktree` is that repo.
+/// The second commit changes lines 2 and 41 of `src/lib.rs`, and adds a run of four backticks to `README.md`.
+fn git_session(server: &mut Server) -> TempDir {
+    let repo = tempfile::tempdir().unwrap();
+    let home = Arc::clone(&server.home);
+
+    git(home.path(), repo.path(), &["init", "-q"]);
+    commit(home.path(), repo.path(), &lib_rs(&[]), "# R\n");
+    commit(home.path(), repo.path(), &lib_rs(&[2, 41]), "# R\n\n````\n");
+
+    let session = json!({ "id": "s", "worktree": repo.path() });
+    server.ok(
+        "write_file",
+        in_session(json!({ "path": "session.json", "content": session.to_string() })),
+    );
+
+    repo
+}
+
+/// The files of the session `o/r/s`.
+fn session_files(server: &mut Server) -> Value {
+    server.ok("list_files", in_session(json!({})))
+}
+
 #[test]
 fn initialize_names_the_server() {
     let server = Server::start();
@@ -215,7 +280,7 @@ fn initialize_names_the_server() {
 }
 
 #[test]
-fn tools_list_has_the_ten_tools() {
+fn tools_list_has_the_twelve_tools() {
     let mut server = Server::start();
 
     let reply = server.request("tools/list", json!({}));
@@ -598,6 +663,362 @@ fn processes_edit_without_loss() {
     let read = server.ok("read_file", in_session(json!({ "path": "tasks.md" })));
 
     assert_eq!(read["content"], done);
+}
+
+#[test]
+fn append_diff_writes_git_output_verbatim() {
+    let mut server = Server::start();
+    let repo = git_session(&mut server);
+
+    let diff = git(
+        server.home.path(),
+        repo.path(),
+        &[
+            "diff",
+            "--no-color",
+            "--no-ext-diff",
+            "-M",
+            "HEAD~1",
+            "HEAD",
+            "--",
+            "README.md",
+            "src/lib.rs",
+        ],
+    );
+
+    server.ok(
+        "append_file",
+        in_session(json!({ "path": "drafts/01.md", "content": "## Step 1: A\n" })),
+    );
+    let appended = server.ok(
+        "append_diff",
+        in_session(json!({
+            "path": "drafts/01.md",
+            "base": "HEAD~1",
+            "head": "HEAD",
+            "files": ["README.md", "src/lib.rs"],
+        })),
+    );
+    let read = server.ok("read_file", in_session(json!({ "path": "drafts/01.md" })));
+
+    assert!(diff.contains("+````\n"), "{diff}");
+    assert_eq!(
+        read["content"],
+        format!("## Step 1: A\n\n`````diff\n{diff}`````\n")
+    );
+    assert_eq!(read["version"], appended["version"]);
+}
+
+#[test]
+fn append_diff_keeps_only_hunks_in_lines() {
+    let mut server = Server::start();
+    let _repo = git_session(&mut server);
+
+    server.ok(
+        "append_diff",
+        in_session(json!({
+            "path": "drafts/01.md",
+            "base": "HEAD~1",
+            "head": "HEAD",
+            "files": ["README.md", "src/lib.rs"],
+            "lines": [[40, 42]],
+        })),
+    );
+    let read = server.ok("read_file", in_session(json!({ "path": "drafts/01.md" })));
+    let content = read["content"].as_str().unwrap();
+
+    assert!(
+        content.starts_with("\n```diff\ndiff --git a/src/lib.rs b/src/lib.rs\n"),
+        "{content}"
+    );
+    assert_eq!(content.matches("\n@@ ").count(), 1, "{content}");
+    assert!(content.contains("+// new line 41\n"), "{content}");
+    assert!(!content.contains("new line 2\n"), "{content}");
+    assert!(!content.contains("README.md"), "{content}");
+}
+
+#[test]
+fn append_diff_follows_a_file_renamed_by_its_new_path() {
+    let mut server = Server::start();
+    let repo = git_session(&mut server);
+    let home = Arc::clone(&server.home);
+
+    git(
+        home.path(),
+        repo.path(),
+        &["mv", "src/lib.rs", "src/core.rs"],
+    );
+    fs::write(
+        repo.path().join("src").join("core.rs"),
+        lib_rs(&[2, 41, 45]),
+    )
+    .unwrap();
+    fs::write(repo.path().join("README.md"), "# Renamed\n").unwrap();
+    git(home.path(), repo.path(), &["add", "."]);
+    git(home.path(), repo.path(), &["commit", "-q", "-m", "rename"]);
+
+    let diff_args = |lines: Value| {
+        in_session(json!({
+            "path": "drafts/01.md",
+            "base": "HEAD~1",
+            "head": "HEAD",
+            "files": ["src/core.rs"],
+            "lines": lines,
+        }))
+    };
+
+    server.ok("append_diff", diff_args(Value::Null));
+    let outside = server.fail("append_diff", diff_args(json!([[1, 5]])));
+    let read = server.ok("read_file", in_session(json!({ "path": "drafts/01.md" })));
+    let content = read["content"].as_str().unwrap();
+
+    assert!(
+        content.starts_with("\n```diff\ndiff --git a/src/lib.rs b/src/core.rs\n"),
+        "{content}"
+    );
+    assert!(
+        content.contains("rename from src/lib.rs\nrename to src/core.rs\n"),
+        "{content}"
+    );
+    assert_eq!(content.matches("\n@@ ").count(), 1, "{content}");
+    assert!(content.contains("+// new line 45\n"), "{content}");
+    assert!(!content.contains("new file mode"), "{content}");
+    assert!(!content.contains("README.md"), "{content}");
+    assert_eq!(outside["code"], "empty_diff", "{outside}");
+}
+
+#[test]
+fn append_diff_with_no_match_writes_nothing() {
+    let mut server = Server::start();
+    let _repo = git_session(&mut server);
+
+    let no_hunk = server.fail(
+        "append_diff",
+        in_session(json!({
+            "path": "drafts/01.md",
+            "base": "HEAD~1",
+            "head": "HEAD",
+            "files": ["src/lib.rs"],
+            "lines": [[100, 120]],
+        })),
+    );
+    let no_change = server.fail(
+        "append_diff",
+        in_session(json!({
+            "path": "drafts/01.md",
+            "base": "HEAD",
+            "head": "HEAD",
+            "files": ["src/lib.rs"],
+        })),
+    );
+
+    for error in [&no_hunk, &no_change] {
+        assert_eq!(error["code"], "empty_diff", "{error}");
+        assert_eq!(error["current_version"], Value::Null, "{error}");
+    }
+
+    assert_eq!(
+        session_files(&mut server),
+        json!({ "files": ["session.json"] })
+    );
+}
+
+#[test]
+fn append_code_writes_a_tagged_block() {
+    let mut server = Server::start();
+    let _repo = git_session(&mut server);
+
+    let appended = server.ok(
+        "append_code",
+        in_session(json!({ "path": "drafts/01.md", "file": "src/lib.rs", "start": 2, "end": 3 })),
+    );
+    let read = server.ok("read_file", in_session(json!({ "path": "drafts/01.md" })));
+
+    assert_eq!(
+        read["content"],
+        "\n```rust path=src/lib.rs lines=2-3\n// new line 2\n// line 3\n```\n"
+    );
+    assert_eq!(read["version"], appended["version"]);
+}
+
+#[test]
+fn append_code_reads_at_a_ref() {
+    let mut server = Server::start();
+    let _repo = git_session(&mut server);
+
+    server.ok(
+        "append_code",
+        in_session(json!({
+            "path": "drafts/01.md",
+            "file": "src/lib.rs",
+            "start": 2,
+            "end": 3,
+            "ref": "HEAD~1",
+        })),
+    );
+    let read = server.ok("read_file", in_session(json!({ "path": "drafts/01.md" })));
+
+    assert_eq!(
+        read["content"],
+        "\n```rust path=src/lib.rs lines=2-3\n// line 2\n// line 3\n```\n"
+    );
+}
+
+#[test]
+fn tools_refuse_escaping_paths() {
+    let mut server = Server::start();
+    let _repo = git_session(&mut server);
+
+    for file in ["../x", "/etc/hosts"] {
+        let diff = server.fail(
+            "append_diff",
+            in_session(json!({
+                "path": "drafts/01.md",
+                "base": "HEAD~1",
+                "head": "HEAD",
+                "files": ["src/lib.rs", file],
+            })),
+        );
+        let code = server.fail(
+            "append_code",
+            in_session(json!({ "path": "drafts/01.md", "file": file, "start": 1, "end": 1 })),
+        );
+
+        assert_eq!(diff["code"], "bad_path", "{file}");
+        assert_eq!(code["code"], "bad_path", "{file}");
+    }
+
+    let no_files = server.fail(
+        "append_diff",
+        in_session(json!({
+            "path": "drafts/01.md",
+            "base": "HEAD~1",
+            "head": "HEAD",
+            "files": [],
+        })),
+    );
+
+    assert_eq!(no_files["code"], "bad_path");
+    assert_eq!(
+        session_files(&mut server),
+        json!({ "files": ["session.json"] })
+    );
+}
+
+#[test]
+fn tools_need_a_worktree_in_session_json() {
+    let mut server = Server::start();
+
+    let sessions = [
+        ("missing", "{\"id\": \"missing\"}\n"),
+        ("number", "{\"worktree\": 3}\n"),
+        ("broken", "not json\n"),
+    ];
+
+    for (session, content) in sessions {
+        server.ok(
+            "write_file",
+            in_session_of(
+                "o",
+                "r",
+                session,
+                json!({ "path": "session.json", "content": content }),
+            ),
+        );
+
+        let diff = server.fail(
+            "append_diff",
+            in_session_of(
+                "o",
+                "r",
+                session,
+                json!({
+                    "path": "drafts/01.md",
+                    "base": "HEAD~1",
+                    "head": "HEAD",
+                    "files": ["src/lib.rs"],
+                }),
+            ),
+        );
+        let code = server.fail(
+            "append_code",
+            in_session_of(
+                "o",
+                "r",
+                session,
+                json!({ "path": "drafts/01.md", "file": "src/lib.rs", "start": 1, "end": 1 }),
+            ),
+        );
+        let files = server.ok("list_files", in_session_of("o", "r", session, json!({})));
+
+        assert_eq!(diff["code"], "bad_json", "{session}");
+        assert_eq!(code["code"], "bad_json", "{session}");
+        assert_eq!(files, json!({ "files": ["session.json"] }), "{session}");
+    }
+}
+
+#[test]
+fn append_code_refuses_a_bad_range() {
+    let mut server = Server::start();
+    let _repo = git_session(&mut server);
+
+    for (start, end) in [(0, 1), (3, 2), (1, 51)] {
+        let error = server.fail(
+            "append_code",
+            in_session(json!({
+                "path": "drafts/01.md",
+                "file": "src/lib.rs",
+                "start": start,
+                "end": end,
+            })),
+        );
+
+        assert_eq!(error["code"], "bad_range", "{start}-{end}");
+    }
+
+    assert_eq!(
+        session_files(&mut server),
+        json!({ "files": ["session.json"] })
+    );
+}
+
+#[test]
+fn tools_report_git_failures() {
+    let mut server = Server::start();
+    let _repo = git_session(&mut server);
+
+    let bad_base = server.fail(
+        "append_diff",
+        in_session(json!({
+            "path": "drafts/01.md",
+            "base": "nope",
+            "head": "HEAD",
+            "files": ["src/lib.rs"],
+        })),
+    );
+    let missing_file = server.fail(
+        "append_code",
+        in_session(json!({ "path": "drafts/01.md", "file": "src/gone.rs", "start": 1, "end": 1 })),
+    );
+    let bad_ref = server.fail(
+        "append_code",
+        in_session(json!({
+            "path": "drafts/01.md",
+            "file": "src/lib.rs",
+            "start": 1,
+            "end": 1,
+            "ref": "nope",
+        })),
+    );
+
+    for error in [&bad_base, &missing_file, &bad_ref] {
+        assert_eq!(error["code"], "git_failed", "{error}");
+    }
+
+    assert_eq!(
+        session_files(&mut server),
+        json!({ "files": ["session.json"] })
+    );
 }
 
 #[test]

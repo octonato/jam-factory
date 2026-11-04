@@ -12,10 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! The MCP tools, each one store call.
+//! The MCP tools, each one store call or one worktree excerpt appended to a session file.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
+use jam_factory_store::sessions::SESSION_FILE;
 use jam_factory_store::{SessionFilter, SessionRef, Store, StoreError};
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
@@ -24,6 +26,8 @@ use rmcp::{ServerHandler, tool, tool_handler, tool_router};
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
+
+use crate::excerpt::{self, ExcerptError};
 
 /// A session named by its org, its repo and its id.
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -107,6 +111,51 @@ pub struct AppendFileArgs {
     content: String,
 }
 
+/// The arguments of `append_diff`.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct AppendDiffArgs {
+    #[serde(flatten)]
+    session_args: SessionArgs,
+
+    /// The path of the file, relative to the session folder.
+    path: String,
+
+    /// The commit the diff starts from.
+    base: String,
+
+    /// The commit the diff ends at.
+    head: String,
+
+    /// The files to diff, relative to the worktree.
+    files: Vec<String>,
+
+    /// The `[start, end]` line ranges on the new side that a kept hunk must meet.
+    lines: Option<Vec<[u32; 2]>>,
+}
+
+/// The arguments of `append_code`.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct AppendCodeArgs {
+    #[serde(flatten)]
+    session_args: SessionArgs,
+
+    /// The path of the file, relative to the session folder.
+    path: String,
+
+    /// The file to read, relative to the worktree.
+    file: String,
+
+    /// The first line to read, from 1.
+    start: u32,
+
+    /// The last line to read, inclusive.
+    end: u32,
+
+    /// The git ref to read the file at. Leave it out to read the worktree.
+    #[serde(rename = "ref")]
+    git_ref: Option<String>,
+}
+
 /// The arguments of `move_file`.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct MoveFileArgs {
@@ -166,13 +215,13 @@ impl FactoryServer {
     /// Runs `call` on the store and returns its reply or error as a tool result.
     async fn run<F>(&self, call: F) -> CallToolResult
     where
-        F: FnOnce(&Store) -> Result<Value, StoreError> + Send + 'static,
+        F: FnOnce(&Store) -> Result<Value, ExcerptError> + Send + 'static,
     {
         let store = Arc::clone(&self.store);
 
         let result = tokio::task::spawn_blocking(move || call(&store))
             .await
-            .unwrap_or_else(|e| Err(StoreError::Io(e.to_string())));
+            .unwrap_or_else(|e| Err(StoreError::Io(e.to_string()).into()));
 
         match result {
             Ok(reply) => CallToolResult::success(vec![ContentBlock::text(reply.to_string())]),
@@ -257,6 +306,60 @@ impl FactoryServer {
         .await
     }
 
+    #[tool(
+        description = "Appends the git diff of `files` from `base` to `head` in the session's worktree as a fenced diff block, keeping only the hunks that meet `lines` when given."
+    )]
+    async fn append_diff(&self, Parameters(args): Parameters<AppendDiffArgs>) -> CallToolResult {
+        self.run(move |store| {
+            if args.files.is_empty() {
+                return Err(ExcerptError::BadPath("files is empty".to_string()));
+            }
+
+            for file in &args.files {
+                excerpt::check_repo_path(file)?;
+            }
+
+            let s = args.session_args.session_ref()?;
+            let worktree = worktree(store, &s)?;
+            let diff = excerpt::git_diff(&worktree, &args.base, &args.head, &args.files)?;
+
+            let body = match &args.lines {
+                None => diff,
+                Some(lines) => kept_hunks(&diff, lines)?,
+            };
+
+            let version = store.append_file(&s, &args.path, &excerpt::fence("diff", &body))?;
+            Ok(json!({ "version": version }))
+        })
+        .await
+    }
+
+    #[tool(
+        description = "Appends lines `start` to `end` of a worktree file, or of the file at `ref`, as a fenced code block."
+    )]
+    async fn append_code(&self, Parameters(args): Parameters<AppendCodeArgs>) -> CallToolResult {
+        self.run(move |store| {
+            excerpt::check_repo_path(&args.file)?;
+
+            let s = args.session_args.session_ref()?;
+            let worktree = worktree(store, &s)?;
+            let git_ref = args.git_ref.as_deref();
+            let body = excerpt::code_lines(&worktree, &args.file, args.start, args.end, git_ref)?;
+
+            let info = format!(
+                "{} path={} lines={}-{}",
+                excerpt::language(&args.file),
+                args.file,
+                args.start,
+                args.end
+            );
+
+            let version = store.append_file(&s, &args.path, &excerpt::fence(&info, &body))?;
+            Ok(json!({ "version": version }))
+        })
+        .await
+    }
+
     #[tool(description = "Renames a file inside one session folder.")]
     async fn move_file(&self, Parameters(args): Parameters<MoveFileArgs>) -> CallToolResult {
         self.run(move |store| {
@@ -312,10 +415,37 @@ impl ServerHandler for FactoryServer {
     }
 }
 
+/// Returns the string `worktree` of the `session.json` of `s`.
+fn worktree(store: &Store, s: &SessionRef) -> Result<PathBuf, ExcerptError> {
+    let session = store.read_file(s, SESSION_FILE)?;
+
+    let data: Value = serde_json::from_str(&session.content)
+        .map_err(|e| StoreError::BadJson(format!("{SESSION_FILE} does not parse: {e}")))?;
+
+    match data.get("worktree").and_then(Value::as_str) {
+        Some(worktree) => Ok(PathBuf::from(worktree)),
+        None => Err(StoreError::BadJson(format!("{SESSION_FILE} has no string worktree")).into()),
+    }
+}
+
+/// Returns the hunks of `diff` that meet `lines`, or `empty_diff` when none does.
+fn kept_hunks(diff: &str, lines: &[[u32; 2]]) -> Result<String, ExcerptError> {
+    let ranges: Vec<(u32, u32)> = lines.iter().map(|&[start, end]| (start, end)).collect();
+    let kept = excerpt::filter_hunks(diff, &ranges);
+
+    if kept.is_empty() {
+        return Err(ExcerptError::EmptyDiff(format!(
+            "No hunk of the diff meets the lines {lines:?}"
+        )));
+    }
+
+    Ok(kept)
+}
+
 /// The JSON error reply of `error`.
-fn error_reply(error: &StoreError) -> Value {
+fn error_reply(error: &ExcerptError) -> Value {
     let current_version = match error {
-        StoreError::Conflict { current } => Some(current.as_str()),
+        ExcerptError::Store(StoreError::Conflict { current }) => Some(current.as_str()),
         _ => None,
     };
 

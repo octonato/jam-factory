@@ -71,6 +71,7 @@ function dashboard({ script = source, pageWidth = 1200, pageLeft = 0, splitterWi
       },
       setPointerCapture: () => {},
       querySelector: () => null,
+      querySelectorAll: () => [],
       closest: (selector) => (selector === `#${id}` ? el : el.parentElement?.closest(selector) ?? null),
       replaceChildren: (...nodes) => {
         html = ''
@@ -440,6 +441,148 @@ test('missing xterm files are listed as problems', () => {
   const missing = Array.from(dashboard().run('missingScripts()'))
   assert.ok(missing.includes('xterm.js not loaded'), missing.join(', '))
   assert.ok(missing.includes('addon-fit.js not loaded'), missing.join(', '))
+})
+
+test('missing highlight files are listed as problems', () => {
+  const missing = Array.from(dashboard().run('missingScripts()'))
+  assert.ok(missing.includes('highlight.min.js not loaded'), missing.join(', '))
+  assert.ok(missing.includes('diff2html-ui-base.min.js not loaded'), missing.join(', '))
+})
+
+test('parses fence info strings', () => {
+  const app = dashboard()
+  assert.deepEqual(plain(app.run("parseInfo('rust path=a/b.rs lines=2-9')")), { lang: 'rust', path: 'a/b.rs', lines: '2-9' })
+  assert.deepEqual(plain(app.run("parseInfo('diff')")), { lang: 'diff', path: null, lines: null })
+  assert.deepEqual(plain(app.run("parseInfo('')")), { lang: '', path: null, lines: null })
+})
+
+const markedScript = readFileSync(`${__dirname}/marked.min.js`, 'utf8')
+const highlightScript = readFileSync(`${__dirname}/highlight.min.js`, 'utf8')
+const highlightScalaScript = readFileSync(`${__dirname}/highlight-scala.min.js`, 'utf8')
+
+// Returns a dashboard with the real marked and highlight.js, a DOMPurify stub that returns its input, and empty stubs for the other page scripts.
+function markdownDashboard(options) {
+  const app = dashboard(options)
+  app.run(markedScript)
+  app.run(highlightScript)
+  app.run(highlightScalaScript)
+  Object.assign(app.context, {
+    DOMPurify: { sanitize: (html) => html },
+    Diff2HtmlUI: class {},
+    Terminal: class {},
+    FitAddon: {},
+  })
+  return app
+}
+
+const diffText = [
+  'diff --git a/f.txt b/f.txt',
+  'index 1111111..2222222 100644',
+  '--- a/f.txt',
+  '+++ b/f.txt',
+  '@@ -1 +1 @@',
+  '-old',
+  '+new',
+].join('\n')
+const diffFence = `## Step 1\n\n\`\`\`diff\n${diffText}\n\`\`\`\n`
+
+test('a diff fence becomes a diff block with a toggle', () => {
+  const app = markdownDashboard()
+  app.context.text = diffFence
+  const html = app.run("fileHtml('steps/01.md', text)")
+
+  assert.ok(html.includes('<div class="diff" data-diff="0"><div class="diff-bar">'), html)
+  assert.ok(html.includes('<button type="button" data-layout="line-by-line" aria-pressed="true">Unified</button>'), html)
+  assert.ok(html.includes('<button type="button" data-layout="side-by-side" aria-pressed="false">Split</button>'), html)
+  assert.ok(html.includes('</div><div class="diff-body"></div></div>'), html)
+  assert.deepEqual(Array.from(app.run('pendingDiffs')), [diffText])
+})
+
+test('a tagged code fence shows its path and lines', () => {
+  const app = markdownDashboard()
+  app.context.text = '```rust path=a/b.rs lines=2-9\nfn main() {}\n```\n'
+  const html = app.run("fileHtml('steps/01.md', text)")
+
+  assert.ok(html.includes('<div class="code"><div class="code-path">a/b.rs:2-9</div><pre><code class="hljs"><span class="hljs-keyword">fn</span>'), html)
+})
+
+test('a code fence in a known language shows highlight.js colours', () => {
+  const app = markdownDashboard()
+  app.context.text = "```javascript\nconst a = '<b>'\n```\n"
+  const html = app.run("fileHtml('steps/01.md', text)")
+
+  const code = '<span class="hljs-keyword">const</span> a = <span class="hljs-string">&#x27;&lt;b&gt;&#x27;</span>'
+  assert.ok(html.includes(`<div class="code"><pre><code class="hljs">${code}</code></pre></div>`), html)
+})
+
+test('a code fence in an unknown language shows its text escaped', () => {
+  const app = markdownDashboard()
+  app.context.text = '```nope\n<b>\n```\n'
+  const html = app.run("fileHtml('steps/01.md', text)")
+
+  assert.ok(html.includes('<div class="code"><pre><code class="hljs">&#60;b&#62;'), html)
+})
+
+const excerptSource = readFileSync(`${__dirname}/../../mcp/src/excerpt.rs`, 'utf8')
+
+// Returns the language names that `language` in `app/mcp/src/excerpt.rs` returns.
+function excerptLanguages() {
+  const start = excerptSource.indexOf('pub fn language(')
+  const end = excerptSource.indexOf('\n}\n', start)
+  return [...excerptSource.slice(start, end).matchAll(/=> "([^"]+)"/g)].map((match) => match[1])
+}
+
+test('every language an excerpt names resolves in highlight.js', () => {
+  const app = markdownDashboard()
+  const languages = excerptLanguages()
+
+  assert.ok(languages.includes('scala'), languages.join(', '))
+  assert.deepEqual(languages.filter((language) => !app.context.hljs.getLanguage(language)), [])
+})
+
+const diff2htmlScript = readFileSync(`${__dirname}/diff2html-ui-base.min.js`, 'utf8')
+
+// Returns the HTML that `drawDiff` draws for `text` through the vendored diff2html.
+function diff2htmlHtml(app, text) {
+  const body = { innerHTML: '', querySelector: () => null, querySelectorAll: () => [] }
+  app.context.block = { diffText: text, querySelector: () => body }
+  app.run("drawDiff(block, 'line-by-line')")
+  return body.innerHTML
+}
+
+test('a diff fence without file headers shows as diff code', () => {
+  const app = markdownDashboard()
+  app.run(diff2htmlScript)
+  const languages = []
+  app.context.hljs.highlight = (text, { language }) => {
+    languages.push(language)
+    return { value: text }
+  }
+  const hunk = '@@ -1 +1 @@\n-old\n+new'
+  assert.ok(!diff2htmlHtml(app, hunk).includes('d2h-file-wrapper'))
+
+  app.context.text = `\`\`\`diff\n${hunk}\n\`\`\`\n`
+  const html = app.run("fileHtml('steps/01.md', text)")
+
+  assert.ok(html.includes(`<div class="code"><pre><code class="hljs">${hunk}`), html)
+  assert.ok(!html.includes('class="diff"'), html)
+  assert.deepEqual(Array.from(app.run('pendingDiffs')), [])
+  assert.deepEqual(languages, ['diff'])
+})
+
+test('a diff fence with file headers draws a file through diff2html', () => {
+  const app = markdownDashboard()
+  app.run(diff2htmlScript)
+  const unified = ['--- a/f.txt', '+++ b/f.txt', '@@ -1 +1 @@', '-old', '+new'].join('\n')
+
+  for (const text of [diffText, unified]) {
+    app.context.text = `\`\`\`diff\n${text}\n\`\`\`\n`
+    const html = app.run("fileHtml('steps/01.md', text)")
+
+    assert.ok(html.includes('<div class="diff" data-diff="0">'), html)
+    assert.deepEqual(Array.from(app.run('pendingDiffs')), [text])
+    assert.ok(diff2htmlHtml(app, text).includes('d2h-file-wrapper'), text)
+  }
 })
 
 test('parses routes with the org', () => {
@@ -965,6 +1108,228 @@ test('a reload or page close asks to stay only while the editor holds unsaved ch
   press(app, 's', { metaKey: true }, editor(app))
   await settle()
   assert.equal(unload(app), false)
+})
+
+// Returns a fake diff block of index 0, its body, and its Unified and Split buttons.
+function diffBlock() {
+  const body = {}
+  const block = {
+    dataset: { diff: '0' },
+    querySelector: (selector) => (selector === '.diff-body' ? body : null),
+    querySelectorAll: () => buttons,
+  }
+  const button = (layout, pressed) => {
+    const el = {
+      dataset: { layout },
+      attributes: { 'aria-pressed': pressed },
+      setAttribute: (name, value) => { el.attributes[name] = value },
+      closest: (selector) => (selector.includes('button') ? el : selector.startsWith('.diff[') ? block : null),
+    }
+    return el
+  }
+  const buttons = [button('line-by-line', 'true'), button('side-by-side', 'false')]
+  return { block, body, buttons }
+}
+
+test('a shown diff draws through diff2html and redraws in the clicked layout', async () => {
+  const app = markdownDashboard({ fetcher: fileApi({ 'steps/01.md': diffFence }).fetcher })
+  const draws = []
+  app.context.Diff2HtmlUI = class {
+    constructor(body, text, config, hljs) { this.call = { body, text, config, hljs } }
+    draw() { draws.push(this.call) }
+  }
+
+  app.context.session = editSession
+  app.run('state.sessions = [session]')
+  app.context.location.hash = app.run('fileHref(session, "steps/01.md")')
+  app.run('render()')
+
+  const view = app.elements.get('view')
+  const { block, body, buttons } = diffBlock()
+  view.querySelectorAll = (selector) => (selector === '.diff[data-diff]' ? [block] : [])
+  await settle()
+
+  assert.ok(view.innerHTML.includes('<div class="diff" data-diff="0">'), view.innerHTML)
+  assert.equal(draws.length, 1)
+  assert.equal(draws[0].body, body)
+  assert.equal(draws[0].text, diffText)
+  assert.deepEqual(plain(draws[0].config), { outputFormat: 'line-by-line', drawFileList: false, matching: 'lines', highlight: true })
+  assert.equal(draws[0].hljs, app.context.hljs)
+
+  app.run('pendingDiffs = []')
+  view.dispatch('click', { target: buttons[1] })
+  assert.equal(draws.length, 2)
+  assert.equal(draws[1].text, diffText)
+  assert.equal(draws[1].config.outputFormat, 'side-by-side')
+  assert.deepEqual(buttons.map((button) => button.attributes['aria-pressed']), ['false', 'true'])
+})
+
+// Returns a walk session of `editSession` at `stage`, with `done` of `planned` steps written.
+const walkSession = (stage, done = 1, planned = 2, fields = {}) => ({
+  ...editSession,
+  flow: 'walk',
+  stage,
+  counts: { stepsPlanned: planned, stepsDone: done },
+  blocked: null,
+  ...fields,
+})
+
+const walkJson = JSON.stringify({
+  mode: 'changes',
+  summary: 'Adds rate limiting.',
+  steps: [
+    { n: 1, title: 'A', summary: 'The limiter.' },
+    { n: 2, title: 'B', summary: 'The wiring.' },
+  ],
+})
+
+// Returns the stops of `session` over `files` and `walkJson`.
+function walkStops(app, session, files) {
+  app.context.session = session
+  app.context.files = files
+  app.context.walkText = walkJson
+  return plain(app.run('buildStops(session, files, [], {}, parseWalk(walkText))'))
+}
+
+// Returns a dashboard that shows the session page of `session` from `api`.
+async function openSession(api, session) {
+  const app = dashboard({ fetcher: api.fetcher })
+  app.context.session = session
+  app.run('state.sessions = [session]')
+  app.context.location.hash = app.run('sessionHref(session)')
+  app.run('render()')
+  await settle()
+  return app
+}
+
+test('classes sessions by flow', () => {
+  const app = dashboard()
+  const classOf = (flow) => {
+    app.context.session = { ...session, flow }
+    return app.run('sessionClass(session)')
+  }
+
+  assert.equal(classOf('build'), 'implementation')
+  assert.equal(classOf('vibe'), 'implementation')
+  assert.equal(classOf('review'), 'review')
+  assert.equal(classOf('walk'), 'walk-through')
+  assert.equal(classOf(undefined), 'implementation')
+  assert.equal(classOf('other'), 'other')
+
+  app.context.session = session
+  assert.match(app.run('rowContent(session)'), /<span class="label"><span class="pill">implementation<\/span> /)
+})
+
+test('walk stops follow walk.json and the step files', () => {
+  const app = dashboard()
+  const stops = walkStops(app, walkSession('walk'), ['overview.md', 'walk.json', 'steps/01.md'])
+
+  assert.deepEqual(stops.map((stop) => stop.label), ['Overview', 'Step 1: A', 'Step 2: B'])
+  assert.deepEqual(stops.map((stop) => stop.file), ['overview.md', 'steps/01.md', null])
+  assert.deepEqual(stops.map((stop) => stop.state), ['done', 'done', 'writing'])
+  assert.deepEqual(stops.map((stop) => stop.summary), ['Adds rate limiting.', 'The limiter.', 'The wiring.'])
+
+  app.context.stop = stops[2]
+  const card = app.run('stopCardHtml(stop, null, false)')
+  assert.match(card, /<span class="title">Step 2: B<\/span>\s*<span class="badge">writing<\/span>/)
+  assert.match(card, /<div class="note">The wiring\.<\/div>/)
+  assert.doesNotMatch(card, /data-path=/)
+  assert.match(html, /\.stop\.writing \{ --tone: var\(--accent\); \}/)
+})
+
+test('a done walk marks every written step done', () => {
+  const app = dashboard()
+  const done = walkSession('done', 2, 2)
+
+  assert.deepEqual(walkStops(app, done, ['overview.md', 'steps/01.md', 'steps/02.md']).map((stop) => stop.state), ['done', 'done', 'done'])
+  assert.deepEqual(walkStops(app, done, ['overview.md', 'steps/01.md']).map((stop) => stop.state), ['done', 'done', 'pending'])
+  assert.equal(app.run('stepLabel(session)'), 'walk-through · done')
+})
+
+test('a blocked walk shows its reason on the overview', () => {
+  const app = dashboard()
+  const blocked = walkSession('blocked', 1, 2, { blocked: { stage: 'walk', reason: 'git failed' } })
+  const stops = walkStops(app, blocked, ['overview.md', 'steps/01.md'])
+
+  assert.deepEqual(stops.map((stop) => stop.state), ['blocked', 'done', 'pending'])
+  assert.equal(stops[0].file, 'overview.md')
+  assert.equal(stops[0].note, 'git failed')
+  assert.deepEqual(stops[0].links, [{ label: 'session.json', path: 'session.json' }])
+  assert.equal(app.run('stepLabel(session)'), 'walk-through · blocked')
+  assert.equal(app.run('defaultFile(session, [], 0)'), 'session.json')
+  assert.equal(app.run('stopIndexForFile(buildStops(session, files, [], {}, parseWalk(walkText)), "session.json")'), 0)
+})
+
+test('a walk without walk.json shows only the overview', async () => {
+  const app = dashboard({ fetcher: () => response('', false) })
+  for (const text of ['{', '{}', 'null', '7', '{"steps":{}}']) {
+    assert.equal(app.run(`parseWalk(${JSON.stringify(text)})`), null, text)
+  }
+
+  app.context.walkText = JSON.stringify({
+    summary: 7,
+    steps: [{ n: 1, title: 'A', summary: 'S' }, { n: '2', title: 'B' }, { n: 3 }, null, { n: 4.5, title: 'C' }, { n: 5, title: 'E', summary: 1 }],
+  })
+  assert.deepEqual(plain(app.run('parseWalk(walkText)')), {
+    summary: null,
+    steps: [{ n: 1, title: 'A', summary: 'S' }, { n: 5, title: 'E', summary: null }],
+  })
+
+  assert.equal(await app.run('loadWalk("api/file/o/r/s/", ["session.json"])'), null)
+  assert.deepEqual(app.calls, [])
+  assert.equal(await app.run('loadWalk("api/file/o/r/s/", ["walk.json"])'), null)
+  assert.deepEqual(app.calls, ['api/file/o/r/s/walk.json'])
+
+  app.context.session = walkSession('walk', 0, 0)
+  const stops = plain(app.run('buildStops(session, ["request.md"], [], {}, null)'))
+  assert.equal(stops.length, 1)
+  assert.equal(stops[0].label, 'Overview')
+  assert.equal(stops[0].file, 'overview.md')
+  assert.equal(stops[0].state, 'done')
+  assert.equal(stops[0].summary, null)
+})
+
+test('walk rows read writing n/m', () => {
+  const app = dashboard()
+  app.context.session = walkSession('walk', 1, 2)
+
+  assert.equal(app.run('stepLabel(session)'), 'walk-through · writing 1/2')
+  assert.match(app.run('rowContent(session)'), /<span class="pill">walk-through<\/span> walk-through · writing 1\/2<\/span>/)
+
+  const facts = [...app.run('sessionCardHtml(session, [])').matchAll(/<span class="pill">([^<]*)<\/span>/g)].map((match) => match[1])
+  assert.deepEqual(facts, ['walk-through', 'walk', '1/2 steps'])
+
+  app.context.session = walkSession('walk', 1, 2, { counts: undefined })
+  assert.equal(app.run('stepLabel(session)'), 'walk-through · writing 0/0')
+})
+
+test('a walk opens its overview by default', async () => {
+  const api = fileApi({ 'session.json': '{}', 'walk.json': walkJson, 'overview.md': '# Overview\n', 'steps/01.md': '## Step 1: A\n' })
+  const app = await openSession(api, walkSession('walk'))
+
+  assert.equal(app.run('defaultFile(session, [], 0)'), 'overview.md')
+  assert.equal(app.run('sessionView.selected'), 0)
+  assert.deepEqual(plain(app.run('sessionView.stops.map((stop) => stop.label)')), ['Overview', 'Step 1: A', 'Step 2: B'])
+  assert.match(app.elements.get('viewer-head').innerHTML, /<span class="path">overview\.md<\/span><span class="by">Overview<\/span>/)
+  assert.match(app.elements.get('view').innerHTML, /# Overview/)
+})
+
+test('moving between walk stops skips unwritten steps', async () => {
+  const steps = [1, 2, 3].map((n) => ({ n, title: `S${n}` }))
+  const api = fileApi({ 'walk.json': JSON.stringify({ steps }), 'overview.md': '# Overview\n', 'steps/01.md': '## 1\n', 'steps/03.md': '## 3\n' })
+  const app = await openSession(api, walkSession('walk', 2, 3))
+  const at = () => [app.run('sessionView.selected'), app.context.location.hash]
+  const href = (path) => app.run(`fileHref(session, ${JSON.stringify(path)})`)
+
+  assert.ok(press(app, 'ArrowDown'))
+  assert.deepEqual(at(), [1, href('steps/01.md')])
+  assert.ok(press(app, 'ArrowDown'))
+  assert.deepEqual(at(), [3, href('steps/03.md')])
+  assert.equal(press(app, 'ArrowDown'), false)
+  assert.ok(press(app, 'ArrowUp'))
+  assert.deepEqual(at(), [1, href('steps/01.md')])
+  assert.ok(press(app, 'ArrowUp'))
+  assert.deepEqual(at(), [0, href('overview.md')])
 })
 
 // Returns the bytes of a `Uint8Array` from any realm, and any other value unchanged.

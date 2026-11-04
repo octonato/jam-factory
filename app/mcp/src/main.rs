@@ -14,6 +14,7 @@
 
 //! Serves the factory folder over MCP on stdio, or exports a session with `export`.
 
+mod excerpt;
 mod export;
 mod tools;
 

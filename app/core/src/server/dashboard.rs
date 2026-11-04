@@ -33,6 +33,23 @@ pub fn embedded(path: &str) -> Option<Embedded> {
         "/xterm.js" => (include_bytes!("../../dashboard/xterm.js"), JAVASCRIPT),
         "/xterm.css" => (include_bytes!("../../dashboard/xterm.css"), CSS),
         "/addon-fit.js" => (include_bytes!("../../dashboard/addon-fit.js"), JAVASCRIPT),
+        "/highlight.min.js" => (
+            include_bytes!("../../dashboard/highlight.min.js"),
+            JAVASCRIPT,
+        ),
+        "/highlight-scala.min.js" => (
+            include_bytes!("../../dashboard/highlight-scala.min.js"),
+            JAVASCRIPT,
+        ),
+        "/highlight-github.min.css" => (
+            include_bytes!("../../dashboard/highlight-github.min.css"),
+            CSS,
+        ),
+        "/diff2html-ui-base.min.js" => (
+            include_bytes!("../../dashboard/diff2html-ui-base.min.js"),
+            JAVASCRIPT,
+        ),
+        "/diff2html.min.css" => (include_bytes!("../../dashboard/diff2html.min.css"), CSS),
         _ => return None,
     };
 
@@ -179,6 +196,43 @@ mod tests {
         assert!(html.contains("<link rel=\"stylesheet\" href=\"xterm.css\">"));
         assert!(html.contains("<script src=\"xterm.js\"></script>"));
         assert!(html.contains("<script src=\"addon-fit.js\"></script>"));
+    }
+
+    #[test]
+    fn serves_the_highlight_files() {
+        for path in [
+            "/highlight.min.js",
+            "/highlight-scala.min.js",
+            "/diff2html-ui-base.min.js",
+        ] {
+            let file = embedded(path).unwrap();
+            assert_eq!(file.content_type, JAVASCRIPT);
+            assert!(!file.bytes.is_empty());
+        }
+
+        for path in ["/highlight-github.min.css", "/diff2html.min.css"] {
+            let file = embedded(path).unwrap();
+            assert_eq!(file.content_type, CSS);
+            assert!(!file.bytes.is_empty());
+        }
+    }
+
+    #[test]
+    fn dashboard_loads_the_highlight_files() {
+        let html = std::str::from_utf8(embedded("/dashboard.html").unwrap().bytes).unwrap();
+
+        assert!(html.contains("<link rel=\"stylesheet\" href=\"highlight-github.min.css\">"));
+        assert!(html.contains("<link rel=\"stylesheet\" href=\"diff2html.min.css\">"));
+        assert!(html.contains("<script src=\"highlight.min.js\"></script>"));
+        assert!(html.contains("<script src=\"diff2html-ui-base.min.js\"></script>"));
+
+        let core = html
+            .find("<script src=\"highlight.min.js\"></script>")
+            .unwrap();
+        let scala = html
+            .find("<script src=\"highlight-scala.min.js\"></script>")
+            .unwrap();
+        assert!(scala > core);
     }
 
     #[test]

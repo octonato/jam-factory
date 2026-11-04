@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Jam Board</title>
 <link rel="stylesheet" href="xterm.css">
+<link rel="stylesheet" href="highlight-github.min.css">
+<link rel="stylesheet" href="diff2html.min.css">
 <style>
   :root {
     --bg: #f7f7f5;
@@ -427,6 +429,7 @@
   .stop.waiting { --tone: var(--warning); }
   .stop.blocked { --tone: var(--critical); }
   .stop.pending { --tone: var(--pending); }
+  .stop.writing { --tone: var(--accent); }
 
   .seg.down.travelled, .seg.full.travelled { --tone: var(--done); }
 
@@ -653,7 +656,7 @@
   .markdown p,
   .markdown ul,
   .markdown ol,
-  .markdown table,
+  .markdown table:not(.diff *),
   .markdown blockquote {
     margin: 0 0 12px;
   }
@@ -667,12 +670,12 @@
     list-style: none;
   }
 
-  .markdown input[type="checkbox"] { margin: 0 6px 0 -20px; vertical-align: middle; }
+  .markdown input[type="checkbox"]:not(.diff *) { margin: 0 6px 0 -20px; vertical-align: middle; }
 
   .markdown table { border-collapse: collapse; }
 
-  .markdown th,
-  .markdown td {
+  .markdown th:not(.diff *),
+  .markdown td:not(.diff *) {
     padding: 6px 10px;
     text-align: left;
     border: 1px solid var(--line);
@@ -695,6 +698,38 @@
 
   .markdown hr { border: 0; border-top: 1px solid var(--line); }
   .markdown img { max-width: 100%; }
+
+  .diff, .code { margin: 0 0 12px; }
+
+  .diff-bar {
+    display: flex;
+    justify-content: flex-end;
+    gap: 4px;
+    margin-bottom: 4px;
+  }
+
+  .diff-bar button {
+    padding: 2px 10px;
+    color: var(--ink-2);
+    font: inherit;
+    font-size: 0.8rem;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    cursor: pointer;
+  }
+
+  .diff-bar button:hover { border-color: var(--accent); }
+  .diff-bar button[aria-pressed="true"] { color: var(--surface); background: var(--accent); border-color: var(--accent); }
+
+  .code-path {
+    margin-bottom: 4px;
+    color: var(--muted);
+    font: 0.8rem/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+
+  #view .code pre { margin: 0; padding: 0; overflow: hidden; }
+  #view .code pre code.hljs { padding: 10px 12px; }
 
   @media (max-width: 800px) {
     .session-page { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 55fr) minmax(0, 45fr); }
@@ -734,6 +769,9 @@
 
 <script src="marked.min.js"></script>
 <script src="purify.min.js"></script>
+<script src="highlight.min.js"></script>
+<script src="highlight-scala.min.js"></script>
+<script src="diff2html-ui-base.min.js"></script>
 <script src="xterm.js"></script>
 <script src="addon-fit.js"></script>
 <script>
@@ -765,7 +803,15 @@ const FLOWS = {
       done: 'done',
     },
   },
+  walk: {
+    phases: ['walk', 'done'],
+    stagePhase: {
+      walk: 'walk',
+      done: 'done',
+    },
+  },
 }
+const SESSION_CLASSES = { build: 'implementation', vibe: 'implementation', review: 'review', walk: 'walk-through' }
 const STAGE_FILE = {
   spec: 'spec.md',
   plan: 'plan.md',
@@ -782,6 +828,7 @@ const STOP_LABELS = {
   triage: 'Triage',
   comment: 'Comment',
   done: 'Done',
+  overview: 'Overview',
 }
 
 const ORG_KEY = 'jam-board-org'
@@ -822,7 +869,7 @@ const NODE_ICONS = {
   blocked: '<path d="M4.5 4.5l7 7M11.5 4.5l-7 7"/>',
   waiting: '<path d="M8 4v5M8 12v.01"/>',
 }
-const BADGES = { done: 'done', current: 'running', waiting: 'needs you', blocked: 'blocked', pending: 'next' }
+const BADGES = { done: 'done', current: 'running', waiting: 'needs you', blocked: 'blocked', pending: 'next', writing: 'writing' }
 const TRIAGE_LABELS = { mustFix: 'must fix', shouldFix: 'should fix', nit: 'nit' }
 const COUNT_FORMAT = new Intl.NumberFormat('en', { notation: 'compact', maximumSignificantDigits: 3 })
 const LEFT_MIN = 320
@@ -864,6 +911,7 @@ let fontSize = FONT_DEFAULT
 let leftWidth = null
 let selectedDir = null
 let orgFilter = null
+let pendingDiffs = []
 
 function escape(text) {
   return String(text).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)
@@ -976,6 +1024,38 @@ async function loadOutcomes(dir, files) {
   return outcomes
 }
 
+// Returns the summary of a `walk.json` text and its steps with an integer `n` and a string `title`, or null when it has no `steps` array.
+function parseWalk(text) {
+  let value
+  try {
+    value = JSON.parse(text)
+  } catch {
+    return null
+  }
+  if (value === null || typeof value !== 'object' || !Array.isArray(value.steps)) return null
+
+  const steps = value.steps
+    .filter((step) => Number.isInteger(step?.n) && typeof step.title === 'string')
+    .map(({ n, title, summary }) => ({ n, title, summary: stringOrNull(summary) }))
+  return { summary: stringOrNull(value.summary), steps }
+}
+
+// Returns the walk of the session in `dir`, or null when its `walk.json` is absent or cannot be read.
+async function loadWalk(dir, files) {
+  if (!files.includes('walk.json')) return null
+
+  try {
+    return parseWalk(await fetchText(encodePath(`${dir}walk.json`)))
+  } catch {
+    return null
+  }
+}
+
+// Returns the path of the finished file of walk step `n`, such as `steps/03.md`.
+function stepPath(n) {
+  return `steps/${String(n).padStart(2, '0')}.md`
+}
+
 // Returns the sessions of the `api/sessions` reply, and a problem line for each entry with an error.
 async function loadSessions() {
   const { sessions: entries } = JSON.parse(await fetchText('api/sessions'))
@@ -1038,6 +1118,12 @@ function sessionFlow(session) {
   return session.flow || 'build'
 }
 
+// Returns the class of the session's flow, or the flow name for an unknown flow.
+function sessionClass(session) {
+  const flow = sessionFlow(session)
+  return Object.hasOwn(SESSION_CLASSES, flow) ? SESSION_CLASSES[flow] : flow
+}
+
 // Returns the phases and stage map of the session's flow, or null for an unknown flow.
 function flowOf(session) {
   const flow = sessionFlow(session)
@@ -1084,7 +1170,22 @@ function indicator(session) {
   }).join('')
 }
 
+// Returns the written and planned steps of a walk session, such as `3/7`.
+function walkProgress(session) {
+  const done = integerOrNull(session.counts?.stepsDone) ?? 0
+  const planned = integerOrNull(session.counts?.stepsPlanned) ?? 0
+  return `${done}/${planned}`
+}
+
+// Returns the label of a walk row: its class, then its progress while it runs, else its stage.
+function walkStepLabel(session) {
+  const stage = session.stage === 'walk' ? `writing ${walkProgress(session)}` : session.stage || 'unknown'
+  return `${escape(sessionClass(session))} · ${escape(stage)}`
+}
+
 function stepLabel(session) {
+  if (sessionFlow(session) === 'walk') return walkStepLabel(session)
+
   const phase = currentPhase(session) || phaseStage(session) || 'unknown'
   const parts = [escape(sessionMode(session))]
   if (sessionFlow(session) !== 'build') parts.push(escape(sessionFlow(session)))
@@ -1103,7 +1204,7 @@ function rowContent(session) {
   return `
     <span class="name"><span class="id">${escape(sessionName(session))}</span> <span class="path">${escape(shortPath(session.worktree))}</span></span>
     <span class="steps">${indicator(session)}</span>
-    <span class="label">${stepLabel(session)}</span>`
+    <span class="label"><span class="pill">${escape(sessionClass(session))}</span> ${stepLabel(session)}</span>`
 }
 
 function cardActions(session) {
@@ -1213,6 +1314,8 @@ function missingScripts() {
   const missing = []
   if (typeof marked === 'undefined') missing.push('marked.min.js not loaded')
   if (typeof DOMPurify === 'undefined') missing.push('purify.min.js not loaded')
+  if (typeof hljs === 'undefined') missing.push('highlight.min.js not loaded')
+  if (typeof Diff2HtmlUI === 'undefined') missing.push('diff2html-ui-base.min.js not loaded')
   if (typeof Terminal === 'undefined') missing.push('xterm.js not loaded')
   if (typeof FitAddon === 'undefined') missing.push('addon-fit.js not loaded')
   return missing
@@ -1230,13 +1333,78 @@ function prettyJson(text) {
   }
 }
 
+// Returns the language, `path=` and `lines=` words of a fence info string.
+function parseInfo(info) {
+  const words = info.split(/\s+/).filter((word) => word !== '')
+  const value = (key) => words.find((word) => word.startsWith(`${key}=`))?.slice(key.length + 1) ?? null
+  return { lang: words[0] ?? '', path: value('path'), lines: value('lines') }
+}
+
+// Tells whether `text` holds a `diff --git` line or a `---` line followed by a `+++` line.
+function hasDiffHeaders(text) {
+  return /^diff --git /m.test(text) || /^--- [^\n]*\n\+\+\+ /m.test(text)
+}
+
+// Returns a diff block with a layout toggle for a `diff` fence with file headers, else the code in highlight.js colours under its `path:lines`.
+function fenceHtml(text, info) {
+  const { lang, path, lines } = parseInfo(info)
+  if (lang === 'diff' && hasDiffHeaders(text)) {
+    const index = pendingDiffs.push(text) - 1
+    return (
+      `<div class="diff" data-diff="${index}"><div class="diff-bar">` +
+      '<button type="button" data-layout="line-by-line" aria-pressed="true">Unified</button>' +
+      '<button type="button" data-layout="side-by-side" aria-pressed="false">Split</button>' +
+      '</div><div class="diff-body"></div></div>'
+    )
+  }
+
+  const head = path && lines ? `<div class="code-path">${escape(path)}:${escape(lines)}</div>` : ''
+  const code = hljs.getLanguage(lang) ? hljs.highlight(text, { language: lang }).value : escape(text)
+  return `<div class="code">${head}<pre><code class="hljs">${code}</code></pre></div>`
+}
+
+function markdownRenderer() {
+  const renderer = new marked.Renderer()
+  renderer.code = ({ text, lang }) => fenceHtml(text, lang ?? '')
+  return renderer
+}
+
 function fileHtml(path, text) {
   if (path.endsWith('.md') && missingScripts().length === 0) {
-    const html = DOMPurify.sanitize(marked.parse(text, { gfm: true }), { FORBID_TAGS: ['style', 'form'] })
+    pendingDiffs = []
+    const markdown = marked.parse(text, { gfm: true, renderer: markdownRenderer() })
+    const html = DOMPurify.sanitize(markdown, { FORBID_TAGS: ['style', 'form'] })
     return `<div class="markdown">${html}</div>`
   }
   if (path.endsWith('.json')) return codeBlock(prettyJson(text))
   return codeBlock(text)
+}
+
+// Draws each diff block of `view` unified from `pendingDiffs`, and keeps its text on the block.
+function drawDiffs(view) {
+  for (const block of view.querySelectorAll('.diff[data-diff]')) {
+    block.diffText = pendingDiffs[Number(block.dataset.diff)] ?? ''
+    drawDiff(block, 'line-by-line')
+  }
+}
+
+// Draws the text of the diff block `block` into its body in `outputFormat`.
+function drawDiff(block, outputFormat) {
+  const body = block.querySelector('.diff-body')
+  const config = { outputFormat, drawFileList: false, matching: 'lines', highlight: true }
+  new Diff2HtmlUI(body, block.diffText, config, hljs).draw()
+}
+
+// Redraws the diff block of the clicked toggle button in its layout, and presses only that button.
+function onDiffToggle(event) {
+  const button = event.target.closest('.diff-bar button[data-layout]')
+  const block = button?.closest('.diff[data-diff]')
+  if (!block) return
+
+  for (const other of block.querySelectorAll('.diff-bar button[data-layout]')) {
+    other.setAttribute('aria-pressed', String(other === button))
+  }
+  drawDiff(block, button.dataset.layout)
 }
 
 function reviewNames(files, round) {
@@ -1256,6 +1424,7 @@ function defaultFile(session, files, round) {
   if (sessionFlow(session) === 'review') return reviewDefaultFile(session, files, round)
   if (sessionFlow(session) === 'vibe') return vibeDefaultFile(session)
   if (session.stage === 'blocked') return 'session.json'
+  if (sessionFlow(session) === 'walk') return 'overview.md'
 
   const stage = phaseStage(session)
   const report = `round-${round}/report.md`
@@ -1333,6 +1502,7 @@ function newStop(kind, round, file, files) {
     runs: [],
     durationMs: null,
     note: null,
+    summary: null,
     progress: null,
     triage: null,
   }
@@ -1483,6 +1653,35 @@ function vibeFlowStops(session, files, runs) {
   return { stops, current }
 }
 
+// Returns the stops of a walk session: the overview, then one stop per step of `walk` with its file when it is written.
+function walkFlowStops(session, files, runs, walk) {
+  const overview = { ...newStop('overview', 0, null, files), file: 'overview.md', summary: stringOrNull(walk?.summary) }
+  const steps = (walk?.steps ?? []).map(({ n, title, summary }) => ({
+    ...newStop('step', 0, stepPath(n), files),
+    label: `Step ${n}: ${title}`,
+    summary: stringOrNull(summary),
+  }))
+  return [overview, ...steps]
+}
+
+// Sets the states of the walk stops, and puts the reason of a blocked walk on the overview.
+function setWalkStates(session, stops) {
+  const unwritten = (stop) => stop.kind === 'step' && stop.file === null
+  const writing = session.stage === 'walk' ? stops.findIndex(unwritten) : -1
+  stops.forEach((stop, i) => {
+    if (!unwritten(stop)) stop.state = 'done'
+    else stop.state = i === writing ? 'writing' : 'pending'
+  })
+
+  const overview = stops[0]
+  if (session.stage === 'blocked') {
+    overview.state = 'blocked'
+    overview.note = stringOrNull(session.blocked?.reason)
+    overview.links.push({ label: 'session.json', path: 'session.json' })
+  }
+  return stops
+}
+
 function currentState(session, stop) {
   if (session.stage === 'blocked') return 'blocked'
   if (session.stage === 'done' && stop.kind === 'done') return 'done'
@@ -1491,8 +1690,10 @@ function currentState(session, stop) {
 }
 
 // Returns the stops of the session's line, with their states, files and runs.
-function buildStops(session, files, runs, outcomes = {}) {
+function buildStops(session, files, runs, outcomes = {}, walk = null) {
   const flow = sessionFlow(session)
+  if (flow === 'walk') return setWalkStates(session, walkFlowStops(session, files, runs, walk))
+
   const flowStops = flow === 'review' ? reviewFlowStops : flow === 'vibe' ? vibeFlowStops : buildFlowStops
   const { stops, current } = flowStops(session, files, runs, outcomes)
 
@@ -1660,6 +1861,13 @@ function metroSelfCheck() {
       return kinds(stops) === 'request implement done'
     },
 
+    'walk-flow': () => {
+      const walk = parseWalk('{"steps":[{"n":1,"title":"A"},{"n":2,"title":"B"}]}')
+      const session = { flow: 'walk', stage: 'walk', counts: { stepsPlanned: 2, stepsDone: 1 } }
+      const stops = buildStops(session, ['overview.md', 'steps/01.md'], [], {}, walk)
+      return stops.map((stop) => stop.state).join(' ') === 'done done writing'
+    },
+
     'reviewer-run': () => {
       const path = 'round-1/reviews/a.md'
       const runs = parseRuns(`{"stop":"review","round":1,"file":"${path}"}\n{"stop":"review","round":1,"file":null}`)
@@ -1720,7 +1928,10 @@ function firstStarted(runs) {
 // Returns the session card: the session's name, worktree, facts and actions.
 function sessionCardHtml(session, runs) {
   const stage = session.stage === 'blocked' ? `blocked at ${phaseStage(session) ?? 'unknown'}` : session.stage ?? 'unknown'
-  const facts = [sessionFlow(session), sessionMode(session), stage]
+  const facts =
+    sessionFlow(session) === 'walk'
+      ? [sessionClass(session), stage, `${walkProgress(session)} steps`]
+      : [sessionFlow(session), sessionMode(session), stage]
   if (sessionRound(session) > 0) facts.push(`round ${sessionRound(session)}`)
   if (session.lastRound === true) facts.push('last round')
 
@@ -1796,6 +2007,8 @@ function reviewersHtml(reviewers, open) {
 function stopCardHtml(stop, open, selected) {
   const totals = runTotals(stop.runs)
   const lines = []
+
+  if (stop.summary !== null) lines.push(`<div class="note">${escape(stop.summary)}</div>`)
 
   if (totals.agents.length > 0) lines.push(`<div class="meta mono">${escape(totals.agents.join(', '))}</div>`)
 
@@ -1899,6 +2112,7 @@ async function showFile(session, files, path, seq) {
   const sameFile = lastView.key === key
   lastView = { key, path, text, version: file?.version ?? null }
   $('view').innerHTML = text === null ? '' : fileHtml(path, text)
+  drawDiffs($('view'))
   if (!sameFile) $('view').scrollTop = 0
 }
 
@@ -2275,6 +2489,7 @@ async function renderSessionPage(session, path) {
     $('session-card').addEventListener('click', onCardAction)
     $('metro').addEventListener('click', onMetroClick)
     $('splitter').addEventListener('pointerdown', onSplitterDown)
+    $('view').addEventListener('click', onDiffToggle)
     sessionView = { dir: session.dir, el: page, card: '', metro: '', head: '', stops: [], selected: -1 }
     lastView = { key: null, path: null, text: null, version: null }
   }
@@ -2282,6 +2497,7 @@ async function renderSessionPage(session, path) {
   const files = await listFiles(session)
   const runs = await loadRuns(session.dir, files)
   const outcomes = await loadOutcomes(session.dir, files)
+  const walk = sessionFlow(session) === 'walk' ? await loadWalk(session.dir, files) : null
   if (seq !== renderSeq) return
 
   const card = sessionCardHtml(session, runs)
@@ -2290,7 +2506,7 @@ async function renderSessionPage(session, path) {
     sessionView.card = card
   }
 
-  const stops = buildStops(session, files, runs, outcomes)
+  const stops = buildStops(session, files, runs, outcomes, walk)
   const open = editing !== null ? editing.path : path ?? defaultFile(session, files, sessionRound(session))
   if (!stopShows(stops[sessionView.selected], open)) sessionView.selected = stopIndexForFile(stops, open)
   sessionView.stops = stops

@@ -20,7 +20,7 @@ For example:
 - `/jam:take` runs one session through the factory, from spec to a branch ready for review.
 - `/jam:just-vibe` runs a quick task with no spec, plan or review.
 - `/jam:checks` reports problems in comments and docs. It changes nothing.
-- `/jam:walk-through` explains a code path or a change, one step at a time.
+- `/jam:walk-through` explains a code path or a change, one step at a time. It saves the walk as a factory session that you read on Jam Board.
 
 ## Requirements
 
@@ -252,6 +252,23 @@ In `interactive` mode, the factory restates the request and its approach, and wa
 
 Without `-r`, `/jam:just-vibe` refuses to run on a branch that already has a session. `/jam:take -r` also resumes a vibe session. `-v` does not apply: a vibe session has no verify round, so run `/jam:verify` to review the branch.
 
+### Walk-through sessions
+
+`/jam:walk-through` saves each walk as a walk-through session, with `flow: walk` in `session.json`. It runs on any branch, the base branch included. Each run creates a new session, with the id `walk-<slug>-<timestamp>`, such as `walk-pr-247-20261104-0912`. `<slug>` is `pr-<n>`, `commit-<short sha>` or a short name for the code path. `<timestamp>` is the local time as `YYYYMMDD-HHMM`.
+
+```
+walk ─► done
+```
+
+- **walk**: the skill maps the route, then writes the steps one at a time. Jam Board shows a card for each step in `walk.json`. A card opens its step as soon as the step is written.
+- **done**: the skill prints the session and the step titles. Read the walk on Jam Board, or replay it in the terminal with `/jam:walk-replay <session id>`.
+
+On an error it cannot resolve, the skill sets the stage to `blocked`, with the reason in `session.json`. A walk has no resume: run `/jam:walk-through` again.
+
+A step in changes mode holds git diffs. A step in code-path mode holds lines of code. The `jam-factory-mcp` server copies both from git and the worktree. The model never types them. Jam Board highlights both. Each diff has its own Unified / Split toggle, with Unified as the default.
+
+`-i` walks you through the steps in the terminal instead. It writes no files and creates no session.
+
 ### Files
 
 ```
@@ -275,6 +292,21 @@ Without `-r`, `/jam:just-vibe` refuses to run on a branch that already has a ses
 ```
 
 The `jam-factory-mcp` server writes every file under `<root>`. A vibe session writes only `session.json`, `request.md`, `tasks.md` and `runs.jsonl`. Its `request.md` may end with two sections. `## Clarifications` holds the questions the factory asked and your answers. `## Assumptions` holds the choices the factory made alone.
+
+A walk-through session writes only these files:
+
+```
+<root>/<org>/<repo>/sessions/walk-<slug>-<timestamp>/
+  session.json                   the walk's stage and step counts
+  request.md                     the PR URL, commit range or code path
+  walk.json                      the target, the summary and the steps
+  overview.md                    the target, the summary and a note on mechanical churn
+  drafts/<NN>.md                 a step while it is being written
+  steps/<NN>.md                  a finished step
+  runs.jsonl                     one line when the walk starts, one when it ends
+```
+
+`walk.json` lists the steps in order, each with its number, title and summary. `<NN>` is the step number in two digits, such as `03`.
 
 ### Export a session
 
@@ -305,7 +337,7 @@ The examples below use Claude Code syntax: `/jam:take`, `/jam:verify`, and so on
 | `/jam:retry` | Re-attempt the action the user just rejected, optionally with an adaptation |
 | `/jam:save` | Summarize the research/analysis from this session into .nogit/ |
 | `/jam:subagent` | Spawn a background agent to run a task in parallel while the user keeps working — it stays alive and accessible for the user to open, read, and interact with; the main thread gets only a short launch/finish note, never the agent's report. Pass a plain task, or another slash command (e.g. /jam:subagent /jam:walk-through 247 -r) to run that command in the background. |
-| `/jam:walk-replay` | Replay a walk-through saved by /jam:walk-through — present each step verbatim in the terminal, one at a time, advancing when the user says "go ahead". Presents the steps as written; it does not summarize them. |
+| `/jam:walk-replay` | Replay a walk-through session from the factory in the terminal. Prints the overview, then prints one step, verbatim, each time the user says "go ahead". It does not summarize the steps. |
 
 ## Skills
 
@@ -317,7 +349,7 @@ The examples below use Claude Code syntax: `/jam:take`, `/jam:verify`, and so on
 | `/jam:submit-review` | Turns a /jam:verify report into a PR comment. The comment holds only the findings and their severity. Pass verify-{timestamp} to use a run on disk. Pass a target to run /jam:verify first. Pass nothing to pick a run from a list. It drops the findings that comments on the PR already report, then offers to open the comment on GitHub. It never posts the comment. |
 | `/jam:independent-reviewer` | Independent, read-only code review of a PR, a commit range or the current branch. A fresh subagent reviews the change and never learns how it was built. It writes the report to .nogit/verify-{timestamp}/independent-review.md. Add --report-in-chat to get the report in chat instead. |
 | `/jam:verify-fix` | Fix the findings of a /jam:verify run, each in its own commit. Runs on its own by default; add -i to fix one at a time. Pass --resume verify-{timestamp} to use a run on disk. Otherwise pick a run from a list, or run a new review. Never pushes. |
-| `/jam:walk-through` | Walk-through of a code path or a set of changes, broken into logical steps. By default it saves the whole walk to .nogit/walk-through/ to read later; add -i/--interactive to walk through it one step at a time instead. Add -r/--review to run /jam:verify plus the comment and plain-English checks. It folds their findings into each step. |
+| `/jam:walk-through` | Walk-through of a code path or a set of changes, broken into logical steps. By default it saves the walk as a factory session. Jam Board shows each step as soon as it is written. Replay the walk in the terminal with `/jam:walk-replay`. Add `-i` to walk through it one step at a time in the terminal instead. `-i` writes no files. |
 
 ## Agents
 
@@ -336,7 +368,7 @@ The examples below use Claude Code syntax: `/jam:take`, `/jam:verify`, and so on
 
 Extra reviewers are optional. Claude Code uses the `pr-review-toolkit` plugin; Codex and Gemini can use general-purpose agents with the same review focus. Verify lists the ones the diff calls for in `extras.md`. For example, a diff that changes tests lists `pr-test-analyzer`. After the report, it asks which extras to run, records your choice in `extras.md`, and rebuilds the report with their reviews.
 
-`/jam:verify-fix`, `/jam:walk-through -r` and `/jam:submit-review` (when it runs a new verify) run the base reviewers only.
+`/jam:verify-fix` and `/jam:submit-review` (when it runs a new verify) run the base reviewers only.
 
 | Call | What it does |
 |---|---|
@@ -358,7 +390,6 @@ Each run writes to its own `.nogit/verify-{timestamp}/` directory. No reviewer r
 The plugin keeps its files in `.nogit/`, in the current working directory:
 
 - `.nogit/*.md`: summaries saved with `/jam:save`
-- `.nogit/walk-through/`: walk-throughs
 - `.nogit/verify-{timestamp}/`: one review run, holding the report, one file per reviewer in `reviews/`, the PR comment and the verify-fix state
 - `.nogit/bg/`: output of background agents started with `/jam:subagent`
 

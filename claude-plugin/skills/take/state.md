@@ -62,6 +62,8 @@ A review session writes only `session.json`, `request.md`, `runs.jsonl` and the 
 
 A vibe session writes only `session.json`, `request.md`, `tasks.md` and `runs.jsonl`.
 
+A walk session writes only the files `skills/walk-through/state.md` lists.
+
 ## session.json
 
 Only the factory skill writes it, with two exceptions. The dashboard's Archive button sets `archived` and `updated`. I may edit `mode` by hand.
@@ -95,9 +97,9 @@ Create it once with `write_file`, with `updated` set to the current UTC time. Af
 - `repo`: the name of the worktree's parent folder.
 - `worktree`: an absolute path.
 - `mode`: `default`, `autonomous` or `interactive`. The skill's **Modes** section says when each one asks me something. A missing field means `default`.
-- `flow`: `build`, `review` or `vibe`. A missing field means `build`.
+- `flow`: `build`, `review`, `vibe` or `walk`. A missing field means `build`. `skills/walk-through/state.md` defines a walk session.
 - `pr`: the PR number. Only review sessions set it.
-- `stage`: `spec`, `plan`, `implement`, `verify`, `triage`, `done` or `blocked`. A review session uses `verify`, `submit`, `done` and `blocked`. A vibe session uses `implement`, `done` and `blocked`.
+- `stage`: `spec`, `plan`, `implement`, `verify`, `triage`, `done` or `blocked`. A review session uses `verify`, `submit`, `done` and `blocked`. A vibe session uses `implement`, `done` and `blocked`. A walk session uses `walk`, `done` and `blocked`.
 - `round`: the last verify or feedback round, `0` before the first.
 - `lastRound`: `true` when triage picked `last round`. A new verify or feedback round resets it to `false`; an import resume preserves the recorded outcome.
 - `clarified`: `true` once a vibe session's Clarify step ran in `default` or `interactive` mode. Only vibe sessions set it. A missing field means `false`.
@@ -195,7 +197,7 @@ Each line is one JSON object: one agent run or one main-conversation stage.
 
 | Field | Type | Meaning |
 |---|---|---|
-| `stop` | string, required | `request`, `spec`, `plan`, `implement`, `review`, `report`, `triage`, `comment` |
+| `stop` | string, required | `request`, `spec`, `plan`, `implement`, `review`, `report`, `triage`, `comment`, `walk` |
 | `round` | integer, required | the open round when the run started, or `0` before round 1 |
 | `agent` | string | the agent name, or `main` for the main conversation |
 | `task` | string | the task ID, for an Implement run |
@@ -221,7 +223,7 @@ The open round is the round a line belongs to. Set `round` to it:
 - `request`, `spec` and `plan`: `0`.
 - `implement`: the `round` in `session.json` plus one.
 - `review`, `report`, `triage` and `comment`: the `round` in `session.json`.
-- Every line of a vibe session: `0`.
+- Every line of a vibe or walk session: `0`.
 
 ## Feedback import checkpoint
 
