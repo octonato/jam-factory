@@ -21,7 +21,8 @@ use jam_factory_store::{FileRead, SessionEntry, SessionRef, StoreError};
 
 use crate::store::Store;
 
-/// A store holding the files of the session `o/stack/a`, which logs each read and gives `failure` when set.
+/// A store holding the files of the session `o/stack/main/a`.
+/// It logs each read and returns `failure` when set.
 #[derive(Default)]
 pub(crate) struct FakeStore {
     files: Mutex<HashMap<String, String>>,
@@ -61,7 +62,7 @@ impl Store for FakeStore {
         }
 
         let content = match s.to_string().as_str() {
-            "o/stack/a" => self.files.lock().unwrap().get(path).cloned(),
+            "o/stack/main/a" => self.files.lock().unwrap().get(path).cloned(),
             _ => None,
         };
 

@@ -18,7 +18,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use jam_factory_store::sessions::SESSION_FILE;
-use jam_factory_store::{SessionFilter, SessionRef, Store, StoreError};
+use jam_factory_store::{Category, SessionFilter, SessionRef, Store, StoreError};
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, ContentBlock, Implementation, ServerCapabilities, ServerConfig};
@@ -29,7 +29,7 @@ use serde_json::{Map, Value, json};
 
 use crate::excerpt::{self, ExcerptError};
 
-/// A session named by its org, its repo and its id.
+/// A session named by its org, its repo, its branch and its id.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SessionArgs {
     /// The org name.
@@ -38,7 +38,10 @@ pub struct SessionArgs {
     /// The repo name.
     repo: String,
 
-    /// The session id.
+    /// The last segment of the branch name.
+    branch: String,
+
+    /// The session id, such as `walk-20261104-0912-3f00486`.
     session: String,
 }
 
@@ -51,9 +54,37 @@ pub struct ListSessionsArgs {
     /// Lists only the sessions of this repo.
     repo: Option<String>,
 
+    /// Lists only the sessions of this branch (last segment of its name).
+    branch: Option<String>,
+
+    /// Lists only the sessions of this category: `session`, `review` or `walk`.
+    category: Option<String>,
+
     /// Lists the archived sessions too.
     #[serde(default)]
     include_archived: bool,
+}
+
+/// The arguments of `start_session`.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct StartSessionArgs {
+    /// The org name.
+    org: String,
+
+    /// The repo name.
+    repo: String,
+
+    /// The last segment of the branch name.
+    branch: String,
+
+    /// The category of the session: `session`, `review` or `walk`.
+    category: String,
+
+    /// The short sha of HEAD.
+    head: String,
+
+    /// The first fields of `session.json`.
+    fields: Map<String, Value>,
 }
 
 /// The arguments of `read_file`.
@@ -194,7 +225,7 @@ pub struct UpdateSessionArgs {
 
 impl SessionArgs {
     fn session_ref(&self) -> Result<SessionRef, StoreError> {
-        SessionRef::new(&self.org, &self.repo, &self.session)
+        SessionRef::new(&self.org, &self.repo, &self.branch, &self.session)
     }
 }
 
@@ -235,21 +266,55 @@ impl FactoryServer {
 #[tool_router]
 impl FactoryServer {
     #[tool(
-        description = "Lists sessions, each with `org`, `repo`, `session` and its parsed `session.json`."
+        description = "Lists sessions, each with `org`, `repo`, `branch`, `session`, `category` and its parsed `session.json`."
     )]
     async fn list_sessions(
         &self,
         Parameters(args): Parameters<ListSessionsArgs>,
     ) -> CallToolResult {
-        let filter = SessionFilter {
-            org: args.org,
-            repo: args.repo,
-            include_archived: args.include_archived,
-        };
-
         self.run(move |store| {
+            let filter = SessionFilter {
+                org: args.org,
+                repo: args.repo,
+                branch: args.branch,
+                category: args.category.as_deref().map(str::parse).transpose()?,
+                include_archived: args.include_archived,
+            };
+
             let sessions = store.list_sessions(&filter)?;
             Ok(json!({ "sessions": sessions }))
+        })
+        .await
+    }
+
+    #[tool(
+        description = "Creates a session folder `{category}-{YYYYMMDD-HHMM}-{head}` on the branch, with `fields` in its `session.json`. Returns `org`, `repo`, `branch`, `session` and the version. Fails with `exists` when the branch already holds a live `session` or `review`."
+    )]
+    async fn start_session(
+        &self,
+        Parameters(args): Parameters<StartSessionArgs>,
+    ) -> CallToolResult {
+        self.run(move |store| {
+            let category: Category = args.category.parse()?;
+
+            let started = store.start_session(
+                &args.org,
+                &args.repo,
+                &args.branch,
+                category,
+                &args.head,
+                &args.fields,
+            )?;
+
+            let s = started.session;
+
+            Ok(json!({
+                "org": s.org(),
+                "repo": s.repo(),
+                "branch": s.branch(),
+                "session": s.session(),
+                "version": started.version,
+            }))
         })
         .await
     }
@@ -275,7 +340,7 @@ impl FactoryServer {
         .await
     }
 
-    #[tool(description = "Writes the whole file.")]
+    #[tool(description = "Writes the whole file. The session must exist.")]
     async fn write_file(&self, Parameters(args): Parameters<WriteFileArgs>) -> CallToolResult {
         self.run(move |store| {
             let s = args.session_args.session_ref()?;
@@ -296,7 +361,9 @@ impl FactoryServer {
         .await
     }
 
-    #[tool(description = "Appends `content` to the end of the file. Creates the file if missing.")]
+    #[tool(
+        description = "Appends `content` to the end of the file. Creates the file if missing. The session must exist."
+    )]
     async fn append_file(&self, Parameters(args): Parameters<AppendFileArgs>) -> CallToolResult {
         self.run(move |store| {
             let s = args.session_args.session_ref()?;

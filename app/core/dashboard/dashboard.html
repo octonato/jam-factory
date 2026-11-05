@@ -1070,13 +1070,13 @@ async function loadSessions() {
   const sessions = []
   const problems = []
 
-  for (const { org, repo, session: id, data, error } of entries) {
+  for (const { org, repo, branch, session: id, category, data, error } of entries) {
     if (error !== undefined) {
-      problems.push(`${org}/${repo}/${id}: ${error}`)
+      problems.push(`${org}/${repo}/${branch}/${id}: ${error}`)
       continue
     }
 
-    sessions.push({ ...data, org, repo, id, dir: `api/file/${org}/${repo}/${id}/` })
+    sessions.push({ ...data, org, repo, branch, id, category, dir: `api/file/${org}/${repo}/${branch}/${id}/` })
   }
   return { sessions, problems }
 }
@@ -1093,17 +1093,21 @@ function parseRoute(hash) {
   const segments = hash.replace(/^#\/?/, '').split('/').filter((s) => s !== '').map(decode)
   if (segments.length === 0) return null
 
-  const [org, repo = '', id = '', ...rest] = segments
-  return { org, repo, id, path: rest.length > 0 ? rest.join('/') : null }
+  const [org, repo = '', branch = '', id = '', ...rest] = segments
+  return { org, repo, branch, id, path: rest.length > 0 ? rest.join('/') : null }
 }
 
-// Returns `{org}/{repo}/{id}` of `session`, each segment percent-encoded.
+// Returns `{org}/{repo}/{branch}/{id}` of `session`, each segment percent-encoded.
 function sessionPath(session) {
-  return [session.org, session.repo, session.id].map(encodeURIComponent).join('/')
+  return [session.org, session.repo, session.branch, session.id].map(encodeURIComponent).join('/')
 }
 
 function sessionName(session) {
-  return `${session.org}/${session.repo}/${session.id}`
+  return `${session.org}/${session.repo}/${session.branch}/${session.id}`
+}
+
+function branchName(session) {
+  return `${session.org}/${session.repo}/${session.branch}`
 }
 
 function sessionHref(session) {
@@ -1126,8 +1130,15 @@ function sessionFlow(session) {
   return session.flow || 'build'
 }
 
-// Returns the class of the session's flow, or the flow name for an unknown flow.
+// Returns the session id and the short worktree path of `session`.
+function sessionDetail(session) {
+  return [session.id, shortPath(session.worktree)].filter((part) => part !== '').join(' · ')
+}
+
+// Returns the category of the session's folder, else the class of its flow, else the flow name.
 function sessionClass(session) {
+  if (session.category) return session.category
+
   const flow = sessionFlow(session)
   return Object.hasOwn(SESSION_CLASSES, flow) ? SESSION_CLASSES[flow] : flow
 }
@@ -1210,7 +1221,7 @@ function stepLabel(session) {
 
 function rowContent(session) {
   return `
-    <span class="name"><span class="id">${escape(sessionName(session))}</span> <span class="path">${escape(shortPath(session.worktree))}</span></span>
+    <span class="name"><span class="id">${escape(branchName(session))}</span> <span class="path">${escape(sessionDetail(session))}</span></span>
     <span class="steps">${indicator(session)}</span>
     <span class="label"><span class="pill">${escape(sessionClass(session))}</span> ${stepLabel(session)}</span>`
 }
@@ -1957,8 +1968,8 @@ function sessionCardHtml(session, runs) {
   return `
     <div class="session-card" data-dir="${escape(session.dir)}">
       <div class="name">
-        <div class="id">${escape(sessionName(session))}</div>
-        <div class="path">${escape(shortPath(session.worktree))}</div>
+        <div class="id">${escape(branchName(session))}</div>
+        <div class="path">${escape(sessionDetail(session))}</div>
       </div>
       <div class="facts">${facts.map((fact) => `<span class="pill">${escape(fact)}</span>`).join('')}</div>
       <div class="actions">${cardActions(session)}</div>

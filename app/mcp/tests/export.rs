@@ -20,6 +20,7 @@ use tempfile::TempDir;
 
 const BINARY: &str = env!("CARGO_BIN_EXE_jam-factory-mcp");
 const USAGE: &str = "Usage: jam-factory-mcp export [dest]";
+const ID: &str = "session-20261104-0912-3f00486";
 
 /// A temp home and the git worktree `<tmp>/org/repo/wt` on the branch `octonato/feat`.
 struct Fixture {
@@ -64,7 +65,7 @@ impl Fixture {
         String::from_utf8(output.stdout).unwrap().trim().to_string()
     }
 
-    /// The folder of the session `feat` of `org/repo` in the default root.
+    /// The folder of the session `ID` on the branch `feat` of `org/repo` in the default root.
     fn session_dir(&self) -> PathBuf {
         self.home
             .join(".jam-factory")
@@ -73,13 +74,15 @@ impl Fixture {
             .join("repo")
             .join("sessions")
             .join("feat")
+            .join(ID)
     }
 
-    /// Writes `spec.md`, `round-1/report.md` and a `.lock` to the session `feat`.
+    /// Writes `session.json`, `spec.md`, `round-1/report.md` and a `.lock` to the session `ID`.
     fn write_session(&self) {
         let dir = self.session_dir();
         fs::create_dir_all(dir.join("round-1")).unwrap();
 
+        fs::write(dir.join("session.json"), "{}\n").unwrap();
         fs::write(dir.join("spec.md"), "spec\n").unwrap();
         fs::write(dir.join("round-1").join("report.md"), "report\n").unwrap();
         fs::write(dir.join(".lock"), "").unwrap();
@@ -130,9 +133,9 @@ fn export_copies_to_factory_session_id() {
     let out = stdout(&output);
 
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
-    assert_exported(&fixture.wt.join("factory").join("feat"));
-    assert!(out.contains("factory/feat"), "{out}");
-    assert!(out.contains("2 files"), "{out}");
+    assert_exported(&fixture.wt.join("factory").join(ID));
+    assert!(out.contains(&format!("factory/{ID}")), "{out}");
+    assert!(out.contains("3 files"), "{out}");
 
     assert_eq!(fixture.git(&["diff", "--cached", "--name-only"]), "");
     assert_eq!(fixture.git(&["rev-list", "--count", "HEAD"]), "1");
@@ -161,7 +164,7 @@ fn export_from_a_subfolder_copies_to_the_worktree_root() {
     let output = fixture.export_in(&app, &[]);
 
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
-    assert_exported(&fixture.wt.join("factory").join("feat"));
+    assert_exported(&fixture.wt.join("factory").join(ID));
     assert!(!app.join("factory").exists());
 }
 
@@ -233,7 +236,10 @@ fn export_of_a_missing_session_fails() {
     let err = stderr(&output);
 
     assert_eq!(output.status.code(), Some(1));
-    assert!(err.contains("org/repo/feat"), "{err}");
+    assert!(
+        err.contains("Branch feat has no live session in org/repo"),
+        "{err}"
+    );
     assert!(!fixture.wt.join("factory").exists());
 }
 
@@ -242,7 +248,7 @@ fn export_with_an_existing_dest_fails() {
     let fixture = Fixture::new();
     fixture.write_session();
 
-    let dest = fixture.wt.join("factory").join("feat");
+    let dest = fixture.wt.join("factory").join(ID);
     fs::create_dir_all(&dest).unwrap();
     fs::write(dest.join("keep.md"), "keep\n").unwrap();
 

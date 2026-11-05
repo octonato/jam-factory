@@ -17,14 +17,16 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use jam_factory_store::{SessionRef, Store, root};
+use jam_factory_store::{Category, SessionFilter, SessionRef, Store, root};
 
 const DEFAULT_DEST: &str = "factory";
 const DETACHED: &str = "HEAD";
 const HELP: [&str; 2] = ["-h", "--help"];
 const USAGE: &str = "Usage: jam-factory-mcp export [dest]";
 
-/// Copies the session of the worktree holding `cwd` to `args[0]` or `factory/{session id}`, and returns the line to print.
+/// Copies the live `session` run of the branch that holds `cwd`.
+/// The target is `args[0]`, or `factory/{session id}` when absent.
+/// Returns the line to print.
 /// Returns the usage for `-h` and `--help`.
 pub fn run(args: &[String], home: &Path, cwd: &Path) -> Result<String, String> {
     if args.len() > 1 {
@@ -44,24 +46,46 @@ pub fn run(args: &[String], home: &Path, cwd: &Path) -> Result<String, String> {
     let worktree = worktree(cwd)?;
     let (org, repo) = org_and_repo(&worktree)?;
     let branch = branch(&worktree)?;
-    let id = branch.rsplit('/').next().unwrap_or(&branch);
+    let branch = branch.rsplit('/').next().unwrap_or(&branch);
 
-    let session = SessionRef::new(org, repo, id).map_err(|e| e.to_string())?;
+    let root = root::resolve(home).map_err(|e| e.to_string())?;
+    let store = Store::new(root);
+    let session = live_session(&store, org, repo, branch)?;
 
     let dest = match args.first() {
         Some(dest) => cwd.join(dest),
-        None => worktree.join(DEFAULT_DEST).join(id),
+        None => worktree.join(DEFAULT_DEST).join(session.session()),
     };
 
-    let root = root::resolve(home).map_err(|e| e.to_string())?;
-
-    let count = Store::new(root)
+    let count = store
         .export_session(&session, &dest)
         .map_err(|e| e.to_string())?;
 
     let noun = if count == 1 { "file" } else { "files" };
 
     Ok(format!("Copied {count} {noun} to {}", dest.display()))
+}
+
+/// Returns the live `session` run of `branch`, or an error when it has none.
+fn live_session(store: &Store, org: &str, repo: &str, branch: &str) -> Result<SessionRef, String> {
+    let filter = SessionFilter {
+        org: Some(org.to_string()),
+        repo: Some(repo.to_string()),
+        branch: Some(branch.to_string()),
+        category: Some(Category::Session),
+        include_archived: false,
+    };
+
+    let sessions = store.list_sessions(&filter).map_err(|e| e.to_string())?;
+
+    let Some(entry) = sessions.first() else {
+        return Err(format!(
+            "Branch {branch} has no live session in {org}/{repo}"
+        ));
+    };
+
+    SessionRef::new(&entry.org, &entry.repo, &entry.branch, &entry.session)
+        .map_err(|e| e.to_string())
 }
 
 /// Returns the root folder of the worktree holding `cwd`.

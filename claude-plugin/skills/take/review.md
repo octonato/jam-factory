@@ -25,8 +25,8 @@ Re-read `session.json` before each stage and before each step that may ask me so
 2. Run `gh pr view {pr} --json number,title,body,url,headRefName,baseRefName,state`.
 3. If `state` is not `OPEN`, tell me the PR is `{state}` and stop.
 4. If the current branch is not `headRefName`, tell me to run `gh pr checkout {number}` and stop. The factory never checks out or creates a branch.
-5. Create `request.md` with `write_file`, as `state.md` shows. The `source` is the PR's `url`. The body holds the PR's title and body.
-6. Create `session.json` with `write_file`, holding this worktree and the current branch. Set `flow: review`, `pr` to the PR's `number` and `base` to its `baseRefName`. Set `mode` from the flag, or `default` without one. Set `stage: verify`, `round: 0`, `lastRound: false`, every count `0`, `blocked: null` and `archived: false`.
+5. Call `start_session` with `category: review` and HEAD as `head`, as `state.md` says. Pass `fields` with this worktree, the repo and the current branch. Set `flow: review`, `pr` to the PR's `number` and `base` to its `baseRefName`. Set `mode` from the flag, or `default` without one. Set `stage: verify`, `round: 0`, `lastRound: false`, every count `0` and `blocked: null`. If the call fails with `exists`, tell me its message and stop. Use the returned `session` as the session id.
+6. Create `request.md` with `write_file`, as `state.md` shows. The `source` is the PR's `url`. The body holds the PR's title and body.
 7. Append a `request` line to `runs.jsonl` with `append_file` and `agent: "main"`. Set its `started` and `ended` to the current time. Set `durationMs: null`.
 8. Go to **Verify**.
 
@@ -39,7 +39,7 @@ Read `round-{round}/report.md` with `read_file`. If it holds an entry under **Fi
    - If `state` is not `OPEN`, set `stage: blocked` and `blocked: { "stage": "verify", "reason": "PR is {state}" }`. Stop.
    - If `git rev-parse HEAD` differs from `headRefOid`, run `git pull --ff-only`. If it fails, set `stage: blocked` and `blocked: { "stage": "verify", "reason": "git pull failed: run gh pr checkout {pr} --force" }`. Stop.
    - After the pull, run `git rev-parse HEAD` again. If it still differs from `headRefOid`, set `stage: blocked` and `blocked: { "stage": "verify", "reason": "HEAD is not the PR head: run gh pr checkout {pr} --force" }`. Stop.
-3. Add one to `round`. The run directory is `factory:{org}/{repo}/{session id}/round-{round}/`.
+3. Add one to `round`. The run directory is `factory:{org}/{repo}/{branch}/{session id}/round-{round}/`.
 4. The target is the PR number. Write a problem statement from the linked issue and the PR's title and body, as Step 2 of `${CLAUDE_PLUGIN_ROOT}/skills/independent-reviewer/SKILL.md` describes.
 5. Read `${CLAUDE_PLUGIN_ROOT}/skills/verify/review.md` and follow its steps 1 to 3. Use the target, the run directory and the problem statement. Take the `started` time for `runs.jsonl` before each dispatch. When a reviewer returns, append a `review` line with `append_file`, the reviewer's name as `agent` and `file` set to its review file, such as `round-{round}/reviews/independent-review.md`. When `jam:report-writer` returns, append a `report` line.
 6. If `list_files` does not list `round-{round}/report.md`, set `stage: blocked` and `blocked: { "stage": "verify", "reason": "no report" }`. Lower `round` by one. Stop.
@@ -63,9 +63,9 @@ Take the `started` time for `runs.jsonl`.
 Show me:
 
 - the PR URL, from `request.md`
-- `factory:{org}/{repo}/{session id}/round-{round}/submit.md` and the number of findings in it, or that the round had no findings
+- `factory:{org}/{repo}/{branch}/{session id}/round-{round}/submit.md` and the number of findings in it, or that the round had no findings
 - when `submit.md` holds findings and you did not open it, the command that opens it, with absolute paths, prefixed with `! `: `${CLAUDE_PLUGIN_ROOT}/skills/submit-review/open-comment.sh {pr} {comment file}`. To get the comment file, read `round-{round}/submit.md` with `read_file` and write its content to `$TMPDIR/submit-{pr}.md` with the **Write** tool.
-- the session, as `factory:{org}/{repo}/{session id}/`
+- the session, as `factory:{org}/{repo}/{branch}/{session id}/`
 
 Tell me to run `/jam:take -v` after the coworker pushes new commits. Do not remind me to push, merge or open a PR.
 

@@ -16,11 +16,11 @@ A walk is a factory session with `flow: walk`. Read it only with the `jam-factor
 
 If the `jam-factory` tools are missing, tell me to run `just install` in the `app/` folder of the jam-factory repository. Then stop.
 
-Resolve `$ARGUMENTS` to one session id, with its org and repo:
+Resolve `$ARGUMENTS` to one walk session, with its org, repo and branch. Every `list_sessions` call below passes `category: walk`.
 
-- **A session id** (it starts with `walk-`, such as `walk-pr-247-20261104-0912`): call `list_sessions` with `include_archived: true` and no `org` or `repo`. Use the entry whose `session` is the id, and take its `org` and `repo`. If several entries match, list them as `{org}/{repo}` and ask me to pick. Stop until I pick.
-- **A slug** (such as `pr-247`, `commit-a1b2c3d` or `login-auth-flow`): call `list_sessions` with the worktree's org and repo. Use the walk session with the newest `updated` whose id starts with `walk-{slug}-`.
-- **Empty**: call `list_sessions` with the worktree's org and repo. Keep the sessions with `flow: walk`, newest `updated` first. If there is one, use it. If there are several, list them and ask me to pick. Stop until I pick.
+- **A session id** (it starts with `walk-`, such as `walk-20261104-0912-3f00486`): call `list_sessions` with `include_archived: true` and no `org`, `repo` or `branch`. Use the entry whose `session` is the id, and take its `org`, `repo` and `branch`. If several entries match, list them as `{org}/{repo}/{branch}` and ask me to pick. Stop until I pick.
+- **A slug** (such as `pr-247`, `commit-a1b2c3d` or `login-auth-flow`): call `list_sessions` with the worktree's org and repo. Use the walk with the newest `updated` whose `slug` in `data` is the slug.
+- **Empty**: call `list_sessions` with the worktree's org and repo. Sort the walks by newest `updated` first. If there is one, use it. If there are several, list them and ask me to pick. Stop until I pick.
 
 Only a slug and an empty argument use the worktree. Its folder names give the org and repo:
 

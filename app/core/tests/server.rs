@@ -23,7 +23,7 @@ use jam_board_core::server::dashboard::embedded;
 use jam_board_core::store::Store;
 use jam_factory_store::name::check_path;
 use jam_factory_store::sessions::SESSION_FILE;
-use jam_factory_store::{FileRead, SessionEntry, SessionRef, StoreError};
+use jam_factory_store::{Category, FileRead, SessionEntry, SessionRef, StoreError};
 use serde_json::{Map, Value, json};
 use tungstenite::{ClientRequestBuilder, Message};
 
@@ -172,7 +172,9 @@ fn entry(s: &SessionRef, text: &str) -> Option<SessionEntry> {
     Some(SessionEntry {
         org: s.org().to_string(),
         repo: s.repo().to_string(),
+        branch: s.branch().to_string(),
         session: s.session().to_string(),
+        category: Category::of(s.session()).unwrap_or(Category::Session),
         data,
         error,
     })
@@ -183,7 +185,7 @@ fn not_found(s: &SessionRef, path: &str) -> StoreError {
 }
 
 fn session(org: &str, repo: &str, id: &str) -> SessionRef {
-    SessionRef::new(org, repo, id).unwrap()
+    SessionRef::new(org, repo, "main", id).unwrap()
 }
 
 struct Fixture {
@@ -228,7 +230,7 @@ fn session_fixture() -> Fixture {
     f
 }
 
-const SPEC: &str = "/api/file/o/stack/a/spec.md";
+const SPEC: &str = "/api/file/o/stack/main/a/spec.md";
 
 /// A fixture whose session `o/stack/a` also holds `spec.md` with the text `old`, at version `v1`.
 fn spec_fixture() -> Fixture {
@@ -331,7 +333,7 @@ fn put(port: u16, target: &str, headers: &[(&str, &str)], body: &str) -> Reply {
     request_body(port, "PUT", target, headers, body)
 }
 
-const LAZYGIT: &str = "/api/lazygit/o/stack/a";
+const LAZYGIT: &str = "/api/lazygit/o/stack/main/a";
 const KEY: &str = "dGhlIHNhbXBsZSBub25jZQ==";
 
 /// The WebSocket upgrade headers with `version`, plus `Origin` and `Sec-WebSocket-Key` when given.
@@ -372,8 +374,14 @@ fn sessions_route_returns_the_entries() {
     assert_eq!(
         reply.json(),
         json!({ "sessions": [
-            { "org": "o", "repo": "stack", "session": "a", "data": serde_json::from_str::<Value>(SESSION).unwrap() },
-            { "org": "p", "repo": "web", "session": "b", "error": error },
+            {
+                "org": "o", "repo": "stack", "branch": "main", "session": "a", "category": "session",
+                "data": serde_json::from_str::<Value>(SESSION).unwrap(),
+            },
+            {
+                "org": "p", "repo": "web", "branch": "main", "session": "b", "category": "session",
+                "error": error,
+            },
         ] })
     );
 }
@@ -389,7 +397,7 @@ fn file_route_serves_content_with_its_type() {
         ("session.json", SESSION, "application/json"),
         ("runs.jsonl", "{}\n{}\n", "application/jsonl"),
     ] {
-        let reply = get(f.port(), &format!("/api/file/o/stack/a/{path}"));
+        let reply = get(f.port(), &format!("/api/file/o/stack/main/a/{path}"));
 
         assert_eq!(reply.status, 200, "{path}");
         assert_eq!(reply.text(), content, "{path}");
@@ -403,7 +411,10 @@ fn file_route_reads_nested_paths() {
     f.store
         .write(&session_a(), "round-1/reviews/review.md", "fine");
 
-    let reply = get(f.port(), "/api/file/o/stack/a/round-1/reviews/review.md");
+    let reply = get(
+        f.port(),
+        "/api/file/o/stack/main/a/round-1/reviews/review.md",
+    );
 
     assert_eq!(reply.status, 200);
     assert_eq!(reply.text(), "fine");
@@ -425,7 +436,7 @@ fn files_route_lists_paths() {
     f.store.write(&session_a(), "round-1/plan.md", "");
     f.store.write(&session_a(), "spec.md", "");
 
-    let reply = get(f.port(), "/api/files/o/stack/a");
+    let reply = get(f.port(), "/api/files/o/stack/main/a");
 
     assert_eq!(reply.status, 200);
     assert_eq!(reply.header("Content-Type"), Some("application/json"));
@@ -447,7 +458,7 @@ fn odd_names_round_trip() {
     assert_eq!(sessions["sessions"][0]["repo"], "a b%c");
     assert_eq!(sessions["sessions"][0]["session"], "s 1");
 
-    let files = get(f.port(), "/api/files/caf%C3%A9/a%20b%25c/s%201").json();
+    let files = get(f.port(), "/api/files/caf%C3%A9/a%20b%25c/main/s%201").json();
     assert_eq!(
         files,
         json!({ "files": ["notes/caf\u{e9} 1.md", "session.json"] })
@@ -455,12 +466,12 @@ fn odd_names_round_trip() {
 
     let file = get(
         f.port(),
-        "/api/file/caf%C3%A9/a%20b%25c/s%201/notes/caf%C3%A9%201.md",
+        "/api/file/caf%C3%A9/a%20b%25c/main/s%201/notes/caf%C3%A9%201.md",
     );
     assert_eq!(file.status, 200);
     assert_eq!(file.text(), "hi");
 
-    let archived = post(f.port(), "/api/archive/caf%C3%A9/a%20b%25c/s%201");
+    let archived = post(f.port(), "/api/archive/caf%C3%A9/a%20b%25c/main/s%201");
     assert_eq!(archived.status, 204);
     assert_eq!(
         f.store.read(&odd, SESSION_FILE).unwrap(),
@@ -472,7 +483,7 @@ fn odd_names_round_trip() {
 fn archive_route_archives() {
     let f = session_fixture();
 
-    let reply = post(f.port(), "/api/archive/o/stack/a");
+    let reply = post(f.port(), "/api/archive/o/stack/main/a");
 
     assert_eq!(reply.status, 204);
     assert!(reply.body.is_empty());
@@ -493,7 +504,7 @@ fn archive_accepts_same_origin() {
     let reply = request(
         f.port(),
         "POST",
-        "/api/archive/o/stack/a",
+        "/api/archive/o/stack/main/a",
         &[("Origin", &origin)],
     );
 
@@ -505,13 +516,13 @@ fn archive_rejects_bad_names() {
     let f = session_fixture();
 
     for target in [
-        "/api/archive/o/%2e%2e/a",
-        "/api/archive/o/stack/..",
-        "/api/archive/o/stack/.",
-        "/api/archive/o/stack/a%2F..%2Fa",
-        "/api/archive/o/stack/a%5Cb",
-        "/api/archive/o//a",
-        "/api/archive/o/%FF/a",
+        "/api/archive/o/%2e%2e/main/a",
+        "/api/archive/o/stack/main/..",
+        "/api/archive/o/stack/main/.",
+        "/api/archive/o/stack/main/a%2F..%2Fa",
+        "/api/archive/o/stack/main/a%5Cb",
+        "/api/archive/o//main/a",
+        "/api/archive/o/%FF/main/a",
     ] {
         let reply = post(f.port(), target);
 
@@ -524,7 +535,7 @@ fn archive_rejects_bad_names() {
 fn archive_rejects_extra_segments() {
     let f = session_fixture();
 
-    let reply = post(f.port(), "/api/archive/o/stack/a/extra");
+    let reply = post(f.port(), "/api/archive/o/stack/main/a/extra");
 
     assert_eq!(reply.status, 404);
     assert_eq!(f.session_json(), SESSION);
@@ -535,12 +546,12 @@ fn unknown_session_is_404() {
     let f = session_fixture();
 
     for target in [
-        "/api/files/o/stack/nope",
-        "/api/file/o/stack/nope/spec.md",
-        "/api/file/o/stack/a/nope.md",
-        "/api/file/o/stack/a/",
-        "/api/file/o/stack/a/.lock",
-        "/api/file/o/stack/a",
+        "/api/files/o/stack/main/nope",
+        "/api/file/o/stack/main/nope/spec.md",
+        "/api/file/o/stack/main/a/nope.md",
+        "/api/file/o/stack/main/a/",
+        "/api/file/o/stack/main/a/.lock",
+        "/api/file/o/stack/main/a",
         "/api/files/o/stack",
         "/api/nope",
     ] {
@@ -549,7 +560,10 @@ fn unknown_session_is_404() {
         assert_eq!(reply.status, 404, "{target}");
     }
 
-    for target in ["/api/archive/o/stack/nope", "/api/open/zed/o/stack/nope"] {
+    for target in [
+        "/api/archive/o/stack/main/nope",
+        "/api/open/zed/o/stack/main/nope",
+    ] {
         let reply = post(f.port(), target);
 
         assert_eq!(reply.status, 404, "{target}");
@@ -564,10 +578,10 @@ fn store_failure_is_500_with_the_message() {
 
     for (method, target) in [
         ("GET", "/api/sessions"),
-        ("GET", "/api/files/o/stack/a"),
-        ("GET", "/api/file/o/stack/a/session.json"),
-        ("POST", "/api/archive/o/stack/a"),
-        ("POST", "/api/open/zed/o/stack/a"),
+        ("GET", "/api/files/o/stack/main/a"),
+        ("GET", "/api/file/o/stack/main/a/session.json"),
+        ("POST", "/api/archive/o/stack/main/a"),
+        ("POST", "/api/open/zed/o/stack/main/a"),
     ] {
         let reply = request(f.port(), method, target, &[]);
 
@@ -581,7 +595,7 @@ fn archive_bad_json_is_500() {
     let f = session_fixture();
     f.store.write(&session_a(), SESSION_FILE, "not json");
 
-    let reply = post(f.port(), "/api/archive/o/stack/a");
+    let reply = post(f.port(), "/api/archive/o/stack/main/a");
 
     assert_eq!(reply.status, 500);
     assert!(!reply.body.is_empty());
@@ -601,7 +615,7 @@ fn foreign_host_is_403() {
 
         let sessions = send(f.port(), "GET", "/api/sessions", &headers);
         let dashboard = send(f.port(), "GET", "/dashboard.html", &headers);
-        let archive = send(f.port(), "POST", "/api/archive/o/stack/a", &headers);
+        let archive = send(f.port(), "POST", "/api/archive/o/stack/main/a", &headers);
 
         assert_eq!(sessions.status, 403, "{host}");
         assert_eq!(dashboard.status, 403, "{host}");
@@ -615,7 +629,7 @@ fn missing_host_is_403() {
     let f = session_fixture();
 
     let get = send(f.port(), "GET", "/api/sessions", &[]);
-    let post = send(f.port(), "POST", "/api/archive/o/stack/a", &[]);
+    let post = send(f.port(), "POST", "/api/archive/o/stack/main/a", &[]);
 
     assert_eq!(get.status, 403);
     assert_eq!(post.status, 403);
@@ -626,7 +640,10 @@ fn missing_host_is_403() {
 fn foreign_origin_post_is_403() {
     let f = session_fixture();
 
-    for target in ["/api/archive/o/stack/a", "/api/open/zed/o/stack/a"] {
+    for target in [
+        "/api/archive/o/stack/main/a",
+        "/api/open/zed/o/stack/main/a",
+    ] {
         let reply = request(
             f.port(),
             "POST",
@@ -650,7 +667,7 @@ fn local_hosts_are_served() {
         let post = send(
             f.port(),
             "POST",
-            "/api/archive/o/stack/a",
+            "/api/archive/o/stack/main/a",
             &[("Host", &host), ("Origin", &origin)],
         );
 
@@ -688,7 +705,7 @@ fn query_string_is_ignored() {
 
     for target in [
         "/api/sessions?x=1",
-        "/api/file/o/stack/a/session.json?x=1",
+        "/api/file/o/stack/main/a/session.json?x=1",
         "/dashboard.html?x=1",
     ] {
         let reply = get(f.port(), target);
@@ -772,7 +789,7 @@ fn put_non_markdown_is_403() {
     f.store.write(&session_a(), "spec.md.txt", "old");
 
     for path in [SESSION_FILE, "spec.md.txt"] {
-        let target = format!("/api/file/o/stack/a/{path}");
+        let target = format!("/api/file/o/stack/main/a/{path}");
         let before = f.store.read(&session_a(), path);
 
         let reply = put(f.port(), &target, &[("If-Match", "\"v1\"")], "{}");
@@ -810,8 +827,18 @@ fn put_missing_file_is_404() {
     let f = spec_fixture();
     let headers = [("If-Match", "\"v1\"")];
 
-    let missing_file = put(f.port(), "/api/file/o/stack/a/nope.md", &headers, "new");
-    let missing_session = put(f.port(), "/api/file/o/stack/nope/spec.md", &headers, "new");
+    let missing_file = put(
+        f.port(),
+        "/api/file/o/stack/main/a/nope.md",
+        &headers,
+        "new",
+    );
+    let missing_session = put(
+        f.port(),
+        "/api/file/o/stack/main/nope/spec.md",
+        &headers,
+        "new",
+    );
 
     assert_eq!(missing_file.status, 404);
     assert_eq!(missing_session.status, 404);
@@ -827,12 +854,12 @@ fn put_bad_name_is_404() {
     let f = spec_fixture();
 
     for target in [
-        "/api/file/o/%2e%2e/a/spec.md",
-        "/api/file/o/stack/../spec.md",
-        "/api/file/o/stack/a/%2e%2e/a/spec.md",
-        "/api/file/o/stack/a/.hidden.md",
-        "/api/file/o/stack/a/%FF.md",
-        "/api/file/o//a/spec.md",
+        "/api/file/o/%2e%2e/main/a/spec.md",
+        "/api/file/o/stack/main/../spec.md",
+        "/api/file/o/stack/main/a/%2e%2e/a/spec.md",
+        "/api/file/o/stack/main/a/.hidden.md",
+        "/api/file/o/stack/main/a/%FF.md",
+        "/api/file/o//main/a/spec.md",
     ] {
         let reply = put(f.port(), target, &[("If-Match", "\"v1\"")], "new");
 
@@ -847,9 +874,9 @@ fn put_elsewhere_is_404() {
 
     for target in [
         "/api/sessions",
-        "/api/files/o/stack/a",
-        "/api/file/o/stack/a",
-        "/api/archive/o/stack/a",
+        "/api/files/o/stack/main/a",
+        "/api/file/o/stack/main/a",
+        "/api/archive/o/stack/main/a",
         "/dashboard.html",
     ] {
         let reply = put(f.port(), target, &[("If-Match", "\"v1\"")], "new");
@@ -879,7 +906,7 @@ fn a_session_page_cannot_open_lazygit() {
     f.store
         .write(&session_a(), "report.html", "<script></script>");
 
-    let page = get(f.port(), "/api/file/o/stack/a/report.html");
+    let page = get(f.port(), "/api/file/o/stack/main/a/report.html");
     let sandboxed = upgrade(Some("null"), "13", Some(KEY));
     let sandboxed = request(f.port(), "GET", LAZYGIT, &sandboxed);
 
@@ -925,7 +952,7 @@ fn lazygit_without_upgrade_is_404() {
 #[test]
 fn lazygit_on_an_unknown_session_closes_with_1011() {
     let f = session_fixture();
-    let uri = format!("ws://127.0.0.1:{}/api/lazygit/o/stack/nope", f.port());
+    let uri = format!("ws://127.0.0.1:{}/api/lazygit/o/stack/main/nope", f.port());
     let origin = format!("http://127.0.0.1:{}", f.port());
     let client = ClientRequestBuilder::new(uri.parse().unwrap()).with_header("Origin", origin);
 
@@ -989,7 +1016,7 @@ fn every_response_closes_and_is_not_cached() {
 
     for target in [
         "/api/sessions",
-        "/api/file/o/stack/a/nope.md",
+        "/api/file/o/stack/main/a/nope.md",
         "/dashboard.html",
     ] {
         let reply = get(f.port(), target);

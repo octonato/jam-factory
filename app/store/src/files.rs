@@ -92,7 +92,7 @@ impl Store {
         expected_version: Option<&str>,
     ) -> Result<String, StoreError> {
         check_path(path)?;
-        let _lock = self.lock_or_create(s)?;
+        let _lock = self.lock(s)?;
 
         rewrite(&self.dir(s), path, |current| {
             match (current, expected_version) {
@@ -136,7 +136,7 @@ impl Store {
         content: &str,
     ) -> Result<String, StoreError> {
         check_path(path)?;
-        let _lock = self.lock_or_create(s)?;
+        let _lock = self.lock(s)?;
 
         rewrite(&self.dir(s), path, |current| match current {
             None => Ok(content.to_string()),
@@ -227,11 +227,17 @@ impl Store {
 
     /// The folder of the session `s`.
     pub(crate) fn dir(&self, s: &SessionRef) -> PathBuf {
-        self.root
-            .join(s.org())
-            .join(s.repo())
-            .join(SESSIONS_DIR)
+        self.branch_dir(s.org(), s.repo(), s.branch())
             .join(s.session())
+    }
+
+    /// The folder that holds the sessions of `branch`.
+    pub(crate) fn branch_dir(&self, org: &str, repo: &str, branch: &str) -> PathBuf {
+        self.root
+            .join(org)
+            .join(repo)
+            .join(SESSIONS_DIR)
+            .join(branch)
     }
 
     /// Takes the lock of the session `s`, or returns `not_found` when its folder is missing.
@@ -254,14 +260,20 @@ impl Store {
 
         Ok(SessionLock { _file: file })
     }
+}
 
-    /// Creates the folder of the session `s` when missing, and takes its lock.
-    pub(crate) fn lock_or_create(&self, s: &SessionRef) -> Result<SessionLock, StoreError> {
-        let dir = self.dir(s);
-        fs::create_dir_all(&dir).map_err(|e| io_error(&dir, e))?;
+/// Takes an exclusive lock on the file at `path`, creating it when missing.
+pub(crate) fn lock_file(path: &Path) -> Result<SessionLock, StoreError> {
+    let file = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(path)
+        .map_err(|e| io_error(path, e))?;
 
-        self.lock(s)
-    }
+    file.lock().map_err(|e| io_error(path, e))?;
+
+    Ok(SessionLock { _file: file })
 }
 
 /// Applies `change` to the current bytes of `path` in `dir`. Writes the result and returns the new version.
@@ -443,14 +455,20 @@ mod tests {
     const HELLO: &str = "hello\n";
     const HELLO_VERSION: &str = "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03";
 
+    /// A store that holds the empty session `session()`.
     fn store() -> (TempDir, Store) {
         let root = tempfile::tempdir().unwrap();
         let store = Store::new(root.path().to_path_buf());
+        fs::create_dir_all(store.dir(&session())).unwrap();
         (root, store)
     }
 
     fn session() -> SessionRef {
-        SessionRef::new("octonato", "jam-factory", "s1").unwrap()
+        SessionRef::new("octonato", "jam-factory", "main", "session-1").unwrap()
+    }
+
+    fn missing() -> SessionRef {
+        SessionRef::new("octonato", "jam-factory", "main", "walk-1").unwrap()
     }
 
     fn code<T: Debug>(result: Result<T, StoreError>) -> &'static str {
@@ -461,9 +479,10 @@ mod tests {
     fn bad_names_are_refused() {
         for name in ["", ".", "..", "a/b", "a\\b", "a\0"] {
             let refs = [
-                SessionRef::new(name, "r", "s"),
-                SessionRef::new("o", name, "s"),
-                SessionRef::new("o", "r", name),
+                SessionRef::new(name, "r", "b", "s"),
+                SessionRef::new("o", name, "b", "s"),
+                SessionRef::new("o", "r", name, "s"),
+                SessionRef::new("o", "r", "b", name),
             ];
 
             for result in refs {
@@ -471,7 +490,7 @@ mod tests {
             }
         }
 
-        assert!(SessionRef::new("octonato", "a b%c", "café").is_ok());
+        assert!(SessionRef::new("octonato", "a b%c", "b", "café").is_ok());
     }
 
     #[test]
@@ -706,10 +725,18 @@ mod tests {
     #[test]
     fn missing_session_is_not_found() {
         let (_root, store) = store();
-        let s = session();
+        let s = missing();
 
         assert_eq!(code(store.read_file(&s, "spec.md")), "not_found");
         assert_eq!(code(store.list_files(&s)), "not_found");
+        assert_eq!(
+            code(store.write_file(&s, "spec.md", HELLO, None)),
+            "not_found"
+        );
+        assert_eq!(
+            code(store.append_file(&s, "runs.jsonl", HELLO)),
+            "not_found"
+        );
         assert_eq!(code(store.edit_file(&s, "spec.md", "a", "b")), "not_found");
         assert_eq!(code(store.delete_file(&s, "spec.md", "v")), "not_found");
         assert!(!store.dir(&s).exists());
@@ -767,7 +794,7 @@ mod tests {
     #[test]
     fn export_of_a_missing_session_creates_nothing() {
         let (_root, store) = store();
-        let s = session();
+        let s = missing();
 
         let target = tempfile::tempdir().unwrap();
         let out = target.path().join("out");

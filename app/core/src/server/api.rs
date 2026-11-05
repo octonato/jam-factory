@@ -34,9 +34,9 @@ pub fn get(store: &dyn Store, target: &str) -> Response {
 
     let result = match segments.as_slice() {
         ["", "api", "sessions"] => sessions(store),
-        ["", "api", "files", org, repo, id] => files(store, org, repo, id),
-        ["", "api", "file", org, repo, id, path @ ..] if !path.is_empty() => {
-            file(store, org, repo, id, path)
+        ["", "api", "files", org, repo, branch, id] => files(store, [org, repo, branch, id]),
+        ["", "api", "file", org, repo, branch, id, path @ ..] if !path.is_empty() => {
+            file(store, [org, repo, branch, id], path)
         }
         _ => return Response::error(404),
     };
@@ -49,7 +49,9 @@ pub fn post(store: &dyn Store, request: &Request) -> Response {
     let segments = segments(&request.target);
 
     match segments.as_slice() {
-        ["", "api", "archive", org, repo, id] => archive(store, request, org, repo, id),
+        ["", "api", "archive", org, repo, branch, id] => {
+            archive(store, request, [org, repo, branch, id])
+        }
         ["", "api", "open", ..] => open::post(store, request),
         _ => Response::error(404),
     }
@@ -60,8 +62,8 @@ pub fn put(store: &dyn Store, request: &Request) -> Response {
     let segments = segments(&request.target);
 
     match segments.as_slice() {
-        ["", "api", "file", org, repo, id, path @ ..] if !path.is_empty() => {
-            write(store, request, org, repo, id, path)
+        ["", "api", "file", org, repo, branch, id, path @ ..] if !path.is_empty() => {
+            write(store, request, [org, repo, branch, id], path)
         }
         _ => Response::error(404),
     }
@@ -74,22 +76,17 @@ fn sessions(store: &dyn Store) -> Result<Response, StoreError> {
     Ok(json_response(&json!({ "sessions": sessions })))
 }
 
-/// The file paths of the session `org/repo/id`, as `{"files": [...]}`.
-fn files(store: &dyn Store, org: &str, repo: &str, id: &str) -> Result<Response, StoreError> {
-    let files = store.list_files(&session_ref(org, repo, id)?)?;
+/// The file paths of the session `org/repo/branch/id`, as `{"files": [...]}`.
+fn files(store: &dyn Store, session: Segments) -> Result<Response, StoreError> {
+    let files = store.list_files(&session_ref(session)?)?;
 
     Ok(json_response(&json!({ "files": files })))
 }
 
-/// The file at the percent-encoded segments `path` of the session `org/repo/id`, in a sandbox with an opaque origin.
-fn file(
-    store: &dyn Store,
-    org: &str,
-    repo: &str,
-    id: &str,
-    path: &[&str],
-) -> Result<Response, StoreError> {
-    let session = session_ref(org, repo, id)?;
+/// Serves the file at `path` (percent-encoded segments) in session `org/repo/branch/id`.
+/// The response sandboxes the file with an opaque origin.
+fn file(store: &dyn Store, session: Segments, path: &[&str]) -> Result<Response, StoreError> {
+    let session = session_ref(session)?;
     let path = file_path(path)?;
 
     let file = store.read_file(&session, &path)?;
@@ -105,20 +102,13 @@ fn file(
         .with_header("Content-Security-Policy", "sandbox"))
 }
 
-/// Writes the body of `request` over the `.md` file at the percent-encoded segments `path` of the session `org/repo/id`.
-fn write(
-    store: &dyn Store,
-    request: &Request,
-    org: &str,
-    repo: &str,
-    id: &str,
-    path: &[&str],
-) -> Response {
+/// Overwrites the `.md` file at `path` in session `org/repo/branch/id` with the body of `request`.
+fn write(store: &dyn Store, request: &Request, session: Segments, path: &[&str]) -> Response {
     if !same_origin(request) {
         return Response::error(403);
     }
 
-    let target = session_ref(org, repo, id).and_then(|s| Ok((s, file_path(path)?)));
+    let target = session_ref(session).and_then(|s| Ok((s, file_path(path)?)));
 
     let (session, path) = match target {
         Ok(target) => target,
@@ -146,13 +136,13 @@ fn write(
     }
 }
 
-/// Archives the session `org/repo/id` when `request` comes from the same origin.
-fn archive(store: &dyn Store, request: &Request, org: &str, repo: &str, id: &str) -> Response {
+/// Archives the session `org/repo/branch/id` when `request` comes from the same origin.
+fn archive(store: &dyn Store, request: &Request, session: Segments) -> Response {
     if !same_origin(request) {
         return Response::error(403);
     }
 
-    let archived = session_ref(org, repo, id).and_then(|s| store.archive_session(&s));
+    let archived = session_ref(session).and_then(|s| store.archive_session(&s));
 
     match archived {
         Ok(()) => Response::new(204, TEXT, Vec::new()),
@@ -186,9 +176,12 @@ pub(super) fn name(segment: &str) -> Result<String, StoreError> {
         .map_err(|_| StoreError::BadName(format!("{segment:?} is not UTF-8")))
 }
 
-/// The session named by the percent-encoded segments `org`, `repo` and `id`.
-pub(super) fn session_ref(org: &str, repo: &str, id: &str) -> Result<SessionRef, StoreError> {
-    SessionRef::new(&name(org)?, &name(repo)?, &name(id)?)
+/// The percent-encoded segments `org`, `repo`, `branch` and `id` that name a session.
+pub(super) type Segments<'a> = [&'a str; 4];
+
+/// The session named by the percent-encoded segments `[org, repo, branch, id]`.
+pub(super) fn session_ref([org, repo, branch, id]: Segments) -> Result<SessionRef, StoreError> {
+    SessionRef::new(&name(org)?, &name(repo)?, &name(branch)?, &name(id)?)
 }
 
 /// The `worktree` folder named in the session JSON `text`, if it is a string naming an existing folder.

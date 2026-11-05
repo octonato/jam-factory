@@ -12,31 +12,36 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Lists sessions and updates their `session.json`.
+//! Lists, starts and updates sessions through their `session.json`.
 
 use std::fs;
 use std::path::Path;
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::error::StoreError;
-use crate::files::{self, SESSIONS_DIR, Store};
-use crate::name::{SessionRef, check_name};
+use crate::files::{self, LOCK_FILE, SESSIONS_DIR, Store};
+use crate::name::{Category, SessionRef, check_name};
 
 pub const SESSION_FILE: &str = "session.json";
 
 const ARCHIVED: &str = "archived";
+const CATEGORY: &str = "category";
 const COUNTS: &str = "counts";
+const ID: &str = "id";
 const UPDATED: &str = "updated";
 const UPDATED_FORMAT: &str = "%Y-%m-%dT%H:%M:%SZ";
+pub(crate) const STARTED_FORMAT: &str = "%Y%m%d-%H%M";
 
-/// The org, the repo and the archived state of the sessions to list.
+/// Filters sessions by org, repo, branch, category and archived state.
 #[derive(Debug, Clone, Default)]
 pub struct SessionFilter {
     pub org: Option<String>,
     pub repo: Option<String>,
+    pub branch: Option<String>,
+    pub category: Option<Category>,
     pub include_archived: bool,
 }
 
@@ -45,7 +50,9 @@ pub struct SessionFilter {
 pub struct SessionEntry {
     pub org: String,
     pub repo: String,
+    pub branch: String,
     pub session: String,
+    pub category: Category,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub data: Option<Value>,
@@ -54,10 +61,20 @@ pub struct SessionEntry {
     pub error: Option<String>,
 }
 
+/// The session `start_session` created and the version of its `session.json`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Started {
+    pub session: SessionRef,
+    pub version: String,
+}
+
 impl Store {
-    /// Lists the sessions that match `filter`, sorted by org, repo and id.
+    /// Lists the sessions that match `filter`, sorted by org, repo, branch and id.
     pub fn list_sessions(&self, filter: &SessionFilter) -> Result<Vec<SessionEntry>, StoreError> {
-        for name in [&filter.org, &filter.repo].into_iter().flatten() {
+        for name in [&filter.org, &filter.repo, &filter.branch]
+            .into_iter()
+            .flatten()
+        {
             check_name(name)?;
         }
 
@@ -69,22 +86,130 @@ impl Store {
             for repo in folders(&org_dir, filter.repo.as_deref())? {
                 let sessions_dir = org_dir.join(&repo).join(SESSIONS_DIR);
 
-                for session in folders(&sessions_dir, None)? {
-                    let entry = SessionEntry {
-                        org: org.clone(),
-                        repo: repo.clone(),
-                        session: session.clone(),
-                        data: None,
-                        error: None,
-                    };
+                for branch in folders(&sessions_dir, filter.branch.as_deref())? {
+                    let branch_dir = sessions_dir.join(&branch);
 
-                    let file = sessions_dir.join(&session).join(SESSION_FILE);
-                    entries.extend(load(entry, &file, filter.include_archived));
+                    for session in folders(&branch_dir, None)? {
+                        let Some(category) = Category::of(&session) else {
+                            continue;
+                        };
+
+                        if filter.category.is_some_and(|wanted| wanted != category) {
+                            continue;
+                        }
+
+                        let entry = SessionEntry {
+                            org: org.clone(),
+                            repo: repo.clone(),
+                            branch: branch.clone(),
+                            session: session.clone(),
+                            category,
+                            data: None,
+                            error: None,
+                        };
+
+                        let file = branch_dir.join(&session).join(SESSION_FILE);
+                        entries.extend(load(entry, &file, filter.include_archived));
+                    }
                 }
             }
         }
 
         Ok(entries)
+    }
+
+    /// Creates a session of `category` on `branch`.
+    /// The name comes from the current UTC minute and `head`.
+    /// `fields` go in its `session.json`.
+    ///
+    /// Returns `exists` when the branch already holds a live `session` or `review` run.
+    pub fn start_session(
+        &self,
+        org: &str,
+        repo: &str,
+        branch: &str,
+        category: Category,
+        head: &str,
+        fields: &Map<String, Value>,
+    ) -> Result<Started, StoreError> {
+        self.start_session_at(org, repo, branch, category, head, fields, Utc::now())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn start_session_at(
+        &self,
+        org: &str,
+        repo: &str,
+        branch: &str,
+        category: Category,
+        head: &str,
+        fields: &Map<String, Value>,
+        now: DateTime<Utc>,
+    ) -> Result<Started, StoreError> {
+        for name in [org, repo, branch] {
+            check_name(name)?;
+        }
+
+        check_head(head)?;
+
+        let branch_dir = self.branch_dir(org, repo, branch);
+        fs::create_dir_all(&branch_dir).map_err(|e| files::io_error(&branch_dir, e))?;
+
+        let _lock = files::lock_file(&branch_dir.join(LOCK_FILE))?;
+
+        if category != Category::Walk {
+            self.refuse_live(org, repo, branch, category)?;
+        }
+
+        let base = format!("{category}-{}-{head}", now.format(STARTED_FORMAT));
+        let session = free_name(&branch_dir, &base);
+        let s = SessionRef::new(org, repo, branch, &session)?;
+
+        let mut data = fields.clone();
+        data.insert(ID.to_string(), Value::String(session.clone()));
+        data.insert(CATEGORY.to_string(), Value::String(category.to_string()));
+        data.insert(ARCHIVED.to_string(), Value::Bool(false));
+        data.insert(
+            UPDATED.to_string(),
+            Value::String(now.format(UPDATED_FORMAT).to_string()),
+        );
+
+        let text =
+            serde_json::to_string_pretty(&data).map_err(|e| StoreError::BadJson(e.to_string()))?;
+
+        let dir = self.dir(&s);
+        fs::create_dir(&dir).map_err(|e| files::io_error(&dir, e))?;
+        let version = self.write_file(&s, SESSION_FILE, &format!("{text}\n"), None)?;
+
+        Ok(Started {
+            session: s,
+            version,
+        })
+    }
+
+    /// Returns `exists` when `branch` holds a session of `category` that is not archived.
+    fn refuse_live(
+        &self,
+        org: &str,
+        repo: &str,
+        branch: &str,
+        category: Category,
+    ) -> Result<(), StoreError> {
+        let filter = SessionFilter {
+            org: Some(org.to_string()),
+            repo: Some(repo.to_string()),
+            branch: Some(branch.to_string()),
+            category: Some(category),
+            include_archived: false,
+        };
+
+        match self.list_sessions(&filter)?.first() {
+            Some(live) => Err(StoreError::Exists(format!(
+                "Branch {branch} already holds the live {category} {}. Archive it first.",
+                live.session
+            ))),
+            None => Ok(()),
+        }
     }
 
     /// Merges `fields` into the `session.json` of `s`, and sets `updated`.
@@ -122,8 +247,32 @@ impl Store {
     }
 }
 
-/// Returns the sorted names of the folders in `dir`, or only `name` when it is given and is a folder.
-fn folders(dir: &Path, name: Option<&str>) -> Result<Vec<String>, StoreError> {
+/// Returns `bad_name` unless `head` is a short or full commit sha.
+fn check_head(head: &str) -> Result<(), StoreError> {
+    let sha = (4..=40).contains(&head.len()) && head.bytes().all(|b| b.is_ascii_hexdigit());
+
+    if sha {
+        Ok(())
+    } else {
+        Err(StoreError::BadName(format!("{head:?} is not a commit sha")))
+    }
+}
+
+/// Returns the first of `base`, `base-2`, `base-3`, … that is not in `dir`.
+pub(crate) fn free_name(dir: &Path, base: &str) -> String {
+    let mut name = base.to_string();
+    let mut n = 2;
+
+    while dir.join(&name).exists() {
+        name = format!("{base}-{n}");
+        n += 1;
+    }
+
+    name
+}
+
+/// Returns the sorted names of the folders in `dir`, skipping names that start with `.`. When `name` is given, returns only `name` if it is a folder.
+pub(crate) fn folders(dir: &Path, name: Option<&str>) -> Result<Vec<String>, StoreError> {
     if let Some(name) = name {
         if dir.join(name).is_dir() {
             return Ok(vec![name.to_string()]);
@@ -145,7 +294,7 @@ fn folders(dir: &Path, name: Option<&str>) -> Result<Vec<String>, StoreError> {
             continue;
         };
 
-        if entry.path().is_dir() {
+        if entry.path().is_dir() && !name.starts_with('.') {
             names.push(name);
         }
     }
@@ -207,6 +356,7 @@ fn merge(data: &mut Map<String, Value>, fields: &Map<String, Value>) {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
     use std::thread;
 
     use serde_json::json;
@@ -221,10 +371,15 @@ mod tests {
     }
 
     fn session(org: &str, repo: &str, id: &str) -> SessionRef {
-        SessionRef::new(org, repo, id).unwrap()
+        SessionRef::new(org, repo, "main", id).unwrap()
+    }
+
+    fn create(store: &Store, s: &SessionRef) {
+        fs::create_dir_all(store.dir(s)).unwrap();
     }
 
     fn write_session(store: &Store, s: &SessionRef, data: Value) {
+        create(store, s);
         let text = format!("{}\n", serde_json::to_string_pretty(&data).unwrap());
         store.write_file(s, SESSION_FILE, &text, None).unwrap();
     }
@@ -237,7 +392,7 @@ mod tests {
     fn names(entries: &[SessionEntry]) -> Vec<String> {
         entries
             .iter()
-            .map(|e| format!("{}/{}/{}", e.org, e.repo, e.session))
+            .map(|e| format!("{}/{}/{}/{}", e.org, e.repo, e.branch, e.session))
             .collect()
     }
 
@@ -263,10 +418,10 @@ mod tests {
         let (_root, store) = store();
 
         for (org, repo, id) in [
-            ("b-org", "repo", "s1"),
-            ("a-org", "z-repo", "s2"),
-            ("a-org", "a-repo", "s3"),
-            ("a-org", "a-repo", "s1"),
+            ("b-org", "repo", "session-1"),
+            ("a-org", "z-repo", "walk-2"),
+            ("a-org", "a-repo", "walk-3"),
+            ("a-org", "a-repo", "review-1"),
         ] {
             write_session(&store, &session(org, repo, id), json!({ "id": id }));
         }
@@ -276,13 +431,15 @@ mod tests {
         assert_eq!(
             names(&entries),
             [
-                "a-org/a-repo/s1",
-                "a-org/a-repo/s3",
-                "a-org/z-repo/s2",
-                "b-org/repo/s1"
+                "a-org/a-repo/main/review-1",
+                "a-org/a-repo/main/walk-3",
+                "a-org/z-repo/main/walk-2",
+                "b-org/repo/main/session-1"
             ]
         );
-        assert_eq!(entries[3].data, Some(json!({ "id": "s1" })));
+        assert_eq!(entries[0].category, Category::Review);
+        assert_eq!(entries[3].category, Category::Session);
+        assert_eq!(entries[3].data, Some(json!({ "id": "session-1" })));
         assert_eq!(entries[3].error, None);
     }
 
@@ -299,15 +456,15 @@ mod tests {
     #[test]
     fn skips_archived_unless_asked() {
         let (_root, store) = store();
-        write_session(&store, &session("o", "r", "live"), json!({}));
+        write_session(&store, &session("o", "r", "walk-live"), json!({}));
         write_session(
             &store,
-            &session("o", "r", "kept"),
+            &session("o", "r", "walk-kept"),
             json!({ "archived": false }),
         );
         write_session(
             &store,
-            &session("o", "r", "old"),
+            &session("o", "r", "walk-old"),
             json!({ "archived": true }),
         );
 
@@ -319,8 +476,15 @@ mod tests {
             })
             .unwrap();
 
-        assert_eq!(names(&listed), ["o/r/kept", "o/r/live"]);
-        assert_eq!(names(&all), ["o/r/kept", "o/r/live", "o/r/old"]);
+        assert_eq!(names(&listed), ["o/r/main/walk-kept", "o/r/main/walk-live"]);
+        assert_eq!(
+            names(&all),
+            [
+                "o/r/main/walk-kept",
+                "o/r/main/walk-live",
+                "o/r/main/walk-old"
+            ]
+        );
     }
 
     #[test]
@@ -328,20 +492,26 @@ mod tests {
         let (_root, store) = store();
 
         for (org, repo) in [("o1", "r1"), ("o1", "r2"), ("o2", "r1")] {
-            write_session(&store, &session(org, repo, "s"), json!({}));
+            write_session(&store, &session(org, repo, "walk-1"), json!({}));
         }
 
         let filter = |org: Option<&str>, repo: Option<&str>| SessionFilter {
             org: org.map(str::to_string),
             repo: repo.map(str::to_string),
-            include_archived: false,
+            ..SessionFilter::default()
         };
 
         let list = |org, repo| names(&store.list_sessions(&filter(org, repo)).unwrap());
 
-        assert_eq!(list(Some("o1"), None), ["o1/r1/s", "o1/r2/s"]);
-        assert_eq!(list(Some("o1"), Some("r2")), ["o1/r2/s"]);
-        assert_eq!(list(None, Some("r1")), ["o1/r1/s", "o2/r1/s"]);
+        assert_eq!(
+            list(Some("o1"), None),
+            ["o1/r1/main/walk-1", "o1/r2/main/walk-1"]
+        );
+        assert_eq!(list(Some("o1"), Some("r2")), ["o1/r2/main/walk-1"]);
+        assert_eq!(
+            list(None, Some("r1")),
+            ["o1/r1/main/walk-1", "o2/r1/main/walk-1"]
+        );
         assert!(list(Some("o3"), None).is_empty());
 
         for (org, repo) in [(Some(".."), None), (None, Some("a/b"))] {
@@ -352,16 +522,63 @@ mod tests {
     }
 
     #[test]
+    fn filters_by_branch_and_category() {
+        let (_root, store) = store();
+
+        for (branch, id) in [
+            ("main", "walk-1"),
+            ("main", "session-1"),
+            ("fix", "walk-1"),
+            ("fix", "review-1"),
+        ] {
+            let s = SessionRef::new("o", "r", branch, id).unwrap();
+            write_session(&store, &s, json!({}));
+        }
+
+        let list = |branch: Option<&str>, category: Option<Category>| {
+            let filter = SessionFilter {
+                branch: branch.map(str::to_string),
+                category,
+                ..SessionFilter::default()
+            };
+
+            names(&store.list_sessions(&filter).unwrap())
+        };
+
+        assert_eq!(
+            list(Some("fix"), None),
+            ["o/r/fix/review-1", "o/r/fix/walk-1"]
+        );
+        assert_eq!(
+            list(None, Some(Category::Walk)),
+            ["o/r/fix/walk-1", "o/r/main/walk-1"]
+        );
+        assert_eq!(
+            list(Some("main"), Some(Category::Session)),
+            ["o/r/main/session-1"]
+        );
+        assert!(list(Some("none"), None).is_empty());
+
+        let bad = SessionFilter {
+            branch: Some("a/b".to_string()),
+            ..SessionFilter::default()
+        };
+
+        assert_eq!(store.list_sessions(&bad).unwrap_err().code(), "bad_name");
+    }
+
+    #[test]
     fn broken_session_json_is_listed_with_error() {
         let (_root, store) = store();
-        let s = session("o", "r", "broken");
+        let s = session("o", "r", "walk-broken");
+        create(&store, &s);
         store
             .write_file(&s, SESSION_FILE, "{ broken", None)
             .unwrap();
 
         let entries = store.list_sessions(&SessionFilter::default()).unwrap();
 
-        assert_eq!(names(&entries), ["o/r/broken"]);
+        assert_eq!(names(&entries), ["o/r/main/walk-broken"]);
         assert_eq!(entries[0].data, None);
         assert!(entries[0].error.is_some());
 
@@ -369,14 +586,17 @@ mod tests {
 
         assert!(!reply.contains_key("data"));
         assert!(reply.contains_key("error"));
+        assert_eq!(reply["category"], "walk");
     }
 
     #[test]
-    fn folder_without_session_json_is_skipped() {
+    fn folder_without_session_json_or_category_is_skipped() {
         let (_root, store) = store();
-        let s = session("o", "r", "bare");
+        let s = session("o", "r", "walk-bare");
+        create(&store, &s);
         store.write_file(&s, "spec.md", "spec\n", None).unwrap();
-        fs::create_dir_all(store.dir(&session("o", "r", "empty"))).unwrap();
+        create(&store, &session("o", "r", "walk-empty"));
+        write_session(&store, &session("o", "r", "rate-limit"), json!({}));
         fs::create_dir_all(store.root().join("o").join("no-sessions")).unwrap();
 
         let entries = store.list_sessions(&SessionFilter::default()).unwrap();
@@ -384,10 +604,138 @@ mod tests {
         assert!(entries.is_empty());
     }
 
+    fn at(minute: &str) -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339(&format!("2026-11-04T{minute}:30Z"))
+            .unwrap()
+            .with_timezone(&Utc)
+    }
+
+    fn start(store: &Store, category: Category, now: DateTime<Utc>) -> Result<Started, StoreError> {
+        let fields = fields(json!({ "flow": "walk", "branch": "octonato/fix" }));
+        store.start_session_at("o", "r", "fix", category, "3f00486", &fields, now)
+    }
+
+    #[test]
+    fn start_session_names_the_folder_and_writes_session_json() {
+        let (_root, store) = store();
+
+        let started = start(&store, Category::Walk, at("09:12")).unwrap();
+
+        assert_eq!(
+            started.session.to_string(),
+            "o/r/fix/walk-20261104-0912-3f00486"
+        );
+
+        let read = store.read_file(&started.session, SESSION_FILE).unwrap();
+        let data = read_session(&store, &started.session);
+
+        assert_eq!(read.version, started.version);
+        assert_eq!(data["id"], "walk-20261104-0912-3f00486");
+        assert_eq!(data["category"], "walk");
+        assert_eq!(data["flow"], "walk");
+        assert_eq!(data["branch"], "octonato/fix");
+        assert_eq!(data["archived"], false);
+        assert_eq!(data["updated"], "2026-11-04T09:12:30Z");
+    }
+
+    #[test]
+    fn start_session_suffixes_a_taken_name() {
+        let (_root, store) = store();
+
+        let ids: Vec<String> = (0..3)
+            .map(|_| start(&store, Category::Walk, at("09:12")).unwrap())
+            .map(|started| started.session.session().to_string())
+            .collect();
+
+        assert_eq!(
+            ids,
+            [
+                "walk-20261104-0912-3f00486",
+                "walk-20261104-0912-3f00486-2",
+                "walk-20261104-0912-3f00486-3"
+            ]
+        );
+    }
+
+    #[test]
+    fn start_session_refuses_a_second_live_session_or_review() {
+        let (_root, store) = store();
+
+        for category in [Category::Session, Category::Review] {
+            let first = start(&store, category, at("09:12")).unwrap();
+            let second = start(&store, category, at("09:13"));
+
+            let error = second.unwrap_err();
+            assert_eq!(error.code(), "exists");
+            assert!(
+                error.to_string().contains(first.session.session()),
+                "{error}"
+            );
+
+            store.archive_session(&first.session).unwrap();
+
+            assert!(start(&store, category, at("09:14")).is_ok());
+        }
+    }
+
+    #[test]
+    fn start_session_refuses_bad_names() {
+        let (_root, store) = store();
+        let fields = Map::new();
+        let now = at("09:12");
+
+        for head in ["", "xyz1234", "3f0", "3f00486/.."] {
+            let result =
+                store.start_session_at("o", "r", "fix", Category::Walk, head, &fields, now);
+            assert_eq!(result.unwrap_err().code(), "bad_name", "{head:?}");
+        }
+
+        let result =
+            store.start_session_at("o", "r", "a/b", Category::Walk, "3f00486", &fields, now);
+        assert_eq!(result.unwrap_err().code(), "bad_name");
+    }
+
+    #[test]
+    fn concurrent_starts_get_distinct_names() {
+        let (_root, store) = store();
+
+        let ids: HashSet<String> = thread::scope(|scope| {
+            let workers: Vec<_> = (0..8)
+                .map(|_| scope.spawn(|| start(&store, Category::Walk, at("09:12")).unwrap()))
+                .collect();
+
+            workers
+                .into_iter()
+                .map(|worker| worker.join().unwrap().session.session().to_string())
+                .collect()
+        });
+
+        assert_eq!(ids.len(), 8);
+    }
+
+    #[test]
+    fn concurrent_session_starts_leave_one_live() {
+        let (_root, store) = store();
+
+        let started = thread::scope(|scope| {
+            let workers: Vec<_> = (0..8)
+                .map(|_| scope.spawn(|| start(&store, Category::Session, at("09:12")).is_ok()))
+                .collect();
+
+            workers
+                .into_iter()
+                .map(|worker| worker.join().unwrap())
+                .filter(|ok| *ok)
+                .count()
+        });
+
+        assert_eq!(started, 1);
+    }
+
     #[test]
     fn update_merges_fields_and_counts() {
         let (_root, store) = store();
-        let s = session("o", "r", "s1");
+        let s = session("o", "r", "walk-1");
         write_session(
             &store,
             &s,
@@ -419,7 +767,7 @@ mod tests {
     #[test]
     fn update_replaces_counts_that_are_not_objects() {
         let (_root, store) = store();
-        let s = session("o", "r", "s1");
+        let s = session("o", "r", "walk-1");
         write_session(&store, &s, json!({ "counts": 3 }));
 
         let update = fields(json!({ "counts": { "a": 1 } }));
@@ -433,8 +781,9 @@ mod tests {
         let (_root, store) = store();
         let update = fields(json!({ "stage": "plan" }));
 
-        let missing = session("o", "r", "missing");
-        let bare = session("o", "r", "bare");
+        let missing = session("o", "r", "walk-missing");
+        let bare = session("o", "r", "walk-bare");
+        create(&store, &bare);
         store.write_file(&bare, "spec.md", "spec\n", None).unwrap();
 
         assert_eq!(
@@ -447,8 +796,9 @@ mod tests {
         );
 
         for content in ["[1, 2]\n", "{ broken"] {
-            let s = session("o", "r", "odd");
+            let s = session("o", "r", "walk-odd");
             let _ = fs::remove_dir_all(store.dir(&s));
+            create(&store, &s);
             store.write_file(&s, SESSION_FILE, content, None).unwrap();
 
             let result = store.update_session(&s, &update);
@@ -461,7 +811,7 @@ mod tests {
     #[test]
     fn archive_sets_archived_and_updated() {
         let (_root, store) = store();
-        let s = session("o", "r", "s1");
+        let s = session("o", "r", "walk-1");
         write_session(&store, &s, json!({ "stage": "done" }));
 
         let version = store.archive_session(&s).unwrap();
@@ -479,7 +829,7 @@ mod tests {
     #[test]
     fn concurrent_updates_lose_nothing() {
         let (_root, store) = store();
-        let s = session("o", "r", "s1");
+        let s = session("o", "r", "walk-1");
         write_session(&store, &s, json!({ "id": "s1" }));
 
         thread::scope(|scope| {

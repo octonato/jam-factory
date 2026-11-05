@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Opens a session's worktree, or its open pull request, in a tool on `POST /api/open/<tool>/<org>/<repo>/<id>`.
+//! Opens a session's worktree or open pull request in a tool.
+//! Route: `POST /api/open/<tool>/<org>/<repo>/<branch>/<id>`.
 
 use std::path::Path;
 use std::process::Command;
@@ -123,7 +124,7 @@ pub fn post_with(store: &dyn Store, request: &Request, runner: &dyn Runner) -> R
 
     let segments = segments(&request.target);
 
-    let ["", "api", "open", tool, org, repo, id] = segments.as_slice() else {
+    let ["", "api", "open", tool, org, repo, branch, id] = segments.as_slice() else {
         return Response::error(404);
     };
 
@@ -131,7 +132,8 @@ pub fn post_with(store: &dyn Store, request: &Request, runner: &dyn Runner) -> R
         return Response::error(404);
     };
 
-    let session = session_ref(org, repo, id).and_then(|s| store.read_file(&s, SESSION_FILE));
+    let session =
+        session_ref([org, repo, branch, id]).and_then(|s| store.read_file(&s, SESSION_FILE));
 
     let session = match session {
         Ok(file) => file.content,
@@ -211,7 +213,7 @@ mod tests {
     use super::*;
     use crate::server::fake_store::FakeStore;
 
-    const TARGET: &str = "/api/open/zed/o/stack/a";
+    const TARGET: &str = "/api/open/zed/o/stack/main/a";
 
     /// A runner that records each call and gives `result`.
     struct RecordingRunner {
@@ -236,7 +238,7 @@ mod tests {
         }
     }
 
-    /// A store holding the session `o/stack/a`, and that session's worktree.
+    /// A store holding the session `o/stack/main/a`, and that session's worktree.
     struct Fixture {
         store: FakeStore,
         worktree: PathBuf,
@@ -463,7 +465,7 @@ printf '%s' {record} | {jq} -r "$filter"
 
         assert_eq!(response.status, 204);
         assert!(response.body.is_empty());
-        assert_eq!(f.store.reads(), ["o/stack/a/session.json"]);
+        assert_eq!(f.store.reads(), ["o/stack/main/a/session.json"]);
 
         let worktree = f.worktree.to_string_lossy().into_owned();
         assert_eq!(
@@ -531,9 +533,9 @@ printf '%s' {record} | {jq} -r "$filter"
         let runner = RecordingRunner::new(Ok(()));
 
         for target in [
-            "/api/open/vim/o/stack/a",
-            "/api/open/zed/o/stack/b",
-            "/api/open/zed/o/stack/a/extra",
+            "/api/open/vim/o/stack/main/a",
+            "/api/open/zed/o/stack/main/b",
+            "/api/open/zed/o/stack/main/a/extra",
             "/api/open/zed/stack/a",
             "/open/zed/stack/a",
         ] {
@@ -551,13 +553,13 @@ printf '%s' {record} | {jq} -r "$filter"
         let runner = RecordingRunner::new(Ok(()));
 
         for target in [
-            "/api/open/zed/%2e%2e/stack/a",
-            "/api/open/zed/o/stack/..",
-            "/api/open/zed/o/stack/.",
-            "/api/open/zed/o/a%2Fb/a",
-            "/api/open/zed/o/stack/a%5Cb",
-            "/api/open/zed//stack/a",
-            "/api/open/zed/o/%FF/a",
+            "/api/open/zed/%2e%2e/stack/main/a",
+            "/api/open/zed/o/stack/main/..",
+            "/api/open/zed/o/stack/main/.",
+            "/api/open/zed/o/a%2Fb/main/a",
+            "/api/open/zed/o/stack/main/a%5Cb",
+            "/api/open/zed//stack/main/a",
+            "/api/open/zed/o/%FF/main/a",
         ] {
             let response = post_with(&f.store, &request(target, &[]), &runner);
 

@@ -28,7 +28,7 @@ use tempfile::TempDir;
 const BINARY: &str = env!("CARGO_BIN_EXE_jam-factory-mcp");
 const TIMEOUT: Duration = Duration::from_secs(10);
 
-const TOOLS: [&str; 12] = [
+const TOOLS: [&str; 13] = [
     "append_code",
     "append_diff",
     "append_file",
@@ -39,6 +39,7 @@ const TOOLS: [&str; 12] = [
     "list_sessions",
     "move_file",
     "read_file",
+    "start_session",
     "update_session",
     "write_file",
 ];
@@ -89,11 +90,25 @@ impl Server {
         };
 
         server.info = server.initialize();
+        server.create("o", "r", "s");
         server
     }
 
     fn root(&self) -> PathBuf {
         self.home.path().join(".jam-factory").join("factory")
+    }
+
+    /// Creates the empty folder of the session `org/repo/main/session`.
+    fn create(&self, org: &str, repo: &str, session: &str) {
+        let dir = self
+            .root()
+            .join(org)
+            .join(repo)
+            .join("sessions")
+            .join("main")
+            .join(session);
+
+        fs::create_dir_all(dir).unwrap();
     }
 
     fn send(&mut self, message: Value) {
@@ -181,7 +196,7 @@ fn in_session(fields: Value) -> Value {
 }
 
 fn in_session_of(org: &str, repo: &str, session: &str, fields: Value) -> Value {
-    let mut arguments = json!({ "org": org, "repo": repo, "session": session });
+    let mut arguments = json!({ "org": org, "repo": repo, "branch": "main", "session": session });
     let extra = fields.as_object().unwrap().clone();
 
     arguments.as_object_mut().unwrap().extend(extra);
@@ -195,9 +210,10 @@ fn names(sessions: &Value) -> Vec<String> {
         .iter()
         .map(|entry| {
             format!(
-                "{}/{}/{}",
+                "{}/{}/{}/{}",
                 entry["org"].as_str().unwrap(),
                 entry["repo"].as_str().unwrap(),
+                entry["branch"].as_str().unwrap(),
                 entry["session"].as_str().unwrap()
             )
         })
@@ -267,7 +283,7 @@ fn git_session(server: &mut Server) -> TempDir {
     repo
 }
 
-/// The files of the session `o/r/s`.
+/// The files of the session `o/r/main/s`.
 fn session_files(server: &mut Server) -> Value {
     server.ok("list_files", in_session(json!({})))
 }
@@ -280,7 +296,7 @@ fn initialize_names_the_server() {
 }
 
 #[test]
-fn tools_list_has_the_twelve_tools() {
+fn tools_list_has_the_thirteen_tools() {
     let mut server = Server::start();
 
     let reply = server.request("tools/list", json!({}));
@@ -317,7 +333,10 @@ fn tools_list_has_the_twelve_tools() {
         schema["properties"]["expected_version"].is_object(),
         "{schema}"
     );
-    assert_eq!(required, ["content", "org", "path", "repo", "session"]);
+    assert_eq!(
+        required,
+        ["branch", "content", "org", "path", "repo", "session"]
+    );
 }
 
 #[test]
@@ -476,6 +495,7 @@ fn update_and_archive_change_session_json() {
         .join("o")
         .join("r")
         .join("sessions")
+        .join("main")
         .join("s")
         .join("session.json");
     let data: Value = serde_json::from_str(&fs::read_to_string(file).unwrap()).unwrap();
@@ -502,41 +522,166 @@ fn update_and_archive_change_session_json() {
 fn list_sessions_filters() {
     let mut server = Server::start();
 
-    for (org, repo, session) in [("o1", "r1", "s1"), ("o1", "r2", "s2"), ("o2", "r1", "s3")] {
-        let content = format!("{{\"id\": \"{session}\"}}\n");
+    for (org, repo, branch, category) in [
+        ("o1", "r1", "main", "walk"),
+        ("o1", "r2", "main", "session"),
+        ("o2", "r1", "fix", "review"),
+    ] {
         server.ok(
-            "write_file",
-            in_session_of(
-                org,
-                repo,
-                session,
-                json!({ "path": "session.json", "content": content }),
-            ),
+            "start_session",
+            json!({
+                "org": org,
+                "repo": repo,
+                "branch": branch,
+                "category": category,
+                "head": "3f00486",
+                "fields": { "flow": category },
+            }),
         );
     }
 
+    let archived = server.ok("list_sessions", json!({ "org": "o1", "repo": "r2" }));
+    let id = archived["sessions"][0]["session"]
+        .as_str()
+        .unwrap()
+        .to_string();
     server.ok(
         "archive_session",
-        in_session_of("o1", "r2", "s2", json!({})),
+        json!({ "org": "o1", "repo": "r2", "branch": "main", "session": id }),
     );
 
     let all = server.ok("list_sessions", json!({}));
-    let archived = server.ok("list_sessions", json!({ "include_archived": true }));
+    let with_archived = server.ok("list_sessions", json!({ "include_archived": true }));
     let org = server.ok(
         "list_sessions",
         json!({ "org": "o1", "include_archived": true }),
     );
     let repo = server.ok("list_sessions", json!({ "repo": "r1" }));
-    let both = server.ok("list_sessions", json!({ "org": "o2", "repo": "r1" }));
+    let branch = server.ok("list_sessions", json!({ "branch": "fix" }));
+    let category = server.ok("list_sessions", json!({ "category": "walk" }));
     let bad = server.fail("list_sessions", json!({ "org": ".." }));
+    let bad_category = server.fail("list_sessions", json!({ "category": "build" }));
 
-    assert_eq!(names(&all), ["o1/r1/s1", "o2/r1/s3"]);
-    assert_eq!(all["sessions"][0]["data"], json!({ "id": "s1" }));
-    assert_eq!(names(&archived), ["o1/r1/s1", "o1/r2/s2", "o2/r1/s3"]);
-    assert_eq!(names(&org), ["o1/r1/s1", "o1/r2/s2"]);
-    assert_eq!(names(&repo), ["o1/r1/s1", "o2/r1/s3"]);
-    assert_eq!(names(&both), ["o2/r1/s3"]);
+    let all_names = names(&all);
+
+    assert_eq!(all_names.len(), 2, "{all}");
+    assert!(all_names[0].starts_with("o1/r1/main/walk-"), "{all}");
+    assert!(all_names[0].ends_with("-3f00486"), "{all}");
+    assert!(all_names[1].starts_with("o2/r1/fix/review-"), "{all}");
+    assert_eq!(all["sessions"][0]["category"], "walk");
+    assert_eq!(all["sessions"][0]["data"]["flow"], "walk");
+    assert_eq!(names(&with_archived).len(), 3);
+    assert_eq!(names(&org).len(), 2);
+    assert_eq!(names(&repo).len(), 2);
+    assert!(
+        names(&branch)[0].starts_with("o2/r1/fix/review-"),
+        "{branch}"
+    );
+    assert_eq!(names(&category).len(), 1);
+    assert!(
+        names(&category)[0].starts_with("o1/r1/main/walk-"),
+        "{category}"
+    );
     assert_eq!(bad["code"], "bad_name");
+    assert_eq!(bad_category["code"], "bad_name");
+}
+
+#[test]
+fn start_session_creates_a_session_and_refuses_a_second_live_one() {
+    let mut server = Server::start();
+
+    let start = json!({
+        "org": "o",
+        "repo": "r",
+        "branch": "fix",
+        "category": "session",
+        "head": "3f00486",
+        "fields": { "flow": "build", "stage": "spec" },
+    });
+
+    let started = server.ok("start_session", start.clone());
+    let id = started["session"].as_str().unwrap();
+
+    assert_eq!(started["org"], "o");
+    assert_eq!(started["repo"], "r");
+    assert_eq!(started["branch"], "fix");
+    assert!(
+        id.starts_with("session-") && id.ends_with("-3f00486"),
+        "{started}"
+    );
+
+    let s = json!({ "org": "o", "repo": "r", "branch": "fix", "session": id });
+    let mut read_args = s.clone();
+    read_args["path"] = json!("session.json");
+
+    let read = server.ok("read_file", read_args);
+    let data: Value = serde_json::from_str(read["content"].as_str().unwrap()).unwrap();
+
+    assert_eq!(read["version"], started["version"]);
+    assert_eq!(data["id"], id);
+    assert_eq!(data["category"], "session");
+    assert_eq!(data["stage"], "spec");
+
+    let second = server.fail("start_session", start.clone());
+    assert_eq!(second["code"], "exists");
+    assert!(second["message"].as_str().unwrap().contains(id), "{second}");
+
+    server.ok("archive_session", s);
+    server.ok("start_session", start.clone());
+
+    let mut bad = start;
+    bad["category"] = json!("build");
+    assert_eq!(server.fail("start_session", bad)["code"], "bad_name");
+}
+
+#[test]
+fn startup_moves_old_sessions_into_their_branch() {
+    let home = Arc::new(tempfile::tempdir().unwrap());
+    let old = home
+        .path()
+        .join(".jam-factory/factory/o/r/sessions/rate-limit");
+    fs::create_dir_all(&old).unwrap();
+    fs::write(
+        old.join("session.json"),
+        r#"{"branch": "octonato/rate-limit", "flow": "build", "updated": "2026-10-15T14:02:11Z"}"#,
+    )
+    .unwrap();
+
+    let mut server = Server::start_on(home);
+    let listed = server.ok("list_sessions", json!({ "org": "o", "repo": "r" }));
+
+    assert_eq!(
+        names(&listed),
+        ["o/r/rate-limit/session-20261015-1402-migrated"]
+    );
+    assert_eq!(listed["sessions"][0]["category"], "session");
+}
+
+#[test]
+fn file_tools_refuse_a_missing_session() {
+    let mut server = Server::start();
+
+    let write = server.fail(
+        "write_file",
+        in_session_of(
+            "o",
+            "r",
+            "walk-x",
+            json!({ "path": "a.md", "content": "a\n" }),
+        ),
+    );
+    let append = server.fail(
+        "append_file",
+        in_session_of(
+            "o",
+            "r",
+            "walk-x",
+            json!({ "path": "a.md", "content": "a\n" }),
+        ),
+    );
+
+    assert_eq!(write["code"], "not_found");
+    assert_eq!(append["code"], "not_found");
 }
 
 #[test]
@@ -916,6 +1061,7 @@ fn tools_need_a_worktree_in_session_json() {
     ];
 
     for (session, content) in sessions {
+        server.create("o", "r", session);
         server.ok(
             "write_file",
             in_session_of(

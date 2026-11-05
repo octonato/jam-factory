@@ -11,7 +11,7 @@ Read and write the session's files only with the tools of the `jam-factory` serv
 | `append_diff` | Appends the git diff of `files` from `base` to `head` as a fenced `diff` block. With `lines`, it keeps only the hunks whose new side meets one of the `[start, end]` ranges. |
 | `append_code` | Appends lines `start` to `end` of `file`, counted from 1 and inclusive, as a fenced code block. It reads the file in the worktree, or the file at `ref` when you pass one. |
 
-- Both tools name the session with `org`, `repo` and `session`, and the step file with `path`, such as `drafts/03.md`.
+- Both tools name the session with `org`, `repo`, `branch` and `session`, and the step file with `path`, such as `drafts/03.md`.
 - Both read `worktree` from `session.json`. `files` and `file` are paths relative to it.
 - `append_diff` keeps a renamed file when `files` holds its old or its new path. Its block shows `rename from`, `rename to` and only the edited hunks.
 - A path that is empty or absolute, or holds a `.` or `..` part, fails with `bad_path`.
@@ -22,7 +22,7 @@ Read and write the session's files only with the tools of the `jam-factory` serv
 ## Layout
 
 ```
-{root}/{org}/{repo}/sessions/{id}/
+{root}/{org}/{repo}/sessions/{branch}/{id}/
   session.json
   request.md
   walk.json
@@ -42,11 +42,13 @@ Read and write the session's files only with the tools of the `jam-factory` serv
 
 ## session.json
 
-Create it once with `write_file`, with `updated` set to the current UTC time. After that, change it only with `update_session`.
+Create it once with `start_session`, as `skills/take/state.md` says. After that, change it only with `update_session`.
 
 ```json
 {
-  "id": "walk-pr-247-20261104-0912",
+  "id": "walk-20261104-0912-3f00486",
+  "category": "walk",
+  "slug": "pr-247",
   "repo": "jam-factory",
   "worktree": "/Users/renato/Sources/octonato/jam-factory/main",
   "branch": "main",
@@ -59,10 +61,12 @@ Create it once with `write_file`, with `updated` set to the current UTC time. Af
 }
 ```
 
-- `id`: `walk-{slug}-{timestamp}`. `{slug}` is `pr-{n}`, `commit-{short sha}` or a short kebab-case slug of the code path. `{timestamp}` is the local time as `YYYYMMDD-HHMM`.
+- `id`: `walk-{YYYYMMDD-HHMM}-{short sha}`, the UTC minute and HEAD when the walk started. `start_session` sets it.
+- `category`: always `walk`. `start_session` sets it.
+- `slug`: `pr-{n}`, `commit-{short sha}` or a short kebab-case slug of the code path.
 - `repo`: the name of the worktree's parent folder.
 - `worktree`: the absolute path where the walk ran. The tools read from it.
-- `branch`: the branch where the walk ran, or `null` when HEAD is detached.
+- `branch`: the full name of the branch where the walk ran. The session folder sits under its last segment.
 - `flow`: always `walk`.
 - `stage`: `walk` while the skill writes the steps, then `done`. `blocked` on an error the skill cannot resolve.
 - `stepsPlanned`: the steps in `walk.json`. `0` until `walk.json` exists.

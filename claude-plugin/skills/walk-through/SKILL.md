@@ -13,7 +13,7 @@ Worktree: !`git rev-parse --show-toplevel`
 
 Current branch: !`git branch --show-current`
 
-Run timestamp: !`date +%Y%m%d-%H%M`
+HEAD: !`git rev-parse --short HEAD`
 
 If `$ARGUMENTS` is empty, ask me what I want to discover — a code path, a commit hash, or a PR number — and stop. Don't start a walk-through without a target.
 
@@ -81,12 +81,13 @@ If the `jam-factory` tools are missing, tell me to run `just install` in the `ap
 Read `${CLAUDE_PLUGIN_ROOT}/skills/walk-through/state.md` before you write any file. It holds the tools and the format of every file of a walk.
 
 - **Worktree**: the value above.
-- **Branch**: the current branch above. It is empty when HEAD is detached. The walk runs on any branch, the base branch included.
-- **Repo**: the name of the worktree's parent folder.
+- **Branch**: the last segment of the current branch above. For `octonato/rate-limit`, it is `rate-limit`. The walk runs on any branch, the base branch included.- **Repo**: the name of the worktree's parent folder.
 - **Org**: the name of the folder above the repo folder. For the worktree `~/Sources/octonato/jam-factory/main`, the org is `octonato` and the repo is `jam-factory`.
-- **Slug**: `pr-{n}` for a PR, `commit-{short sha}` for a commit hash or ref, or a short kebab-case slug of the topic for a code path, such as `login-auth-flow`.
-- **Session id**: `walk-{slug}-{run timestamp}`, such as `walk-pr-247-20261104-0912`. The run timestamp is the value above, from `date +%Y%m%d-%H%M`.
-- **Session**: the session named by `org`, `repo` and `session id`. Every file path below, such as `walk.json`, is relative to the session.
+- **Slug**: `pr-{n}` for a PR, `commit-{short sha}` for a commit hash or ref, or a short kebab-case slug of the topic for a code path, such as `login-auth-flow`. It names the walk in `overview.md` and in `session.json`.
+- **Session id**: the id `start_session` returns, such as `walk-20261104-0912-3f00486`.
+- **Session**: the session named by `org`, `repo`, `branch` and `session id`. Every file path below, such as `walk.json`, is relative to the session.
+
+If the current branch is empty, HEAD is detached. Tell me to check out a branch, or to pass `-i`, and stop.
 
 Each run creates a new session. A walk has no resume.
 
@@ -106,8 +107,8 @@ In changes mode, map the route from `git diff {base} {head}` and `git log {base}
 
 Write the files in this order. `state.md` shows the format of each one.
 
-1. Create `request.md` with `write_file`. If it fails with `exists`, the session id is taken: tell me and stop.
-2. Create `session.json` with `write_file`. Set `flow: walk`, `stage: walk`, `stepsPlanned` and `stepsDone` to `0`, `blocked: null` and `archived: false`.
+1. Call `start_session` with `category: walk` and HEAD as `head`, as `skills/take/state.md` says. Pass `fields` with the repo, the worktree, the full current branch and the slug. Set `flow: walk`, `stage: walk`, `stepsPlanned` and `stepsDone` to `0` and `blocked: null`. Use the returned `session` as the session id.
+2. Create `request.md` with `write_file`.
 3. Append the `request` line to `runs.jsonl` with `append_file`. Then take the `started` time of the `walk` line.
 4. Map the route, as **Then, map the route** says.
 5. Create `walk.json` and `overview.md` with `write_file`. Set `stepsPlanned` to the number of steps.
@@ -132,7 +133,7 @@ A failed tool call writes nothing. Fix its arguments and call it again. An `empt
 
 Print:
 
-- the session, as `factory:{org}/{repo}/{session id}/`
+- the session, as `factory:{org}/{repo}/{branch}/{session id}/`
 - the step count
 - each step's title, one per line
 

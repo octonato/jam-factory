@@ -124,7 +124,17 @@ The server keeps every session under one root folder, `~/.jam-factory/factory` b
 { "root": "~/Sources/factory" }
 ```
 
-Each session lives in `<root>/<org>/<repo>/sessions/<session id>/`. `<repo>` is the name of the worktree's parent folder, and `<org>` is the name of the folder above it. For the worktree `~/Sources/my-team/sdk/rate-limit`, `<org>` is `my-team` and `<repo>` is `sdk`.
+Each session lives in `<root>/<org>/<repo>/sessions/<branch>/<session id>/`. `<repo>` is the name of the worktree's parent folder, and `<org>` is the name of the folder above it. For the worktree `~/Sources/my-team/sdk/rate-limit`, `<org>` is `my-team` and `<repo>` is `sdk`. `<branch>` is the last segment of the branch name: `octonato/rate-limit` gives `rate-limit`.
+
+A branch holds one folder per session. The session id is `<category>-<YYYYMMDD-HHMM>-<short sha>`. It uses the UTC minute and HEAD at the start, such as `review-20261104-0905-3f00486`. The category tells the sessions of a branch apart, and Jam Board shows it:
+
+- `session`: a build or vibe session of `/jam:take` or `/jam:just-vibe`.
+- `review`: a review session of `/jam:take -p`.
+- `walk`: a walk of `/jam:walk-through`.
+
+A branch holds at most one live `session` and one live `review`, and any number of walks. So a review and a walk can run on the same branch at once, from two agent sessions. Archive a session on Jam Board to start a new one of its category.
+
+The `jam-factory-mcp` server moves sessions of the older `<root>/<org>/<repo>/sessions/<session id>/` layout into their branch folder when it starts. A moved session's id ends with `-migrated`.
 
 The factory shares this folder across orgs, repositories and worktrees. Create a feature branch before starting a session:
 
@@ -138,7 +148,7 @@ Then invoke the factory with a description: `/jam:take Add rate limiting` in Cla
 
 `/jam:take` is the main command in Jam Factory. The examples here use Claude Code syntax; use `$jam:take` in Codex or `/take` in Gemini. Complete the [factory setup](#factory-setup) before starting.
 
-`/jam:take` takes one change from spec to a branch ready for review. Each session belongs to one feature branch, in the main checkout or in a worktree. The last segment of the branch name is the session id: `octonato/rate-limit` gives `rate-limit`. You create the branch; the factory never does. It refuses to run on the base branch.
+`/jam:take` takes one change from spec to a branch ready for review. Each session belongs to one feature branch, in the main checkout or in a worktree. A branch holds one live session at a time. You create the branch; the factory never does. It refuses to run on the base branch.
 
 ```
 spec ─► plan ─► implement ─► verify(N) ─► triage(N) ─┬─► implement ─► verify(N+1) ...
@@ -163,11 +173,11 @@ spec ─► plan ─► implement ─► verify(N) ─► triage(N) ─┬─►
 | `/jam:take` | Starts the branch's session from what you discussed in the conversation. |
 | `/jam:take <PR URL>` | Starts a review session for that PR. Run it on the PR's branch. |
 | `/jam:take -p [number]`, `/jam:take --pr [number]` | Starts a review session for the PR with that number, or for the current branch's PR. |
-| `/jam:take -r`, `/jam:take --resume` | Resumes the branch's session at the stage it reached. |
+| `/jam:take -r`, `/jam:take --resume` | Resumes the branch's session at the stage it reached. Add `-p` to resume the branch's review session. |
 | `/jam:take -v`, `/jam:take --verify` | Runs another verify round on a done session. |
 | `/jam:take -f`, `/jam:take --feedback` | Imports new feedback from the branch's open GitHub PR into a done build session. |
 
-Without `-r`, `-v` or `-f`, `/jam:take` refuses to run on a branch that already has a session. To track a deferred finding, open an issue with `/jam:gh-issue-create`. Then set the entry's `issue` to its URL.
+Without `-r`, `-v` or `-f`, `/jam:take` refuses to run on a branch that already has a live session. Archive it on Jam Board to start a new one. To track a deferred finding, open an issue with `/jam:gh-issue-create`. Then set the entry's `issue` to its URL.
 
 ### Modes
 
@@ -250,11 +260,11 @@ In `interactive` mode, the factory restates the request and its approach, and wa
 | `/jam:just-vibe -r`, `/jam:just-vibe --resume` | Resumes the branch's vibe session at the stage it reached. |
 | `-a` or `-i` on any call | Sets the session's mode to `autonomous` or `interactive`. |
 
-Without `-r`, `/jam:just-vibe` refuses to run on a branch that already has a session. `/jam:take -r` also resumes a vibe session. `-v` does not apply: a vibe session has no verify round, so run `/jam:verify` to review the branch.
+Without `-r`, `/jam:just-vibe` refuses to run on a branch that already has a live session. Archive it on Jam Board to start a new one. `/jam:take -r` also resumes a vibe session. `-v` does not apply: a vibe session has no verify round, so run `/jam:verify` to review the branch.
 
 ### Walk-through sessions
 
-`/jam:walk-through` saves each walk as a walk-through session, with `flow: walk` in `session.json`. It runs on any branch, the base branch included. Each run creates a new session, with the id `walk-<slug>-<timestamp>`, such as `walk-pr-247-20261104-0912`. `<slug>` is `pr-<n>`, `commit-<short sha>` or a short name for the code path. `<timestamp>` is the local time as `YYYYMMDD-HHMM`.
+`/jam:walk-through` saves each walk as a walk-through session, with `flow: walk` in `session.json`. It runs on any branch, the base branch included. Each run creates a new session under the current branch, with an id such as `walk-20261104-0912-3f00486`. It refuses to run on a detached HEAD. `session.json` holds the walk's slug: `pr-<n>`, `commit-<short sha>` or a short name for the code path. `/jam:walk-replay <slug>` replays the newest walk with that slug.
 
 ```
 walk ─► done
@@ -275,7 +285,7 @@ A step in changes mode holds git diffs. A step in code-path mode holds lines of 
 ~/.jam-factory/
   config.json                    optional: { "root": "<root>" }
 <root>/                          ~/.jam-factory/factory by default
-  <org>/<repo>/sessions/<session id>/
+  <org>/<repo>/sessions/<branch>/<session id>/
     session.json                 the session's mode, stage, round and counts
     request.md                   the description, issue or PR the session started from
     spec.md, plan.md, tasks.md
@@ -296,7 +306,7 @@ The `jam-factory-mcp` server writes every file under `<root>`. A vibe session wr
 A walk-through session writes only these files:
 
 ```
-<root>/<org>/<repo>/sessions/walk-<slug>-<timestamp>/
+<root>/<org>/<repo>/sessions/<branch>/walk-<YYYYMMDD-HHMM>-<short sha>/
   session.json                   the walk's stage and step counts
   request.md                     the PR URL, commit range or code path
   walk.json                      the target, the summary and the steps
@@ -317,7 +327,7 @@ jam-factory-mcp export                  # copies to factory/<session id>/
 jam-factory-mcp export docs/rate-limit  # copies to docs/rate-limit/
 ```
 
-It finds the session the way the skills do: `<org>` and `<repo>` from the folder names, the session id from the branch. It copies every session file except dot files, such as `.lock`. The default destination is under the worktree root. A relative destination is relative to the current folder. It fails and copies nothing on a detached HEAD, when the session does not exist, when the destination exists or when the factory root cannot be resolved. It never stages or commits: review the files, then commit them yourself.
+It finds the session the way the skills do: `<org>` and `<repo>` from the folder names, then the branch's live `session`. It copies every session file except dot files, such as `.lock`. The default destination is under the worktree root. A relative destination is relative to the current folder. It fails and copies nothing on a detached HEAD, when the session does not exist, when the destination exists or when the factory root cannot be resolved. It never stages or commits: review the files, then commit them yourself.
 
 Export after the last verify or `-f` round. Files exported earlier would sit in the worktree, where the reviewers of later rounds can read them.
 

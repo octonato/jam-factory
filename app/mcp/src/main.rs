@@ -52,7 +52,18 @@ async fn main() -> ExitCode {
         }
     };
 
-    let server = FactoryServer::new(Store::new(root));
+    let store = Store::new(root);
+
+    match store.migrate() {
+        Ok(moved) => {
+            for m in moved {
+                eprintln!("Moved the session {} to {}", m.from, m.to);
+            }
+        }
+        Err(error) => eprintln!("Cannot move the old sessions: {error}"),
+    }
+
+    let server = FactoryServer::new(store);
 
     let service = match server.serve(stdio()).await {
         Ok(service) => service,

@@ -15,16 +15,19 @@ Worktree: !`git rev-parse --show-toplevel`
 
 Current branch: !`git branch --show-current`
 
+HEAD: !`git rev-parse --short HEAD`
+
 Read `${CLAUDE_PLUGIN_ROOT}/skills/take/state.md` before you start. It holds the tools and the format of every file this skill writes.
 
 ## Where things are
 
 - **Worktree**: the value above. It is the main checkout or a linked worktree.
 - **Git repositories**: the worktree, plus each folder below it that holds a `.git` entry. A project can hold subprojects with their own git repositories. Every `git status`, restore and commit in this skill runs in each git repository.
-- **Session id**: the last segment of the current branch. For `octonato/rate-limit`, it is `rate-limit`.
+- **Branch**: the last segment of the current branch. For `octonato/rate-limit`, it is `rate-limit`.
 - **Repo**: the name of the worktree's parent folder.
 - **Org**: the name of the folder above the repo folder. For the worktree `~/Sources/octonato/jam-factory/rate-limit`, the org is `octonato` and the repo is `jam-factory`.
-- **Session**: the session named by `org`, `repo` and `session id`. The tools of the `jam-factory` MCP server read and write its files, as `state.md` says. Every file path in this skill, such as `spec.md` or `round-{round}/report.md`, is relative to the session.
+- **Session id**: the id of the branch's live session, such as `session-20261104-0912-3f00486`. **Pick the command** finds it, or `start_session` returns it.
+- **Session**: the session named by `org`, `repo`, `branch` and `session id`. The tools of the `jam-factory` MCP server read and write its files, as `state.md` says. Every file path in this skill, such as `spec.md` or `round-{round}/report.md`, is relative to the session.
 
 If the `jam-factory` tools are missing, tell me to run `just install` in the `app/` folder of the jam-factory repository. Then stop.
 
@@ -57,18 +60,20 @@ Take the flags out of what I gave you:
 - `-f` or `--feedback`: import new GitHub PR feedback into a done build session.
 - `-p` or `--pr`, with an optional PR number right after it: start a review session for that PR.
 
-If I passed both mode flags, tell me they conflict and stop. If I passed `-p` with `-r` or `-v`, tell me they conflict and stop. The rest is the argument. If I passed `-f` with `-r`, `-v`, `-p`, a PR selection, any positional argument or an unknown flag, tell me they conflict and stop. Only one mode flag may accompany `-f`. Reject these combinations before changing any file or mode.
+If I passed both mode flags, tell me they conflict and stop. If I passed `-p` with `-v`, tell me they conflict and stop. The rest is the argument. If I passed `-f` with `-r`, `-v`, `-p`, a PR selection, any positional argument or an unknown flag, tell me they conflict and stop. Only one mode flag may accompany `-f`. Reject these combinations before changing any file or mode.
 
-Read `session.json` with `read_file`. A `not_found` error means the session holds no `session.json`. When it exists, list the session's files with `list_files`.
+Find the session. The category is `review` when I passed `-p` or the argument is a PR URL, and `session` otherwise. A PR URL holds `/pull/`. Call `list_sessions` with `org`, `repo`, `branch` and the category. When it lists a session, use its `session` value as the session id. The session holds `session.json`. List its files with `list_files`. When it lists none, the session holds no `session.json`.
+
+With `-r`, `-v` or `-f` and no `-p`, look for a live `review` when no `session` is listed. Use it if found.
 
 - **The session holds `session.json` with `archived: true`**: tell me the session is archived and stop.
 - **The session holds `session.json` and a pending feedback checkpoint** (`feedbackImport` is not null, or `list_files` lists `feedback-pending.md` or `round-{round + 1}/reviews/github-feedback.md`): if I passed `-r`, read `${CLAUDE_PLUGIN_ROOT}/skills/take/feedback.md` and follow **Resume import**. Otherwise tell me to run `/jam:take -r` and stop. This check runs before `-v` and the existing-session refusal.
 - **The session holds `session.json`, and I passed `-f`**: read `${CLAUDE_PLUGIN_ROOT}/skills/take/feedback.md` and follow **New import**. Do not change mode or any session file before its preflight and fetch succeed.
 - **The session holds `session.json`, and I passed `-v`**: if its `flow` is `vibe`, tell me a vibe session has no verify round, and that `/jam:verify` reviews the branch. Stop. If its `stage` is `done`, set `lastRound: false` and `stage: verify`, then go to **Resume**. Otherwise tell me the session is not done and stop.
 - **The session holds `session.json`, and I passed `-r`**: go to **Resume**.
-- **The session holds `session.json`**: tell me the session already exists, and to pass `-r` to resume it. Stop.
-- **I passed `-r`, `-v` or `-f`**: tell me the branch has no session. Stop.
-- **I passed `-p`, or the argument is a PR URL**: read `${CLAUDE_PLUGIN_ROOT}/skills/take/review.md` and go to its **New review session** section. A PR URL holds `/pull/`.
+- **The session holds `session.json`**: tell me the branch already has the live session `{session id}`. Tell me to pass `-r` to resume it, or to archive it on Jam Board to start a new one. Stop.
+- **I passed `-r`, `-v` or `-f`**: tell me the branch has no live session. Stop.
+- **I passed `-p`, or the argument is a PR URL**: read `${CLAUDE_PLUGIN_ROOT}/skills/take/review.md` and go to its **New review session** section.
 - **Anything else**: go to **New session**.
 
 When you go to **Resume** and the argument is not empty, tell me the session already exists and ignore the argument.
@@ -80,7 +85,7 @@ Show this list when a step says to show the usage:
 - `/jam:take <description | issue>`: start the branch's session from a description or a GitHub issue.
 - `/jam:take`: start the branch's session from what we discussed in this conversation.
 - `/jam:take <PR URL>` or `/jam:take -p [number]`: start a review session for a coworker's PR. Without a number, `-p` takes the current branch's PR.
-- `/jam:take -r`: resume the branch's session.
+- `/jam:take -r`: resume the branch's session. Add `-p` to resume the branch's review session.
 - `/jam:take -v`: run another verify round on the branch's done session.
 - `/jam:take -f` or `/jam:take --feedback`: import new feedback from the branch's open PR into a done build session; add `-i` to decide every remaining finding, including nits. Resume an interrupted import with `-r`.
 - `-a` or `-i` on any call: set the session's mode to `autonomous` or `interactive`.
@@ -97,8 +102,8 @@ Show this list when a step says to show the usage:
    - **An empty argument**: the request is what we discussed in this conversation. Write the goal, the decisions we made and the constraints. A reader who never saw the conversation must be able to act on it.
    - **An issue number, `#n` or an issue URL**: run `gh issue view {issue} --json number,title,body,url`. The request is the issue's title, URL and body.
    - **Anything else**: the request is the argument, verbatim.
-6. Create `request.md` with `write_file`, holding the request, as `state.md` shows.
-7. Create `session.json` with `write_file`, holding this worktree, the current branch and the base. Set `mode` from the flag, or `default` without one. Set `flow: build`, `stage: spec`, `round: 0`, `lastRound: false`, every count `0`, `blocked: null` and `archived: false`.
+6. Call `start_session` with `category: session` and HEAD as `head`, as `state.md` says. Pass `fields` with this worktree, the repo, the current branch and the base. Set `mode` from the flag, or `default` without one. Set `flow: build`, `stage: spec`, `round: 0`, `lastRound: false`, every count `0` and `blocked: null`. If the call fails with `exists`, tell me its message and stop. Use the returned `session` as the session id.
+7. Create `request.md` with `write_file`, holding the request, as `state.md` shows.
 8. Append a `request` line to `runs.jsonl` with `append_file` and `agent: "main"`. Set its `started` and `ended` to the current time. Set `durationMs: null`.
 9. Go to **Spec**.
 
@@ -129,7 +134,7 @@ Take the `started` time for `runs.jsonl`.
 If `list_files` lists `spec.md`:
 
 - **`autonomous`**: accept it.
-- **`default` or `interactive`**: show me its name, `factory:{org}/{repo}/{session id}/spec.md`, and ask me to approve it or ask for changes. Apply the changes with `edit_file` until I approve.
+- **`default` or `interactive`**: show me its name, `factory:{org}/{repo}/{branch}/{session id}/spec.md`, and ask me to approve it or ask for changes. Apply the changes with `edit_file` until I approve.
 
 Otherwise pick how to write it:
 
@@ -141,7 +146,7 @@ To brainstorm it with me, load `superpowers:brainstorming` with the **Skill** to
 
 - Start from the request in `request.md`. Read it with `read_file`.
 - Save the spec as `spec.md` with `write_file`, and change it with `edit_file`. Always write `spec.md`, including when the skill offers a bounded path.
-- Show me the spec as `factory:{org}/{repo}/{session id}/spec.md` where the skill shows its path.
+- Show me the spec as `factory:{org}/{repo}/{branch}/{session id}/spec.md` where the skill shows its path.
 - Never commit the spec. Never write under `docs/superpowers/`.
 - When I approve the spec, stop following the skill. Do not invoke `writing-plans` from it.
 
@@ -155,7 +160,7 @@ Take the `started` time for `runs.jsonl`.
 
 If `list_files` lists `plan.md`:
 
-- **`interactive`**: show me its name, `factory:{org}/{repo}/{session id}/plan.md`, and ask me to approve it or ask for changes. Apply the changes with `edit_file` until I approve.
+- **`interactive`**: show me its name, `factory:{org}/{repo}/{branch}/{session id}/plan.md`, and ask me to approve it or ask for changes. Apply the changes with `edit_file` until I approve.
 - **`default` or `autonomous`**: accept it.
 
 Otherwise load `superpowers:writing-plans` with the **Skill** tool, and follow it with these overrides:
@@ -178,7 +183,7 @@ Read `tasks.md` with `read_file`. Set every `failed` task back to `open` with `e
 Take the `started` time for `runs.jsonl`. Run the `jam:implementer` agent with the **Agent** tool. Pass it only:
 
 - the worktree
-- the session's `org`, `repo` and `session`, the session id
+- the session's `org`, `repo`, `branch` and `session`
 - the task's ID, title and text
 
 Pass nothing else from this conversation. Read the last line of its reply.
@@ -213,7 +218,7 @@ If `lastRound` is `true`, set `stage: done` and go to **Done**. Otherwise set `s
 If `list_files` lists `round-{round}/report.md` and not `round-{round}/triage.md`, the round's review is done. Skip to step 7.
 
 1. Run `git status --porcelain`. If it prints anything, list the files, set `stage: blocked` and `blocked: { "stage": "verify", "reason": "dirty worktree" }`, then stop.
-2. Add one to `round`. The run directory is `factory:{org}/{repo}/{session id}/round-{round}/`.
+2. Add one to `round`. The run directory is `factory:{org}/{repo}/{branch}/{session id}/round-{round}/`.
 3. The target is the range `{merge base}..HEAD`, where the merge base is `git merge-base {base} HEAD`. If the base branch is not local, use `{remote}/{base}`.
 4. Read `spec.md` with `read_file`. Write a problem statement from it, as Step 2 of `${CLAUDE_PLUGIN_ROOT}/skills/independent-reviewer/SKILL.md` describes. Keep only the problem and the intended behaviour. Cut the design.
 5. Read `${CLAUDE_PLUGIN_ROOT}/skills/verify/review.md` and follow its steps 1 to 3. Use the target, the run directory and the problem statement. Take the `started` time for `runs.jsonl` before each dispatch. When a reviewer returns, append a `review` line with `append_file`, the reviewer's name as `agent` and `file` set to its review file, such as `round-{round}/reviews/independent-review.md`. When `jam:report-writer` returns, append a `report` line.
@@ -238,7 +243,7 @@ Show me:
 - the commits, one line each, from `tasks.md`: short hash and subject
 - the tasks still `open` or `failed`
 - the deferred findings without an issue, from `deferred.md`
-- the session, as `factory:{org}/{repo}/{session id}/`
+- the session, as `factory:{org}/{repo}/{branch}/{session id}/`
 
 If any deferred finding has no issue, tell me that `/jam:gh-issue-create` opens one. Tell me to run `/jam:take -v` for another verify round. Remind me that the branch is ready for me to push, merge or open a PR.
 

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Runs lazygit on a session's worktree over a WebSocket on `GET /api/lazygit/<org>/<repo>/<id>`.
+//! Runs lazygit on a session's worktree over a WebSocket on `GET /api/lazygit/<org>/<repo>/<branch>/<id>`.
 
 use std::io::{self, Write};
 use std::net::TcpStream;
@@ -138,11 +138,11 @@ fn write_switch(stream: &mut TcpStream, key: &str) -> io::Result<()> {
 fn session_worktree(store: &dyn Store, target: &str) -> Result<PathBuf, String> {
     let segments = segments(target);
 
-    let ["", "api", "lazygit", org, repo, id] = segments.as_slice() else {
+    let ["", "api", "lazygit", org, repo, branch, id] = segments.as_slice() else {
         return Err("the path names no session".to_string());
     };
 
-    let session = session_ref(org, repo, id)
+    let session = session_ref([org, repo, branch, id])
         .and_then(|s| store.read_file(&s, SESSION_FILE))
         .map_err(|error| error.to_string())?;
 
@@ -264,7 +264,7 @@ mod tests {
     use crate::server::http::read_request;
 
     const TIMEOUT: Duration = Duration::from_secs(5);
-    const TARGET: &str = "/api/lazygit/o/stack/a";
+    const TARGET: &str = "/api/lazygit/o/stack/main/a";
 
     /// The program `sh -c script`.
     fn sh(script: &str) -> Program {
@@ -274,7 +274,7 @@ mod tests {
         }
     }
 
-    /// A store whose session `o/stack/a` has `dir` as its worktree.
+    /// A store whose session `o/stack/main/a` has `dir` as its worktree.
     fn store(dir: &Path) -> FakeStore {
         let store = FakeStore::default();
         let session = serde_json::json!({ "worktree": dir });
@@ -377,7 +377,7 @@ mod tests {
     #[test]
     fn is_upgrade_needs_get_lazygit_and_the_upgrade_header() {
         let upgrade = [("Upgrade", "WebSocket")];
-        let files = request("GET", "/api/files/o/stack/a", &upgrade);
+        let files = request("GET", "/api/files/o/stack/main/a", &upgrade);
 
         assert!(is_upgrade(&request("GET", TARGET, &upgrade)));
         assert!(!is_upgrade(&request("POST", TARGET, &upgrade)));
@@ -500,7 +500,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let program = sh("touch ran");
 
-        let target = "/api/lazygit/o/stack/b";
+        let target = "/api/lazygit/o/stack/main/b";
         let mut socket = connect(store(dir.path()), target, program.clone());
         let (code, reason) = close_of(&mut socket);
 

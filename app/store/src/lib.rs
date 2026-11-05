@@ -16,11 +16,12 @@
 
 pub mod error;
 pub mod files;
+pub mod migrate;
 pub mod name;
 pub mod root;
 pub mod sessions;
 
 pub use error::StoreError;
 pub use files::{FileRead, Store};
-pub use name::SessionRef;
-pub use sessions::{SessionEntry, SessionFilter};
+pub use name::{Category, SessionRef};
+pub use sessions::{SessionEntry, SessionFilter, Started};

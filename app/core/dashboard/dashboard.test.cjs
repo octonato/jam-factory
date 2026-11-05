@@ -164,8 +164,8 @@ function dashboard({ script = source, pageWidth = 1200, pageLeft = 0, splitterWi
   return { run, context, elements, window, calls, geometry }
 }
 
-const session = { org: 'org', repo: 'repo', id: 'session', dir: 'api/file/org/repo/session/', flow: 'build', stage: 'implement', round: 0 }
-const filesUrl = 'api/files/org/repo/session'
+const session = { org: 'org', repo: 'repo', branch: 'main', id: 'session', dir: 'api/file/org/repo/main/session/', flow: 'build', stage: 'implement', round: 0 }
+const filesUrl = 'api/files/org/repo/main/session'
 const response = (text, ok = true, { status = ok ? 200 : 500, headers = {} } = {}) => ({
   ok,
   status,
@@ -396,8 +396,8 @@ test('parallel Review time spans all runs and falls back to durations when any t
 
 test('loads sessions from the api in one call', async () => {
   const entries = [
-    { org: 'a', repo: 'a b%c', session: 's1', data: { repo: 'other', id: 'other', stage: 'implement' } },
-    { org: 'b', repo: 'repo', session: 's2', data: { stage: 'spec' } },
+    { org: 'a', repo: 'a b%c', branch: 'fix', session: 's1', category: 'walk', data: { repo: 'other', id: 'other', stage: 'implement' } },
+    { org: 'b', repo: 'repo', branch: 'main', session: 's2', category: 'session', data: { stage: 'spec' } },
   ]
   const app = dashboard({ fetcher: (url) => (url === 'api/sessions' ? sessionsReply(entries) : filesReply([])) })
   const { sessions, problems } = plain(await app.run('loadSessions()'))
@@ -405,35 +405,35 @@ test('loads sessions from the api in one call', async () => {
   assert.deepEqual(app.calls, ['api/sessions'])
   assert.deepEqual(problems, [])
   assert.deepEqual(
-    sessions.map(({ org, repo, id, dir, stage }) => ({ org, repo, id, dir, stage })),
+    sessions.map(({ org, repo, branch, id, category, dir, stage }) => ({ org, repo, branch, id, category, dir, stage })),
     [
-      { org: 'a', repo: 'a b%c', id: 's1', dir: 'api/file/a/a b%c/s1/', stage: 'implement' },
-      { org: 'b', repo: 'repo', id: 's2', dir: 'api/file/b/repo/s2/', stage: 'spec' },
+      { org: 'a', repo: 'a b%c', branch: 'fix', id: 's1', category: 'walk', dir: 'api/file/a/a b%c/fix/s1/', stage: 'implement' },
+      { org: 'b', repo: 'repo', branch: 'main', id: 's2', category: 'session', dir: 'api/file/b/repo/main/s2/', stage: 'spec' },
     ],
   )
 
   app.context.loaded = sessions
   await app.run('loadRuns(loaded[0].dir, ["runs.jsonl"])')
   await app.run('listFiles(loaded[0])')
-  assert.deepEqual(app.calls.slice(1), ['api/file/a/a%20b%25c/s1/runs.jsonl', 'api/files/a/a%20b%25c/s1'])
+  assert.deepEqual(app.calls.slice(1), ['api/file/a/a%20b%25c/fix/s1/runs.jsonl', 'api/files/a/a%20b%25c/fix/s1'])
 })
 
 test('lists a broken session as a problem', async () => {
   const entries = [
-    { org: 'a', repo: 'repo', session: 'broken', error: 'expected value at line 1 column 1' },
-    { org: 'a', repo: 'repo', session: 'fine', data: { flow: 'build', stage: 'spec' } },
-    { org: 'b', repo: 'repo', session: 'odd', data: { flow: 'build', stage: 'nope' } },
+    { org: 'a', repo: 'repo', branch: 'main', session: 'broken', category: 'session', error: 'expected value at line 1 column 1' },
+    { org: 'a', repo: 'repo', branch: 'main', session: 'fine', category: 'session', data: { flow: 'build', stage: 'spec' } },
+    { org: 'b', repo: 'repo', branch: 'main', session: 'odd', category: 'session', data: { flow: 'build', stage: 'nope' } },
   ]
   const app = dashboard({ fetcher: () => sessionsReply(entries) })
   const { sessions, problems } = plain(await app.run('loadSessions()'))
 
   assert.deepEqual(sessions.map((s) => s.id), ['fine', 'odd'])
-  assert.deepEqual(problems, ['a/repo/broken: expected value at line 1 column 1'])
+  assert.deepEqual(problems, ['a/repo/main/broken: expected value at line 1 column 1'])
 
   await app.run('poll()')
   const shown = app.elements.get('problems').innerHTML
-  assert.ok(shown.includes('<div>a/repo/broken: expected value at line 1 column 1</div>'), shown)
-  assert.ok(shown.includes('<div>b/repo/odd: unknown stage &#34;nope&#34;</div>'), shown)
+  assert.ok(shown.includes('<div>a/repo/main/broken: expected value at line 1 column 1</div>'), shown)
+  assert.ok(shown.includes('<div>b/repo/main/odd: unknown stage &#34;nope&#34;</div>'), shown)
   assert.equal(app.elements.get('status').textContent, '2 sessions')
 })
 
@@ -588,20 +588,23 @@ test('a diff fence with file headers draws a file through diff2html', () => {
 test('parses routes with the org', () => {
   const app = dashboard()
   assert.equal(app.run('parseRoute("#/")'), null)
-  assert.deepEqual(plain(app.run('parseRoute("#/org/a%20b%25c/s1")')), { org: 'org', repo: 'a b%c', id: 's1', path: null })
   assert.deepEqual(
-    plain(app.run('parseRoute("#/org/repo/s1/round-1/report.md")')),
-    { org: 'org', repo: 'repo', id: 's1', path: 'round-1/report.md' },
+    plain(app.run('parseRoute("#/org/a%20b%25c/fix/s1")')),
+    { org: 'org', repo: 'a b%c', branch: 'fix', id: 's1', path: null },
+  )
+  assert.deepEqual(
+    plain(app.run('parseRoute("#/org/repo/main/s1/round-1/report.md")')),
+    { org: 'org', repo: 'repo', branch: 'main', id: 's1', path: 'round-1/report.md' },
   )
 
-  app.context.session = { org: 'org', repo: 'a b%c', id: 's1' }
-  assert.equal(app.run('sessionHref(session)'), '#/org/a%20b%25c/s1')
-  assert.equal(app.run('fileHref(session, "round-1/report.md")'), '#/org/a%20b%25c/s1/round-1/report.md')
-  assert.equal(app.run('sessionHref(parseRoute(sessionHref(session)))'), '#/org/a%20b%25c/s1')
+  app.context.session = { org: 'org', repo: 'a b%c', branch: 'fix', id: 's1' }
+  assert.equal(app.run('sessionHref(session)'), '#/org/a%20b%25c/fix/s1')
+  assert.equal(app.run('fileHref(session, "round-1/report.md")'), '#/org/a%20b%25c/fix/s1/round-1/report.md')
+  assert.equal(app.run('sessionHref(parseRoute(sessionHref(session)))'), '#/org/a%20b%25c/fix/s1')
 })
 
 test('groups sessions by org and filters them', () => {
-  const at = (org, id, updated) => ({ ...session, org, id, dir: `api/file/${org}/repo/${id}/`, updated })
+  const at = (org, id, updated) => ({ ...session, org, id, dir: `api/file/${org}/repo/main/${id}/`, updated })
   const sessions = [at('b', 'b1', '2026-10-22T10:00:00Z'), at('a', 'a1', '2026-10-22T09:00:00Z'), at('a', 'a2', '2026-10-22T11:00:00Z')]
   const [b1, a1, a2] = sessions.map((s) => s.dir)
 
@@ -672,8 +675,8 @@ test('archive and open post to the api routes with the org', async () => {
   await app.run('archiveSession(session)')
   await app.run('openTool(session, "zed")')
   await new Promise(setImmediate)
-  assert.deepEqual(posts, ['api/archive/my%20org/a%20b%25c/s1', 'api/open/zed/my%20org/a%20b%25c/s1'])
-  assert.match(app.context.messages[0], /^Archive my org\/a b%c\/s1\?/)
+  assert.deepEqual(posts, ['api/archive/my%20org/a%20b%25c/main/s1', 'api/open/zed/my%20org/a%20b%25c/main/s1'])
+  assert.match(app.context.messages[0], /^Archive my org\/a b%c\/main\/s1\?/)
   assert.equal(app.context.location.hash, '#/')
 
   const failing = dashboard({ fetcher: () => response('zed is missing', false) })
@@ -681,7 +684,7 @@ test('archive and open post to the api routes with the org', async () => {
   failing.context.session = app.context.session
   failing.run('tell = async (message) => { messages.push(message) }')
   await failing.run('openTool(session, "zed")')
-  assert.deepEqual(failing.context.messages, ['Could not open my org/a b%c/s1 in Zed: zed is missing'])
+  assert.deepEqual(failing.context.messages, ['Could not open my org/a b%c/main/s1 in Zed: zed is missing'])
 })
 
 test('the archive action draws an archive box', () => {
@@ -742,7 +745,7 @@ test('other modified keys, an open dialog and the list page ignore the back keys
   assert.equal(press(app, '[', { metaKey: true }), false)
 })
 
-const editSession = { ...session, org: 'o', repo: 'r', id: 's', dir: 'api/file/o/r/s/' }
+const editSession = { ...session, org: 'o', repo: 'r', id: 's', dir: 'api/file/o/r/main/s/' }
 
 // Waits until the pending fetches and renders are done.
 const settle = () => new Promise(setImmediate)
@@ -760,7 +763,7 @@ function fileApi(files) {
   }
 
   const fetcher = (url, options = {}) => {
-    if (url === 'api/files/o/r/s') return filesReply(Object.keys(files))
+    if (url === 'api/files/o/r/main/s') return filesReply(Object.keys(files))
 
     const path = url.slice(editSession.dir.length)
     if (!Object.hasOwn(files, path)) return response('', false, { status: 404 })
@@ -892,7 +895,7 @@ test('Escape in the editor with changes puts them with If-Match, then shows the 
   press(app, 'Escape', {}, editor(app))
   await settle()
 
-  assert.deepEqual(api.puts, [{ url: 'api/file/o/r/s/spec.md', ifMatch: '"v1"', body: '# Edited\n' }])
+  assert.deepEqual(api.puts, [{ url: 'api/file/o/r/main/s/spec.md', ifMatch: '"v1"', body: '# Edited\n' }])
   assert.equal(api.files['spec.md'], '# Edited\n')
   assert.equal(app.run('editing'), null)
   assert.match(app.elements.get('view').innerHTML, /# Edited/)
@@ -1220,6 +1223,19 @@ test('classes sessions by flow', () => {
   assert.match(app.run('rowContent(session)'), /<span class="label"><span class="pill">implementation<\/span> /)
 })
 
+test('a row names its branch and run and shows the folder category', () => {
+  const app = dashboard()
+  app.context.session = { ...session, flow: 'walk', category: 'walk', id: 'walk-20261104-0912-3f00486', worktree: '/a/b/c/d' }
+  const row = app.run('rowContent(session)')
+
+  assert.match(row, /<span class="id">org\/repo\/main<\/span>/)
+  assert.match(row, /<span class="path">walk-20261104-0912-3f00486 · b\/c\/d<\/span>/)
+  assert.match(row, /<span class="pill">walk<\/span>/)
+
+  app.context.session = { ...session, category: 'review' }
+  assert.equal(app.run('sessionClass(session)'), 'review')
+})
+
 test('walk stops follow walk.json and the step files', () => {
   const app = dashboard()
   const stops = walkStops(app, walkSession('walk'), ['overview.md', 'walk.json', 'steps/01.md'])
@@ -1276,10 +1292,10 @@ test('a walk without walk.json shows only the overview', async () => {
     steps: [{ n: 1, title: 'A', summary: 'S' }, { n: 5, title: 'E', summary: null }],
   })
 
-  assert.equal(await app.run('loadWalk("api/file/o/r/s/", ["session.json"])'), null)
+  assert.equal(await app.run('loadWalk("api/file/o/r/main/s/", ["session.json"])'), null)
   assert.deepEqual(app.calls, [])
-  assert.equal(await app.run('loadWalk("api/file/o/r/s/", ["walk.json"])'), null)
-  assert.deepEqual(app.calls, ['api/file/o/r/s/walk.json'])
+  assert.equal(await app.run('loadWalk("api/file/o/r/main/s/", ["walk.json"])'), null)
+  assert.deepEqual(app.calls, ['api/file/o/r/main/s/walk.json'])
 
   app.context.session = walkSession('walk', 0, 0)
   const stops = plain(app.run('buildStops(session, ["request.md"], [], {}, null)'))
@@ -1448,7 +1464,7 @@ test('g on a session page runs lazygit in the pane', async () => {
 
   assert.ok(press(app, 'g'))
   assert.equal(sockets.length, 1)
-  assert.equal(sockets[0].url, 'ws://127.0.0.1:8731/api/lazygit/o/r/s?cols=100&rows=30')
+  assert.equal(sockets[0].url, 'ws://127.0.0.1:8731/api/lazygit/o/r/main/s?cols=100&rows=30')
   assert.equal(sockets[0].binaryType, 'arraybuffer')
 
   const [xterm] = terminals
@@ -1578,13 +1594,13 @@ test('a failed lazygit shows the reason', async () => {
   sockets[0].onclose({ code: 1011, reason: 'session has no worktree' })
   assert.equal(app.run('terminal'), null)
   assert.equal(app.elements.get('modal').open, true)
-  assert.equal(app.elements.get('modal-text').textContent, 'lazygit stopped for o/r/s: session has no worktree')
+  assert.equal(app.elements.get('modal-text').textContent, 'lazygit stopped for o/r/main/s: session has no worktree')
 
   closeModal(app, 'ok')
   await settle()
   press(app, 'g')
   sockets[1].onclose({ code: 1006, reason: '' })
-  assert.equal(app.elements.get('modal-text').textContent, 'lazygit stopped for o/r/s: the connection closed')
+  assert.equal(app.elements.get('modal-text').textContent, 'lazygit stopped for o/r/main/s: the connection closed')
 })
 
 test('a route change closes lazygit', async () => {

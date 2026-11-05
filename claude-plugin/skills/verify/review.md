@@ -5,7 +5,7 @@ This procedure reviews a target and writes the findings to `report.md` in the ru
 The run directory takes one of two forms:
 
 - A disk path, such as `.nogit/verify-20261022-101500/`. Read and write its files on disk.
-- `factory:{org}/{repo}/{session}/round-{N}/`, a round of a factory session. Read and write its files with the tools of the `jam-factory` server, as `${CLAUDE_PLUGIN_ROOT}/skills/take/state.md` says. `{run directory}/reviews/x.md` is the path `round-{N}/reviews/x.md` in that session.
+- `factory:{org}/{repo}/{branch}/{session}/round-{N}/`, a round of a factory session. Read and write its files with the tools of the `jam-factory` server, as `${CLAUDE_PLUGIN_ROOT}/skills/take/state.md` says. `{run directory}/reviews/x.md` is the path `round-{N}/reviews/x.md` in that session.
 
 Read nothing under `.nogit/` outside the run directory. For a `factory:` run directory, call the `jam-factory` tools only on files inside it.
 

@@ -252,11 +252,12 @@ fn transport_failed(error: &ServiceError) -> bool {
     )
 }
 
-/// The `org`, `repo` and `session` arguments that name `s`.
+/// The `org`, `repo`, `branch` and `session` arguments that name `s`.
 fn session_args(s: &SessionRef) -> Map<String, Value> {
     [
         ("org", s.org()),
         ("repo", s.repo()),
+        ("branch", s.branch()),
         ("session", s.session()),
     ]
     .into_iter()

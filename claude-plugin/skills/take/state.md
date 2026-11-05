@@ -6,10 +6,12 @@ The factory keeps all the state of one session in its session folder. The `jam-f
 
 Read and write the session's files only with the tools of the `jam-factory` server. Never use the **Read**, **Write** or **Edit** tool or the shell on them. Claude Code names the tools `mcp__plugin_jam_jam-factory__<tool>`.
 
-Each tool names the session with `org`, `repo` and `session`, the session id. A file tool adds `path`, relative to the session folder, such as `round-2/reviews/independent-review.md`.
+Each tool names the session with `org`, `repo`, `branch` and `session`. `branch` is the last segment of the branch name, such as `rate-limit` for `octonato/rate-limit`. `session` is the session id, such as `session-20261104-0912-3f00486`. A file tool adds `path`, relative to the session folder, such as `round-2/reviews/independent-review.md`.
 
 | Tool | What it does |
 |---|---|
+| `start_session` | Creates the session folder and its `session.json`, and returns the new `session` id. See **Start a session**. |
+| `list_sessions` | Lists sessions, each with `org`, `repo`, `branch`, `session`, `category` and its parsed `session.json` as `data`. Filters by `org`, `repo`, `branch` and `category`. Pass `include_archived: true` to list archived sessions too. |
 | `read_file` | Returns the file's `content` and its `version`. |
 | `list_files` | Returns the session's `files`, as relative paths. |
 | `write_file` | Writes the whole file. Leave out `expected_version` to create a file. Pass the current version as `expected_version` to replace one. |
@@ -23,19 +25,38 @@ Each tool names the session with `org`, `repo` and `session`, the session id. A 
 - The version is the SHA-256 of the file. Every write returns the new `version`.
 - `write_file` without `expected_version` fails with `exists` when the file exists.
 - A `conflict` error means the file changed since you read it. Re-read it, apply your change to the new content and retry.
-- Writes create the missing folders.
+- Writes create the missing folders inside the session. A write to a session that `start_session` did not create fails with `not_found`.
 - An error reply holds a `code`, a `message` and the `current_version` on a conflict.
 
 Re-read a file before you change it. I may have edited it by hand.
+
+## Start a session
+
+A branch holds one folder per session. The folder name is `{category}-{YYYYMMDD-HHMM}-{short sha}`, such as `review-20261104-0905-3f00486`. The prefix is the category:
+
+- `session`: a build or vibe session of `/jam:take` or `/jam:just-vibe`.
+- `review`: a review session of `/jam:take -p`.
+- `walk`: a walk of `/jam:walk-through`.
+
+Call `start_session` with `org`, `repo`, `branch`, `category`, `head` and `fields`:
+
+- `head`: the short sha of HEAD, from `git rev-parse --short HEAD`.
+- `fields`: the first fields of `session.json`. The tool adds `id`, `category`, `archived: false` and `updated`.
+
+It returns `org`, `repo`, `branch`, the new `session` id and the `version` of `session.json`. Use that `session` id for every later call.
+
+A branch holds at most one live `session` and one live `review`. A live session is one whose `session.json` does not hold `archived: true`. `start_session` fails with `exists` when the branch already holds a live session of the category, and its message names that session. A branch holds any number of walks.
+
+To find the live session of a category, call `list_sessions` with `org`, `repo`, `branch` and `category`. It lists at most one session for `session` and `review`.
 
 ## Layout
 
 The server keeps every session under its root: `root` in `~/.jam-factory/config.json`, or `~/.jam-factory/factory`.
 
-A file of a session is written `factory:{org}/{repo}/{session}/{path}`. On disk, it is `{root}/{org}/{repo}/sessions/{session}/{path}`. A run directory in a session is written `factory:{org}/{repo}/{session}/round-{N}/`.
+A file of a session is written `factory:{org}/{repo}/{branch}/{session}/{path}`. On disk, it is `{root}/{org}/{repo}/sessions/{branch}/{session}/{path}`. A run directory in a session is written `factory:{org}/{repo}/{branch}/{session}/round-{N}/`.
 
 ```
-{root}/{org}/{repo}/sessions/{id}/
+{root}/{org}/{repo}/sessions/{branch}/{session}/
   session.json
   request.md
   spec.md
@@ -68,11 +89,12 @@ A walk session writes only the files `skills/walk-through/state.md` lists.
 
 Only the factory skill writes it, with two exceptions. The dashboard's Archive button sets `archived` and `updated`. I may edit `mode` by hand.
 
-Create it once with `write_file`, with `updated` set to the current UTC time. After that, change it only with `update_session`. Pass only the fields that change. `update_session` replaces each field whole, merges `counts` per key and sets `updated`. To change `blocked` or `feedbackImport`, pass the whole object.
+Create it once with `start_session`, as **Start a session** says. After that, change it only with `update_session`. Pass only the fields that change. `update_session` replaces each field whole, merges `counts` per key and sets `updated`. To change `blocked` or `feedbackImport`, pass the whole object.
 
 ```json
 {
-  "id": "feature-1",
+  "id": "session-20261015-1402-3f00486",
+  "category": "session",
   "repo": "sdk",
   "worktree": "/Users/renato/Sources/akka/sdk/feature-1",
   "branch": "feature-1",
@@ -93,7 +115,9 @@ Create it once with `write_file`, with `updated` set to the current UTC time. Af
 }
 ```
 
-- `id`: the last segment of the branch.
+- `id`: the session folder name. `start_session` sets it.
+- `category`: `session` or `review`. `start_session` sets it.
+- `branch`: the full name of the branch the session runs on.
 - `repo`: the name of the worktree's parent folder.
 - `worktree`: an absolute path.
 - `mode`: `default`, `autonomous` or `interactive`. The skill's **Modes** section says when each one asks me something. A missing field means `default`.
