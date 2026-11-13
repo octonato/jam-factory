@@ -145,7 +145,7 @@ To list main checkouts on the Repos tab of Jam Board, set `repos` to a list of t
 }
 ```
 
-The Repos tab lists each checkout with its worktrees. A worktree's page lists its live sessions and runs a shell or lazygit in each tab. `jam-factory-server` reads `repos` on each request, so a change to `repos` needs no restart.
+The Repos tab lists each checkout with its linked worktrees. A worktree's page lists its live sessions and runs a shell or lazygit in each tab. `jam-factory-server` reads `repos` on each request, so a change to `repos` needs no restart.
 
 Restart `jam-factory-server` after you change `root` or `port`:
 

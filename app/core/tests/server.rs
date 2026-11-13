@@ -480,7 +480,6 @@ fn get_repos_lists_worktrees() {
                 "path": main,
                 "error": null,
                 "worktrees": [
-                    { "path": main, "branch": "main", "head": null },
                     { "path": linked, "branch": "feature", "head": null },
                 ],
             }],

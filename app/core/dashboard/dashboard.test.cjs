@@ -79,6 +79,9 @@ function dashboard({ script = source, pageWidth = 1200, pageLeft = 0, splitterWi
         contains: (name) => classes.has(name),
       },
       setPointerCapture: () => {},
+      focused: false,
+      focus: () => { el.focused = true },
+      blur: () => { el.focused = false },
       querySelector: () => null,
       querySelectorAll: () => [],
       closest: (selector) => (selector === `#${id}` ? el : el.parentElement?.closest(selector) ?? null),
@@ -143,12 +146,7 @@ function dashboard({ script = source, pageWidth = 1200, pageLeft = 0, splitterWi
     get: () => pageHtml,
     set(value) {
       pageHtml = value
-      if (!value.includes('class="session-page"')) {
-        this.firstElementChild = element('list')
-        return
-      }
-
-      this.firstElementChild = element('session-page')
+      this.firstElementChild = element(value.includes('class="session-page"') ? 'session-page' : 'list')
       for (const [, id] of value.matchAll(/ id="([^"]+)"/g)) {
         element(id).parentElement = this.firstElementChild
       }
@@ -663,12 +661,21 @@ async function reposApp(repos, sessions = [], hash = '#/') {
 }
 
 // Returns the checkout headers of the repos page, each with its class and its text.
-const repoHeaders = (app) => [...app.elements.get('page').innerHTML.matchAll(/<h2 class="([^"]*)">([\s\S]*?)<\/h2>/g)]
+const repoHeaders = (app) => [...app.elements.get('repo-list').innerHTML.matchAll(/<h2 class="([^"]*)">([\s\S]*?)<\/h2>/g)]
   .map((match) => ({ class: match[1], text: textOf(match[2]) }))
 
 // Returns the worktree rows of the repos page, each with its decoded link and its text.
-const worktreeRows = (app) => [...app.elements.get('page').innerHTML.matchAll(/<a class="body" href="([^"]*)">([\s\S]*?)<\/a>/g)]
+const worktreeRows = (app) => [...app.elements.get('repo-list').innerHTML.matchAll(/<a class="body" href="([^"]*)">([\s\S]*?)<\/a>/g)]
   .map((match) => ({ href: unescapeHtml(match[1]), text: textOf(match[2]) }))
+
+const listText = (app) => textOf(app.elements.get('repo-list').innerHTML)
+
+// Types `text` into the filter field of the repos page.
+function typeFilter(app, text) {
+  const field = app.elements.get('repo-filter')
+  field.value = text
+  field.dispatch('input')
+}
 
 test('the repos page lists checkouts and worktree links', async () => {
   const linked = "/s/akka/sdk/work tree's"
@@ -701,22 +708,22 @@ test('the repos page lists checkouts and worktree links', async () => {
   assert.ok(app.calls.includes('api/repos'))
   assert.deepEqual(plain(app.run('reposState')), repos)
   assert.deepEqual(repoHeaders(app), [
-    { class: 'org', text: 'akka/sdk /s/akka/sdk/main' },
-    { class: 'org', text: 'octonato/jam-factory /s/octonato/jam-factory/main' },
+    { class: 'org', text: 'akka/sdk akka/sdk/main' },
+    { class: 'org', text: 'octonato/jam-factory octonato/jam-factory/main' },
   ])
   assert.deepEqual(worktreeRows(app), [
-    { href: '#/worktree/%2Fs%2Fakka%2Fsdk%2Fmain', text: 'main /s/akka/sdk/main 2 sessions' },
-    { href: "#/worktree/%2Fs%2Fakka%2Fsdk%2Fwork%20tree's", text: "1234567 /s/akka/sdk/work tree's 1 session" },
-    { href: '#/worktree/%2Fs%2Foctonato%2Fjam-factory%2Fmain', text: 'fix/<b> /s/octonato/jam-factory/main 0 sessions' },
+    { href: '#/worktree/%2Fs%2Fakka%2Fsdk%2Fmain', text: 'main akka/sdk/main 2 sessions' },
+    { href: "#/worktree/%2Fs%2Fakka%2Fsdk%2Fwork%20tree's", text: "1234567 akka/sdk/work tree's 1 session" },
+    { href: '#/worktree/%2Fs%2Foctonato%2Fjam-factory%2Fmain', text: 'fix/<b> octonato/jam-factory/main 0 sessions' },
   ])
-  assert.doesNotMatch(app.elements.get('page').innerHTML, /<b>/)
+  assert.doesNotMatch(app.elements.get('repo-list').innerHTML, /<b>/)
 })
 
 test('the repos page explains an empty config', async () => {
   const app = await reposApp({ error: null, repos: [] })
 
-  assert.ok(pageText(app).includes('~/.jam-factory/config.json'), pageText(app))
-  assert.ok(pageText(app).includes('"repos"'), pageText(app))
+  assert.ok(listText(app).includes('~/.jam-factory/config.json'), listText(app))
+  assert.ok(listText(app).includes('"repos"'), listText(app))
   assert.deepEqual(worktreeRows(app), [])
 })
 
@@ -724,16 +731,102 @@ test('a checkout with an error is greyed with the reason', async () => {
   const repos = { error: null, repos: [{ org: 'o', repo: 'r', path: '/s/o/r/main', error: 'not a git repository', worktrees: [] }] }
   const app = await reposApp(repos)
 
-  assert.deepEqual(repoHeaders(app), [{ class: 'org error', text: 'o/r /s/o/r/main not a git repository' }])
+  assert.deepEqual(repoHeaders(app), [{ class: 'org error', text: 'o/r o/r/main not a git repository' }])
   assert.deepEqual(worktreeRows(app), [])
   assert.match(html, /\.org-group \.org\.error \{[^}]*color: var\(--muted\);/)
+})
+
+test('a checkout without worktrees says so', async () => {
+  const repos = { error: null, repos: [{ org: 'o', repo: 'r', path: '/s/o/r/main', error: null, worktrees: [] }] }
+  const app = await reposApp(repos)
+
+  assert.deepEqual(repoHeaders(app), [{ class: 'org', text: 'o/r o/r/main' }])
+  assert.equal(listText(app), 'o/r o/r/main No worktrees.')
+})
+
+const filterRepos = {
+  error: null,
+  repos: [
+    {
+      org: 'akka',
+      repo: 'sdk',
+      path: '/s/akka/sdk/main',
+      error: null,
+      worktrees: [
+        { path: '/s/akka/sdk/rate-limit', branch: 'rate-limit', head: null },
+        { path: '/s/akka/sdk/wt', branch: 'feature', head: null },
+      ],
+    },
+    { org: 'o', repo: 'r', path: '/s/o/r/main', error: null, worktrees: [{ path: '/s/o/r/feature', branch: 'feature', head: null }] },
+  ],
+}
+
+// Returns the texts of the worktree rows of the repos page.
+const rowTexts = (app) => worktreeRows(app).map((row) => row.text)
+
+test('the filter shows the worktrees whose short path or branch holds every word', async () => {
+  const app = await reposApp(filterRepos)
+
+  typeFilter(app, 'FEAT')
+  assert.deepEqual(rowTexts(app), ['feature akka/sdk/wt 0 sessions', 'feature o/r/feature 0 sessions'])
+  assert.deepEqual(repoHeaders(app).map((header) => header.text), ['akka/sdk akka/sdk/main', 'o/r o/r/main'])
+
+  typeFilter(app, 'sdk feat')
+  assert.deepEqual(rowTexts(app), ['feature akka/sdk/wt 0 sessions'])
+  assert.deepEqual(repoHeaders(app).map((header) => header.text), ['akka/sdk akka/sdk/main'])
+
+  typeFilter(app, '  ')
+  assert.deepEqual(rowTexts(app), [
+    'rate-limit akka/sdk/rate-limit 0 sessions',
+    'feature akka/sdk/wt 0 sessions',
+    'feature o/r/feature 0 sessions',
+  ])
+})
+
+test('a checkout whose name matches shows without a matching worktree', async () => {
+  const repos = { error: null, repos: [...filterRepos.repos, { org: 'akka', repo: 'docs', path: '/s/akka/docs/main', error: null, worktrees: [] }] }
+  const app = await reposApp(repos)
+
+  typeFilter(app, 'docs')
+  assert.deepEqual(repoHeaders(app), [{ class: 'org', text: 'akka/docs akka/docs/main' }])
+  assert.equal(listText(app), 'akka/docs akka/docs/main No worktrees.')
+})
+
+test('a filter that hides everything says so', async () => {
+  const app = await reposApp(filterRepos)
+
+  typeFilter(app, 'zzz')
+  assert.equal(listText(app), 'No worktree matches.')
+})
+
+test('a poll keeps the filter field', async () => {
+  const app = await reposApp(filterRepos)
+  const field = app.elements.get('repo-filter')
+
+  typeFilter(app, 'sdk')
+  await app.run('poll()')
+  assert.equal(app.elements.get('repo-filter'), field)
+  assert.equal(field.value, 'sdk')
+  assert.deepEqual(rowTexts(app), ['rate-limit akka/sdk/rate-limit 0 sessions', 'feature akka/sdk/wt 0 sessions'])
+})
+
+test('the filter survives leaving and returning', async () => {
+  const app = await reposApp(filterRepos)
+  typeFilter(app, 'sdk')
+
+  navigate(app, worktreeHashOf('/s/akka/sdk/wt'))
+  assert.match(app.elements.get('page').innerHTML, /id="worktree-card"/)
+
+  navigate(app, '#/')
+  assert.equal(app.elements.get('repo-filter').value, 'sdk')
+  assert.deepEqual(rowTexts(app), ['rate-limit akka/sdk/rate-limit 0 sessions', 'feature akka/sdk/wt 0 sessions'])
 })
 
 test('a config error is shown', async () => {
   const app = await reposApp({ error: 'bad', repos: [] })
 
-  assert.match(pageText(app), /\bbad\b/)
-  assert.doesNotMatch(pageText(app), /config\.json/)
+  assert.match(listText(app), /\bbad\b/)
+  assert.doesNotMatch(listText(app), /config\.json/)
 })
 
 test('a failed repos fetch keeps the sessions and shows the failure', async () => {
@@ -743,7 +836,7 @@ test('a failed repos fetch keeps the sessions and shows the failure', async () =
   await app.run('poll()')
 
   assert.equal(app.elements.get('status').textContent, '1 sessions')
-  assert.match(pageText(app), /500 api\/repos/)
+  assert.match(listText(app), /500 api\/repos/)
 })
 
 test('sessions match a worktree with or without a trailing slash', () => {
@@ -942,6 +1035,140 @@ test('other modified keys, an open dialog, the list and the repos page ignore th
   app.context.location.hash = '#/'
   assert.equal(press(app, 'Escape'), false)
   assert.equal(press(app, 'l'), false)
+})
+
+const [pathA, pathB, pathC] = ['/s/akka/sdk/alpha', '/s/akka/sdk/beta', '/s/o/r/gamma']
+const selectRepos = {
+  error: null,
+  repos: [
+    {
+      org: 'akka',
+      repo: 'sdk',
+      path: '/s/akka/sdk/main',
+      error: null,
+      worktrees: [
+        { path: pathA, branch: 'alpha', head: null },
+        { path: pathB, branch: 'beta', head: null },
+      ],
+    },
+    { org: 'o', repo: 'r', path: '/s/o/r/main', error: null, worktrees: [{ path: pathC, branch: 'gamma', head: null }] },
+  ],
+}
+
+// Returns the decoded links of the outlined worktree rows of the repos page.
+const selectedRows = (app) => [...app.elements.get('repo-list').innerHTML.matchAll(/<div class="row worktree selected">\s*<a class="body" href="([^"]*)">/g)]
+  .map((match) => unescapeHtml(match[1]))
+
+test('arrow keys move the worktree selection across checkouts and stop at the ends', async () => {
+  const app = await reposApp(selectRepos)
+
+  for (const path of [pathA, pathB, pathC, pathC]) {
+    assert.ok(press(app, 'ArrowDown'))
+    assert.equal(app.run('selectedWorktree'), path)
+    assert.deepEqual(selectedRows(app), [worktreeHashOf(path)])
+  }
+
+  assert.ok(press(app, 'ArrowUp'))
+  assert.equal(app.run('selectedWorktree'), pathB)
+  assert.deepEqual(selectedRows(app), [worktreeHashOf(pathB)])
+
+  const fresh = await reposApp(selectRepos)
+  assert.ok(press(fresh, 'ArrowUp'))
+  assert.equal(fresh.run('selectedWorktree'), pathC)
+  assert.deepEqual(selectedRows(fresh), [worktreeHashOf(pathC)])
+})
+
+test('Enter opens the selected worktree', async () => {
+  const app = await reposApp(selectRepos)
+
+  assert.equal(press(app, 'Enter'), false)
+  assert.equal(app.context.location.hash, '#/')
+
+  press(app, 'ArrowDown')
+  assert.ok(press(app, 'Enter'))
+  assert.equal(app.context.location.hash, worktreeHashOf(pathA))
+})
+
+test('a filtered-out or removed worktree loses the selection', async () => {
+  const repos = plain(selectRepos)
+  const app = await reposApp(repos)
+
+  press(app, 'ArrowDown')
+  press(app, 'ArrowDown')
+  assert.equal(app.run('selectedWorktree'), pathB)
+  typeFilter(app, 'alpha')
+  assert.equal(app.run('selectedWorktree'), null)
+  assert.deepEqual(selectedRows(app), [])
+
+  typeFilter(app, '')
+  press(app, 'ArrowDown')
+  assert.equal(app.run('selectedWorktree'), pathA)
+  repos.repos[0].worktrees.shift()
+  await app.run('poll()')
+  assert.equal(app.run('selectedWorktree'), null)
+  assert.deepEqual(selectedRows(app), [])
+})
+
+test('a poll keeps the selection', async () => {
+  const app = await reposApp(selectRepos)
+  press(app, 'ArrowDown')
+  press(app, 'ArrowDown')
+
+  await app.run('poll()')
+  assert.equal(app.run('selectedWorktree'), pathB)
+  assert.deepEqual(selectedRows(app), [worktreeHashOf(pathB)])
+})
+
+test('slash focuses the filter', async () => {
+  const app = await reposApp(selectRepos)
+
+  assert.ok(press(app, '/'))
+  assert.equal(app.elements.get('repo-filter').focused, true)
+})
+
+test('keys in the filter field', async () => {
+  const app = await reposApp(selectRepos)
+  const field = app.elements.get('repo-filter')
+
+  field.focus()
+  assert.ok(press(app, 'ArrowDown', {}, field))
+  assert.equal(field.focused, false)
+  assert.equal(app.run('selectedWorktree'), pathA)
+
+  field.focus()
+  for (const key of ['t', 'l']) assert.equal(press(app, key, {}, field), false, `${key} is text`)
+  assert.equal(field.focused, true)
+  assert.equal(app.run('selectedWorktree'), pathA)
+  assert.equal(app.context.location.hash, '#/')
+
+  assert.ok(press(app, 'Escape', {}, field))
+  assert.equal(field.focused, false)
+  assert.equal(app.context.location.hash, '#/')
+
+  press(app, 'ArrowDown')
+  field.focus()
+  assert.ok(press(app, 'Enter', {}, field))
+  assert.equal(field.focused, false)
+  assert.equal(app.context.location.hash, worktreeHashOf(pathB))
+
+  const fresh = await reposApp(selectRepos)
+  const freshField = fresh.elements.get('repo-filter')
+  freshField.focus()
+  assert.ok(press(fresh, 'Enter', {}, freshField))
+  assert.equal(freshField.focused, false)
+  assert.equal(fresh.run('selectedWorktree'), pathA)
+  assert.equal(fresh.context.location.hash, worktreeHashOf(pathA))
+})
+
+test('a back key on a worktree page selects it on the repos page', async () => {
+  const app = await reposApp(selectRepos, [], worktreeHashOf(pathB))
+
+  assert.ok(press(app, 'Escape'))
+  assert.equal(app.context.location.hash, '#/')
+  assert.equal(app.run('selectedWorktree'), pathB)
+
+  app.window.dispatch('hashchange')
+  assert.deepEqual(selectedRows(app), [worktreeHashOf(pathB)])
 })
 
 const editSession = { ...session, org: 'o', repo: 'r', id: 's', dir: 'api/file/o/r/main/s/' }
@@ -2059,13 +2286,27 @@ test('the worktree page lists its sessions as links', async () => {
   ])
 
   const card = app.elements.get('worktree-card').innerHTML
-  assert.equal(textOf(card), "o/r /s/o/r/work tree's feature")
+  assert.equal(textOf(card), "o/r o/r/work tree's feature")
   assert.deepEqual([...card.matchAll(/data-action="([^"]*)"/g)].map((match) => match[1]), ['lazygit', 'iterm', 'zed', 'intellij', 'github'])
   assert.match(app.elements.get('page').innerHTML, /<div class="session-bar" id="worktree-card"><\/div>[\s\S]*<div id="splitter"><\/div>/)
   assert.match(app.elements.get('term-tabs').innerHTML, /<button type="button" class="term-add" data-term="add" title="[^"]*">\+<\/button>/)
 
   navigate(app, worktreeHashOf(mainPath))
   assert.deepEqual(links(), [{ href: '#/o/r/main/s3', text: 's3 build implement' }])
+})
+
+test('the worktree buttons show their keys', async () => {
+  const { app } = await worktreeApp()
+
+  const card = app.elements.get('worktree-card').innerHTML
+  assert.deepEqual([...card.matchAll(/data-action="([^"]*)" title="([^"]*)"/g)].map((match) => `${match[1]}: ${match[2]}`), [
+    'lazygit: Open lazygit in a tab (g)',
+    'iterm: Open in iTerm',
+    'zed: Open in Zed (e)',
+    'intellij: Open in IntelliJ (i)',
+    'github: Open on GitHub (o)',
+  ])
+  assert.match(app.elements.get('term-tabs').innerHTML, /<button type="button" class="term-add" data-term="add" title="Open a shell \(t\)">\+<\/button>/)
 })
 
 test('plus opens a shell tab on the terminal route', async () => {
@@ -2222,12 +2463,12 @@ test('the repos page counts open terminals', async () => {
 
   navigate(app, '#/')
   assert.deepEqual(worktreeRows(app).map((row) => row.text), [
-    'main /s/o/r/main 0 sessions',
-    "feature /s/o/r/work tree's 0 sessions · ▣ 2",
+    'main o/r/main 0 sessions',
+    "feature o/r/work tree's 0 sessions · ▣ 2",
   ])
 
   sockets[0].onclose({ code: 1000, reason: '' })
-  assert.equal(worktreeRows(app)[1].text, "feature /s/o/r/work tree's 0 sessions · ▣ 1")
+  assert.equal(worktreeRows(app)[1].text, "feature o/r/work tree's 0 sessions · ▣ 1")
 })
 
 test('card buttons post to the worktree open route', async () => {
@@ -2283,7 +2524,7 @@ test('a config error keeps the terminal tabs and shows the error', async () => {
   assert.deepEqual(shownTerms(app), [first.el])
   assert.equal(terminals[0].focused, true)
   assert.equal(sockets[0].closed, false)
-  assert.equal(textOf(card()), "o/r /s/o/r/work tree's feature")
+  assert.equal(textOf(card()), "o/r o/r/work tree's feature")
 })
 
 test('a removed worktree keeps its open tabs reachable and closable', async () => {
@@ -2340,4 +2581,268 @@ test('a font size change resizes the worktree terminals', async () => {
   app.run('stepFontSize(1)')
   assert.equal(terminals[0].options.fontSize, Math.round((18 + 1) * 0.8))
   assert.deepEqual(sockets[0].sent, ['{"cols":120,"rows":36}'])
+})
+
+test('Shift+Cmd+K zooms the worktree terminal in and Shift+Cmd+J zooms it out', async () => {
+  for (const [zoomIn, zoomOut] of [['K', 'J'], ['k', 'j']]) {
+    for (const inside of [true, false]) {
+      const { app, terminals } = await worktreeApp()
+      clickTab(app, 'add')
+      const [xterm] = terminals
+      const page = app.elements.get('session-page')
+      const target = inside ? xterm.element : undefined
+      const fits = xterm.fits
+
+      xterm.blur()
+      assert.ok(press(app, zoomIn, zoomKeys, target), `${zoomIn} is taken`)
+      assert.equal(page.classList.contains('zoomed'), true)
+      assert.equal(xterm.fits, fits + 1)
+      assert.equal(xterm.focused, true)
+
+      xterm.blur()
+      assert.ok(press(app, zoomOut, zoomKeys, target), `${zoomOut} is taken`)
+      assert.equal(page.classList.contains('zoomed'), false)
+      assert.equal(xterm.fits, fits + 2)
+      assert.equal(xterm.focused, true)
+    }
+  }
+})
+
+test('the zoom keys do nothing on a worktree page without tabs', async () => {
+  const { app } = await worktreeApp()
+  const page = app.elements.get('session-page')
+
+  assert.equal(press(app, 'K', zoomKeys), false)
+  assert.equal(page.classList.contains('zoomed'), false)
+})
+
+test('closing a tab keeps the zoom until the last one', async () => {
+  const { app } = await worktreeApp()
+  clickTab(app, 'add')
+  clickTab(app, 'add')
+  const [first, second] = tabsOf(app)
+  const page = app.elements.get('session-page')
+  assert.ok(press(app, 'K', zoomKeys))
+
+  clickTab(app, 'close', second.id)
+  assert.equal(page.classList.contains('zoomed'), true)
+  assert.deepEqual(shownTerms(app), [first.el])
+
+  clickTab(app, 'close', first.id)
+  assert.equal(page.classList.contains('zoomed'), false)
+})
+
+test('worktree terminals keep the zoom keys', async () => {
+  const { app, terminals } = await worktreeApp()
+  clickTab(app, 'add')
+  const { key } = terminals[0].handlers
+  const event = (name, modifiers = {}) => ({ key: name, metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, ...modifiers })
+
+  for (const name of ['K', 'k', 'J', 'j']) assert.equal(key(event(name, zoomKeys)), false, `${name} stays out of the terminal`)
+  assert.equal(key(event('k')), true)
+})
+
+test('leaving the worktree page drops the zoom', async () => {
+  const { app } = await worktreeApp()
+  clickTab(app, 'add')
+  assert.ok(press(app, 'K', zoomKeys))
+  assert.equal(app.elements.get('session-page').classList.contains('zoomed'), true)
+
+  navigate(app, '#/')
+  navigate(app, worktreeHashOf(worktreePath))
+  assert.equal(app.elements.get('session-page').classList.contains('zoomed'), false)
+})
+
+test('the zoom keys leave a parked worktree terminal alone on another page', async () => {
+  const { app, terminals } = await worktreeApp()
+  clickTab(app, 'add')
+  navigate(app, '#/')
+  terminals[0].blur()
+
+  assert.equal(press(app, 'K', zoomKeys), false)
+  assert.equal(terminals[0].focused, false)
+})
+
+// Returns `worktreeApp()` on the repos page with `worktreePath` selected.
+async function selectedWorktreeApp() {
+  const stubs = await worktreeApp()
+  const { app } = stubs
+  navigate(app, '#/')
+
+  const index = Array.from(app.run('shownWorktrees()')).findIndex(({ worktree }) => worktree.path === worktreePath)
+  for (let i = 0; i <= index; i += 1) press(app, 'ArrowDown')
+  assert.equal(app.run('selectedWorktree'), worktreePath)
+  return stubs
+}
+
+test('o, i and e post to the worktree open route and stay on the repos page', async () => {
+  const { app, posts, sockets } = await selectedWorktreeApp()
+
+  for (const key of ['o', 'i', 'e']) assert.ok(press(app, key), `${key} is taken`)
+  await settle()
+  assert.deepEqual(posts, ['github', 'intellij', 'zed'].map((tool) => `api/open/${tool}?path=${encodedWorktree}`))
+  assert.equal(app.context.location.hash, '#/')
+  assert.equal(sockets.length, 0)
+})
+
+test('t opens the worktree page with one shell', async () => {
+  const { app, sockets, terminals } = await selectedWorktreeApp()
+
+  assert.ok(press(app, 't'))
+  assert.equal(app.context.location.hash, worktreeHashOf(worktreePath))
+  assert.equal(sockets.length, 1)
+  assert.equal(sockets[0].url, `ws://127.0.0.1:8731/api/terminal?path=${encodedWorktree}&program=shell&cols=100&rows=30`)
+  assert.deepEqual(tabNames(app), ['shell 1*'])
+  assert.equal(terminals[0].focused, true)
+
+  assert.ok(press(app, 'Escape'))
+  app.window.dispatch('hashchange')
+  assert.ok(press(app, 't'))
+  assert.equal(app.context.location.hash, worktreeHashOf(worktreePath))
+  assert.equal(sockets.length, 1)
+  assert.deepEqual(tabNames(app), ['shell 1*'])
+})
+
+test('t keeps the active shell', async () => {
+  const { app } = await selectedWorktreeApp()
+  press(app, 't')
+  clickTab(app, 'add')
+  const [, second] = tabsOf(app)
+  clickTab(app, 'select', second.id)
+
+  navigate(app, '#/')
+  assert.ok(press(app, 't'))
+  assert.deepEqual(tabNames(app), ['shell 1', 'shell 2*'])
+})
+
+test('t with only lazygit open opens a shell', async () => {
+  const { app } = await selectedWorktreeApp()
+
+  assert.ok(press(app, 'g'))
+  assert.ok(press(app, 't'))
+  assert.deepEqual(tabNames(app), ['lazygit', 'shell 1*'])
+  assert.deepEqual(tabsOf(app).map((tab) => tab.program), ['lazygit', 'shell'])
+})
+
+test('g opens lazygit once', async () => {
+  const { app, sockets } = await selectedWorktreeApp()
+
+  assert.ok(press(app, 'g'))
+  assert.ok(press(app, 'g'))
+  assert.equal(sockets.length, 1)
+  assert.equal(sockets[0].url, `ws://127.0.0.1:8731/api/terminal?path=${encodedWorktree}&program=lazygit&cols=100&rows=30`)
+  assert.deepEqual(tabNames(app), ['lazygit*'])
+})
+
+test('t opens a new shell beside a failed one', async () => {
+  const { app, sockets } = await selectedWorktreeApp()
+  assert.ok(press(app, 't'))
+  sockets[0].onclose({ code: 1006, reason: '' })
+
+  navigate(app, '#/')
+  assert.ok(press(app, 't'))
+  assert.equal(sockets.length, 2)
+  assert.deepEqual(tabNames(app), ['shell 1!', 'shell 2*'])
+})
+
+test('g opens a new lazygit beside a failed one', async () => {
+  const { app, sockets } = await selectedWorktreeApp()
+  assert.ok(press(app, 'g'))
+  sockets[0].onclose({ code: 1006, reason: '' })
+
+  navigate(app, '#/')
+  assert.ok(press(app, 'g'))
+  assert.equal(sockets.length, 2)
+  assert.deepEqual(tabNames(app), ['lazygit!', 'lazygit*'])
+})
+
+test('the worktree keys work on a worktree page', async () => {
+  const { app, posts } = await worktreeApp()
+
+  assert.ok(press(app, 'o'))
+  await settle()
+  assert.deepEqual(posts, [`api/open/github?path=${encodedWorktree}`])
+
+  assert.ok(press(app, 't'))
+  assert.equal(app.context.location.hash, worktreeHashOf(worktreePath))
+  assert.deepEqual(tabNames(app), ['shell 1*'])
+})
+
+test('the action keys need a selection', async () => {
+  const { app, posts, sockets } = await worktreeApp()
+  navigate(app, '#/')
+
+  assert.equal(app.run('selectedWorktree'), null)
+  for (const key of ['t', 'o']) assert.equal(press(app, key), false, `${key} needs a selection`)
+  await settle()
+  assert.deepEqual(posts, [])
+  assert.equal(sockets.length, 0)
+  assert.equal(app.context.location.hash, '#/')
+})
+
+test('the action keys do nothing on an unknown worktree page', async () => {
+  const { app, posts, sockets } = await worktreeApp('/s/o/r')
+
+  for (const key of ['t', 'g', 'o']) assert.equal(press(app, key), false, `${key} needs a configured worktree`)
+  await settle()
+  assert.deepEqual(posts, [])
+  assert.equal(sockets.length, 0)
+  assert.equal(app.context.location.hash, worktreeHashOf('/s/o/r'))
+
+  assert.ok(press(app, 'Escape'))
+  assert.equal(app.context.location.hash, '#/')
+})
+
+test("the worktree card's lazygit button still opens a new tab", async () => {
+  const { app, sockets } = await worktreeApp()
+
+  clickCard(app, 'lazygit')
+  clickCard(app, 'lazygit')
+  assert.equal(sockets.length, 2)
+  assert.deepEqual(tabNames(app), ['lazygit', 'lazygit*'])
+})
+
+const worktreeSession = { ...session, org: 'o', repo: 'r', id: 's1', dir: 'api/file/o/r/main/s1/', worktree: worktreePath }
+
+// Goes from `from` to the page of `worktreeSession` and returns the hash a back key then sets.
+async function backFromSession(app, from) {
+  navigate(app, from)
+  navigate(app, '#/o/r/main/s1')
+  await settle()
+
+  assert.ok(press(app, 'Escape'))
+  return app.context.location.hash
+}
+
+test('a back key on a session opened from a worktree page returns to it', async () => {
+  const { app } = await worktreeApp(worktreePath, [worktreeSession])
+  navigate(app, '#/o/r/main/s1')
+  await settle()
+
+  assert.ok(press(app, 'Escape'))
+  assert.equal(app.context.location.hash, worktreeHashOf(worktreePath))
+  assert.equal(app.run('selectedDir'), worktreeSession.dir)
+})
+
+test('a file of that session keeps the origin', async () => {
+  const { app } = await worktreeApp(worktreePath, [worktreeSession])
+  navigate(app, '#/o/r/main/s1')
+  await settle()
+  navigate(app, '#/o/r/main/s1/spec.md')
+  await settle()
+
+  assert.ok(press(app, 'Escape'))
+  assert.equal(app.context.location.hash, worktreeHashOf(worktreePath))
+})
+
+test('a session opened elsewhere returns to the sessions tab', async () => {
+  const { app } = await worktreeApp(worktreePath, [worktreeSession])
+
+  assert.equal(await backFromSession(app, '#/sessions'), '#/sessions')
+  assert.equal(await backFromSession(app, '#/'), '#/sessions')
+
+  navigate(app, worktreeHashOf(worktreePath))
+  navigate(app, '#/o/r/main/s1')
+  await settle()
+  assert.equal(await backFromSession(app, '#/sessions'), '#/sessions')
 })

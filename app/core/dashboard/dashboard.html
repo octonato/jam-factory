@@ -159,6 +159,20 @@
   .org-filter button:hover { border-color: var(--accent); }
   .org-filter button[aria-pressed="true"] { color: var(--ink); border-color: var(--accent); }
 
+  .repo-filter {
+    display: block;
+    width: 100%;
+    margin-bottom: 16px;
+    padding: 6px 10px;
+    color: var(--ink-2);
+    font: inherit;
+    font-size: 0.857rem;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    appearance: none;
+  }
+
   .org-group + .org-group { margin-top: 24px; }
 
   .org-group .org {
@@ -187,7 +201,8 @@
 
   .row:has(> a.body:hover) { border-color: var(--accent); border-left-color: var(--tone, var(--accent)); }
 
-  .row.card.selected {
+  .row.card.selected,
+  .row.worktree.selected {
     outline: 2px solid var(--ink-2);
     outline-offset: 3px;
   }
@@ -310,6 +325,8 @@
   .session-page.zoomed .session-bar,
   .session-page.zoomed #metro-pane,
   .session-page.zoomed #splitter,
+  .session-page.zoomed #worktree-sessions,
+  .session-page.zoomed .term-tabs,
   .session-page.zoomed .viewer-head {
     display: none;
   }
@@ -958,14 +975,15 @@ const CARD_ACTIONS = [
   { action: 'archive', title: 'Archive (a)', icon: ACTION_ICONS.archive },
 ]
 const WORKTREE_ACTIONS = [
-  { action: 'lazygit', title: 'Open lazygit in a tab', icon: ACTION_ICONS.lazygit },
+  { action: 'lazygit', title: 'Open lazygit in a tab (g)', icon: ACTION_ICONS.lazygit },
   { action: 'iterm', title: 'Open in iTerm', icon: ACTION_ICONS.iterm },
-  { action: 'zed', title: 'Open in Zed', icon: ACTION_ICONS.zed },
-  { action: 'intellij', title: 'Open in IntelliJ', icon: ACTION_ICONS.intellij },
-  { action: 'github', title: 'Open on GitHub', icon: ACTION_ICONS.github },
+  { action: 'zed', title: 'Open in Zed (e)', icon: ACTION_ICONS.zed },
+  { action: 'intellij', title: 'Open in IntelliJ (i)', icon: ACTION_ICONS.intellij },
+  { action: 'github', title: 'Open on GitHub (o)', icon: ACTION_ICONS.github },
 ]
 const TOOL_LABELS = { intellij: 'IntelliJ', zed: 'Zed', iterm: 'iTerm', github: 'GitHub' }
 const ACTION_KEYS = { a: 'archive', t: 'iterm', e: 'zed', i: 'intellij', o: 'github', g: 'lazygit' }
+const WORKTREE_KEYS = { o: 'github', i: 'intellij', e: 'zed', g: 'lazygit', t: 'shell' }
 const BACK_KEYS = ['l', 'Escape', 'Meta+[']
 const TABS = [
   { kind: 'repos', label: 'Repos', href: '#/' },
@@ -985,7 +1003,7 @@ const state = { sessions: [], problems: [], failedChecks: [] }
 let reposState = null
 let tabsHtml = ''
 let listView = { html: '', el: null }
-let reposView = { html: '', el: null }
+let reposView = { el: null, list: '' }
 let sessionView = { dir: null, el: null, card: '', metro: '', head: '', stops: [], selected: -1 }
 let worktreeView = { path: null, el: null, card: '', sessions: '', tabs: '' }
 let lastView = { key: null, path: null, text: null, version: null }
@@ -999,7 +1017,11 @@ let renderSeq = 0
 let fontSize = FONT_DEFAULT
 let leftWidth = null
 let selectedDir = null
+// The hash a back key on the session page goes to.
+let sessionOrigin = '#/sessions'
+let selectedWorktree = null
 let orgFilter = null
+let repoFilter = ''
 let pendingDiffs = []
 
 function escape(text) {
@@ -1443,23 +1465,23 @@ function onCardAction(event) {
   runAction(session, button.dataset.action)
 }
 
-// Returns the row of `worktree`: a link to its page with its branch or short sha, its path, its session count and its open terminal count.
-function worktreeRowHtml(worktree) {
+// Returns the row of `worktree`, outlined when `selected`: a link to its page with its branch or short sha, its short path, its session count and its open terminal count.
+function worktreeRowHtml(worktree, selected) {
   const count = sessionsOf(worktree.path).length
   const terms = worktreeTerms.get(worktree.path)?.tabs.length ?? 0
   const termCount = terms > 0 ? ` · ▣ ${terms}` : ''
   return `
-    <div class="row worktree">
+    <div class="row worktree${selected ? ' selected' : ''}">
       <a class="body" href="${escape(worktreeHash(worktree.path))}">
-        <span class="name"><span class="id">${escape(worktree.branch ?? worktree.head ?? '')}</span> <span class="path">${escape(worktree.path)}</span></span>
+        <span class="name"><span class="id">${escape(worktree.branch ?? worktree.head ?? '')}</span> <span class="path">${escape(shortPath(worktree.path))}</span></span>
         <span class="label">${count} ${count === 1 ? 'session' : 'sessions'}${termCount}</span>
       </a>
     </div>`
 }
 
-// Returns the checkout `repo` under a header with its name and path, greyed with its error and no rows when it has one.
-function repoGroupHtml(repo) {
-  const name = `${escape(`${repo.org}/${repo.repo}`)} <span class="path">${escape(repo.path)}</span>`
+// Returns the checkout `repo` under a header with its name and short path, then the rows of `worktrees` or `No worktrees.`. A checkout with an error is greyed with its error and has no rows.
+function repoGroupHtml(repo, worktrees) {
+  const name = `${escape(`${repo.org}/${repo.repo}`)} <span class="path">${escape(shortPath(repo.path))}</span>`
   if (repo.error !== null) {
     return `
       <section class="org-group">
@@ -1467,27 +1489,95 @@ function repoGroupHtml(repo) {
       </section>`
   }
 
+  const rows = worktrees.length > 0
+    ? `<div class="rows">${worktrees.map((worktree) => worktreeRowHtml(worktree, worktree.path === selectedWorktree)).join('')}</div>`
+    : '<p class="empty">No worktrees.</p>'
   return `
     <section class="org-group">
       <h2 class="org">${name}</h2>
-      <div class="rows">${repo.worktrees.map(worktreeRowHtml).join('')}</div>
+      ${rows}
     </section>`
 }
 
-// Returns the body of the repos page: the config error, the help for an empty config, or one group per checkout.
+// Returns the lowercased words of `query`.
+function filterWords(query) {
+  return query.toLowerCase().split(/\s+/).filter((word) => word !== '')
+}
+
+// Returns true when `text`, lowercased, holds every one of `words`.
+function holdsWords(text, words) {
+  const lower = text.toLowerCase()
+  return words.every((word) => lower.includes(word))
+}
+
+// Returns the checkouts the filter shows, in config order, each with its shown worktrees.
+function shownRepos() {
+  const words = filterWords(repoFilter)
+  return (reposState?.repos ?? []).flatMap((repo) => {
+    const worktrees = repo.worktrees.filter((worktree) =>
+      holdsWords(`${shortPath(worktree.path)} ${worktree.branch ?? worktree.head ?? ''}`, words))
+    const shown = worktrees.length > 0 || holdsWords(`${repo.org}/${repo.repo}`, words)
+    return shown ? [{ repo, worktrees }] : []
+  })
+}
+
+// Returns the shown worktree rows in display order, each with its checkout.
+function shownWorktrees() {
+  return shownRepos().flatMap(({ repo, worktrees }) => worktrees.map((worktree) => ({ repo, worktree })))
+}
+
+// Returns the checkouts of the repos page: the config error, the help for an empty config, or one group per shown checkout.
 function reposHtml() {
   if (reposState === null) return '<p class="empty">loading…</p>'
   if (reposState.error !== null) return `<p class="config-error">${escape(reposState.error)}</p>`
   if (reposState.repos.length === 0) return REPOS_HELP
-  return reposState.repos.map(repoGroupHtml).join('')
+
+  const repos = shownRepos()
+  if (repos.length === 0) return '<p class="empty">No worktree matches.</p>'
+  return repos.map(({ repo, worktrees }) => repoGroupHtml(repo, worktrees)).join('')
 }
 
+// Renders the repos page: the filter field above the shown checkouts. A page already shown keeps its field. A worktree no longer shown loses the selection.
 function renderRepos() {
-  const html = `<div class="column">${reposHtml()}</div>`
-  if (reposView.el === $('page').firstElementChild && reposView.html === html) return
+  if (reposView.el === null || reposView.el !== $('page').firstElementChild) {
+    $('page').innerHTML = `
+      <div class="column">
+        <input type="search" class="repo-filter" id="repo-filter" placeholder="Filter by repo or branch" autocomplete="off" spellcheck="false">
+        <div id="repo-list"></div>
+      </div>`
+    $('repo-filter').value = repoFilter
+    $('repo-filter').addEventListener('input', onRepoFilter)
+    reposView = { el: $('page').firstElementChild, list: '' }
+  }
 
-  $('page').innerHTML = html
-  reposView = { html, el: $('page').firstElementChild }
+  if (!shownWorktrees().some(({ worktree }) => worktree.path === selectedWorktree)) selectedWorktree = null
+
+  const list = reposHtml()
+  if (reposView.list === list) return
+
+  $('repo-list').innerHTML = list
+  reposView.list = list
+}
+
+// Shows the checkouts that match the typed filter.
+function onRepoFilter(event) {
+  repoFilter = event.currentTarget.value
+  renderRepos()
+}
+
+// Moves the worktree selection by `step` rows in display order and stops at the first and last rows.
+function moveWorktreeSelection(step) {
+  const paths = shownWorktrees().map(({ worktree }) => worktree.path)
+  if (paths.length === 0) return
+
+  const last = paths.length - 1
+  const first = step > 0 ? 0 : last
+  const current = paths.indexOf(selectedWorktree)
+  const next = current < 0 ? first : Math.min(last, Math.max(0, current + step))
+
+  selectedWorktree = paths[next]
+  renderRepos()
+  $('repo-list').querySelector('.row.selected')?.scrollIntoView({ block: 'nearest' })
 }
 
 // Returns the configured checkout and worktree at `path`, or null when no checkout lists it.
@@ -1499,13 +1589,13 @@ function findWorktree(path) {
   return null
 }
 
-// Returns the worktree card: the checkout's name, the worktree's path and branch, and its actions.
+// Returns the worktree card: the checkout's name, the worktree's short path and branch, and its actions.
 function worktreeCardHtml(repo, worktree) {
   return `
     <div class="session-card">
       <div class="name">
         <div class="id">${escape(`${repo.org}/${repo.repo}`)}</div>
-        <div class="path">${escape(worktree.path)}</div>
+        <div class="path">${escape(shortPath(worktree.path))}</div>
       </div>
       <div class="facts"><span class="pill">${escape(worktree.branch ?? worktree.head ?? '')}</span></div>
       <div class="actions">${actionButtons(WORKTREE_ACTIONS)}</div>
@@ -1547,7 +1637,7 @@ function termTabsHtml(terms) {
       <button type="button" class="term-name" data-term="select" data-tab="${tab.id}" aria-pressed="${tab.id === terms.active}">${escape(tab.name)}</button>
       <button type="button" class="term-close" data-term="close" data-tab="${tab.id}" title="Close ${escape(tab.name)}">×</button>
     </span>`)
-  return `${tabs.join('')}<button type="button" class="term-add" data-term="add" title="Open a shell">+</button>`
+  return `${tabs.join('')}<button type="button" class="term-add" data-term="add" title="Open a shell (t)">+</button>`
 }
 
 // Writes `html` into the element `id` when it differs from the part `key` of the worktree page.
@@ -1593,6 +1683,7 @@ function renderWorktreePage(path) {
   updateWorktreePart('sessions', 'worktree-sessions', worktreeSessionsHtml(path))
   updateWorktreePart('tabs', 'term-tabs', termTabsHtml(terms))
   showWorktreeTerminal(path)
+  if (activeWorktreeTerminal(path) === undefined) worktreeView.el.classList.remove('zoomed')
 }
 
 // Opens lazygit in a tab, or the worktree in a tool, for the clicked card button.
@@ -2708,12 +2799,13 @@ function openWorktreeTerminal(path, program) {
   $('term-store').append(el)
 
   const { xterm: term, fit } = createXterm(el)
+  term.attachCustomKeyEventHandler((event) => zoomKey(event) === null)
   const observer = new ResizeObserver(() => fit.fit())
   observer.observe(el)
 
   lastTabId += 1
   const name = program === 'shell' ? `shell ${terms.shells}` : program
-  const tab = { id: lastTabId, name, term, fit, socket: null, el, observer, failed: null }
+  const tab = { id: lastTabId, name, program, term, fit, socket: null, el, observer, failed: null }
   terms.tabs.push(tab)
   selectWorktreeTerminal(path, tab.id)
 
@@ -2737,6 +2829,25 @@ function selectWorktreeTerminal(path, id) {
   terms.active = id
   render()
   tab.term.focus()
+}
+
+// Selects the active tab of `path` when it runs `program` and has not failed, else the first such tab, else opens a new one.
+function showWorktreeProgram(path, program) {
+  const runs = (tab) => tab?.program === program && tab.failed === null
+  const active = activeWorktreeTerminal(path)
+  const tab = runs(active) ? active : worktreeTerms.get(path)?.tabs.find(runs)
+  if (tab === undefined) return openWorktreeTerminal(path, program)
+
+  selectWorktreeTerminal(path, tab.id)
+}
+
+// Goes to the worktree page of `path` and shows a tab running `program` there.
+function openWorktree(path, program) {
+  const route = parseRoute(location.hash)
+  if (route.kind !== 'worktree' || route.path !== path) location.hash = worktreeHash(path)
+
+  render()
+  showWorktreeProgram(path, program)
 }
 
 // Closes tab `id` of `path`: ends its program, disposes its terminal, and selects the next tab when it was the active one.
@@ -2775,6 +2886,19 @@ function showWorktreeTerminal(path) {
   tab.fit.fit()
 }
 
+// Shows the active terminal alone on the shown worktree page when `on` is true, and the whole page when false. Returns false when that page has no active tab.
+function zoomWorktreeTerminal(on) {
+  if (worktreeView.el !== $('page').firstElementChild) return false
+
+  const tab = activeWorktreeTerminal(worktreeView.path)
+  if (tab === undefined) return false
+
+  worktreeView.el.classList.toggle('zoomed', on)
+  tab.fit.fit()
+  tab.term.focus()
+  return true
+}
+
 // Runs the card action `action` on `session`.
 function runAction(session, action) {
   if (action === 'archive') archiveSession(session)
@@ -2787,6 +2911,16 @@ function sessionAction(session, key) {
   if (!Object.hasOwn(ACTION_KEYS, key)) return false
 
   runAction(session, ACTION_KEYS[key])
+  return true
+}
+
+// Runs the worktree action bound to `key` on the worktree at `path` and returns true when `key` has one.
+function worktreeAction(path, key) {
+  if (!Object.hasOwn(WORKTREE_KEYS, key)) return false
+
+  const action = WORKTREE_KEYS[key]
+  if (action === 'lazygit' || action === 'shell') openWorktree(path, action)
+  else openWorktreeTool(path, action)
   return true
 }
 
@@ -2957,12 +3091,19 @@ function renderTabs(kind) {
   tabsHtml = html
 }
 
-// Shows the page of the route. While the editor is open, shows only the edited file. A new route ends lazygit. A route off the worktree pages parks the shown worktree terminal.
+// Shows the page of the route. While the editor is open, shows only the edited file. A new route ends lazygit. A route off the worktree pages parks the shown worktree terminal. A new session page records the worktree page it opens from.
 function render() {
   const route = parseRoute(location.hash)
   if (editing !== null && !routeShows(route, editing)) return
   if (terminal !== null && location.hash !== terminal.hash) closeTerminal()
   if (route.kind !== 'worktree') parkWorktreeTerminal()
+
+  if (route.kind === 'session') {
+    const shown = parseRoute(shownHash)
+    if (shown.kind !== 'session' || sessionHref(shown) !== sessionHref(route)) {
+      sessionOrigin = shown.kind === 'worktree' ? shownHash : '#/sessions'
+    }
+  }
 
   renderSeq += 1
   shownHash = location.hash
@@ -3028,12 +3169,55 @@ function listKey(key) {
   return sessionAction(session, key)
 }
 
+// Runs the repos page shortcut for `key` and returns true when it acted.
+function reposKey(key) {
+  if (key === 'ArrowDown' || key === 'ArrowUp') {
+    moveWorktreeSelection(key === 'ArrowDown' ? 1 : -1)
+    return true
+  }
+
+  if (key === '/') {
+    $('repo-filter')?.focus()
+    return true
+  }
+
+  if (selectedWorktree === null) return false
+
+  if (key === 'Enter') {
+    location.hash = worktreeHash(selectedWorktree)
+    return true
+  }
+  return worktreeAction(selectedWorktree, key)
+}
+
+// Runs the filter field shortcut for `key` and returns true when it acted.
+function filterKey(key) {
+  if (key === 'ArrowDown' || key === 'ArrowUp') {
+    $('repo-filter').blur()
+    moveWorktreeSelection(key === 'ArrowDown' ? 1 : -1)
+    return true
+  }
+
+  if (key === 'Enter') {
+    $('repo-filter').blur()
+    if (selectedWorktree === null) moveWorktreeSelection(1)
+    if (selectedWorktree !== null) location.hash = worktreeHash(selectedWorktree)
+    return true
+  }
+
+  if (key === 'Escape') {
+    $('repo-filter').blur()
+    return true
+  }
+  return false
+}
+
 // Runs the session page shortcut for `key` on `session` and returns true when it acted.
 function sessionKey(key, session) {
   if (BACK_KEYS.includes(key)) {
     confirmDiscard(() => {
       selectedDir = session.dir
-      location.hash = '#/sessions'
+      location.hash = sessionOrigin
     })
     return true
   }
@@ -3048,12 +3232,16 @@ function sessionKey(key, session) {
   return sessionAction(session, key)
 }
 
-// Runs the worktree page shortcut for `key` and returns true when it acted.
-function worktreeKey(key) {
-  if (!BACK_KEYS.includes(key)) return false
+// Runs the worktree page shortcut for `key` on the worktree at `path` and returns true when it acted.
+function worktreeKey(key, path) {
+  if (BACK_KEYS.includes(key)) {
+    selectedWorktree = path
+    location.hash = '#/'
+    return true
+  }
 
-  location.hash = '#/'
-  return true
+  if (findWorktree(path) === null) return false
+  return worktreeAction(path, key)
 }
 
 // Returns the shortcut name of `event`, or null when its modifiers make it no shortcut.
@@ -3098,17 +3286,31 @@ function onKey(event) {
     return zoomTerminal(zoom)
   }
 
+  if (zoom !== null && zoomWorktreeTerminal(zoom)) {
+    event.preventDefault()
+    return
+  }
+
   if (terminal !== null && event.target.closest('#view')) return
   if (event.target.closest('#term-view')) return
 
   const key = shortcutKey(event)
   if (key === null) return
   if ($('modal').open) return
+
+  if (event.target.closest('#repo-filter')) {
+    if (filterKey(key)) event.preventDefault()
+    return
+  }
+
   if (event.target.closest('input, textarea, select, [contenteditable]')) return
   if (key === 'Enter' && event.target.closest('button, a')) return
 
   const route = parseRoute(location.hash)
-  if (route.kind === 'repos') return
+  if (route.kind === 'repos') {
+    if (reposKey(key)) event.preventDefault()
+    return
+  }
 
   if (route.kind === 'sessions') {
     if (listKey(key)) event.preventDefault()
@@ -3116,7 +3318,7 @@ function onKey(event) {
   }
 
   if (route.kind === 'worktree') {
-    if (worktreeKey(key)) event.preventDefault()
+    if (worktreeKey(key, route.path)) event.preventDefault()
     return
   }
 

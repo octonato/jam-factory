@@ -58,7 +58,7 @@ pub struct Worktree {
     pub head: Option<String>,
 }
 
-/// A main checkout with its worktrees, or with the reason they cannot be listed.
+/// A main checkout with its linked worktrees, or with the reason they cannot be listed.
 #[derive(Debug, PartialEq, Serialize)]
 pub struct Repo {
     pub org: String,
@@ -68,9 +68,9 @@ pub struct Repo {
     pub worktrees: Vec<Worktree>,
 }
 
-/// The worktrees in the output of `git worktree list --porcelain`, without the bare entries.
+/// The linked worktrees in the output of `git worktree list --porcelain`: every entry after the first.
 pub fn parse_porcelain(text: &str) -> Vec<Worktree> {
-    text.split("\n\n").filter_map(parse_entry).collect()
+    text.split("\n\n").skip(1).filter_map(parse_entry).collect()
 }
 
 /// The worktree of one porcelain entry, or `None` for a bare or empty entry.
@@ -140,7 +140,7 @@ fn names(path: &Path) -> (String, String) {
     (name(parent.and_then(Path::parent)), name(parent))
 }
 
-/// The worktrees that `git worktree list --porcelain` gives in the folder `path`.
+/// The linked worktrees that `git worktree list --porcelain` gives in the folder `path`.
 fn worktrees(path: &Path) -> Result<Vec<Worktree>, String> {
     if !path.is_dir() {
         return Err(format!("{} is not a folder", path.display()));
@@ -167,7 +167,7 @@ fn worktrees(path: &Path) -> Result<Vec<Worktree>, String> {
     Ok(parse_porcelain(&String::from_utf8_lossy(&output.stdout)))
 }
 
-/// Whether `path` is a worktree path of one of the main checkouts of `repos`.
+/// Whether `path` is a linked worktree path of one of the main checkouts of `repos`.
 pub fn is_worktree(repos: &dyn RepoList, path: &Path) -> bool {
     let Ok(paths) = repos.paths() else {
         return false;
@@ -270,7 +270,6 @@ mod tests {
         assert_eq!(
             parse_porcelain(text),
             vec![
-                worktree("/a", Some("main"), None),
                 worktree("/b", None, Some("1234567")),
                 worktree("/c", Some("old"), None),
             ]
@@ -278,14 +277,16 @@ mod tests {
     }
 
     #[test]
-    fn skips_bare_entries() {
-        let text = "worktree /bare\nbare\n\n\
+    fn skips_the_main_entry_bare_or_not() {
+        let bare = "worktree /bare\nbare\n\n\
                     worktree /a\nHEAD 1234567890abcdef\nbranch refs/heads/main\n\n";
+        let main = "worktree /main\nHEAD 1234567890abcdef\nbranch refs/heads/main\n\n";
 
         assert_eq!(
-            parse_porcelain(text),
+            parse_porcelain(bare),
             vec![worktree("/a", Some("main"), None)]
         );
+        assert_eq!(parse_porcelain(main), vec![]);
     }
 
     #[test]
@@ -313,10 +314,11 @@ mod tests {
                 repo: "r".to_string(),
                 path: main.display().to_string(),
                 error: None,
-                worktrees: vec![
-                    worktree(&main.display().to_string(), Some("main"), None),
-                    worktree(&linked.display().to_string(), Some("feature"), None),
-                ],
+                worktrees: vec![worktree(
+                    &linked.display().to_string(),
+                    Some("feature"),
+                    None
+                )],
             }]
         );
     }
@@ -354,10 +356,9 @@ mod tests {
 
         let repos = FixedRepos(vec![main.clone()]);
 
-        assert!(is_worktree(&repos, &main));
         assert!(is_worktree(&repos, &linked));
 
-        for path in [parent, sibling, sub] {
+        for path in [main, parent, sibling, sub] {
             assert!(!is_worktree(&repos, &path), "{}", path.display());
         }
     }
