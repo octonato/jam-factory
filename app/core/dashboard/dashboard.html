@@ -128,6 +128,15 @@
 
   .rows { display: grid; gap: 8px; }
   .empty { color: var(--muted); }
+  .config-error { color: var(--critical); }
+
+  .config-example {
+    padding: 10px 12px;
+    font: 0.857rem/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+  }
 
   .org-filter {
     display: flex;
@@ -159,6 +168,10 @@
     font-weight: 600;
   }
 
+  .org-group .org .path { color: var(--muted); font-weight: 400; }
+  .org-group .org.error { color: var(--muted); }
+  .org-group .org .reason { display: block; font-weight: 400; }
+
   .row {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
@@ -187,6 +200,11 @@
     padding: 10px 14px;
     color: inherit;
     text-decoration: none;
+  }
+
+  .row.worktree .body,
+  .row.session .body {
+    grid-template-columns: minmax(0, 1fr) auto;
   }
 
   .row .actions {
@@ -264,7 +282,8 @@
     height: 100%;
   }
 
-  #metro-pane {
+  #metro-pane,
+  #worktree-sessions {
     overflow: auto;
     padding: 16px 16px 48px;
   }
@@ -355,6 +374,45 @@
 
   #view.terminal { padding: 0; overflow: hidden; background: #142b37; }
   #view.terminal .xterm { height: 100%; padding: 4px 8px; }
+
+  .term-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .term-tab {
+    display: flex;
+    align-items: center;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+  }
+
+  .term-tab:has(> [aria-pressed="true"]) { border-color: var(--accent); }
+
+  .term-tabs button {
+    padding: 2px 8px;
+    color: var(--ink-2);
+    font: inherit;
+    font-size: 0.857rem;
+    background: none;
+    border: 0;
+    cursor: pointer;
+  }
+
+  .term-tabs button:hover { color: var(--accent); }
+  .term-tabs .term-name[aria-pressed="true"] { color: var(--ink); }
+  .term-tabs .term-close { padding-left: 0; }
+  .term-tabs .term-add { border: 1px solid var(--line); border-radius: 6px; }
+  .term-tab.failed .term-name { color: var(--critical); }
+
+  .term-view { flex: 1; min-height: 0; overflow: hidden; background: #142b37; }
+  .term-view:empty { background: none; }
+  .term-view .term { height: 100%; }
+  .term-view .xterm { height: 100%; padding: 4px 8px; }
 
   .session-bar {
     grid-column: 1 / -1;
@@ -755,7 +813,7 @@
 <body>
 <header>
   <h1>Jam Board</h1>
-  <nav class="tabs"><a class="tab" href="#/" aria-current="page">Sessions</a></nav>
+  <nav class="tabs" id="tabs"><a class="tab" href="#/" aria-current="page">Repos</a><a class="tab" href="#/sessions">Sessions</a></nav>
   <span id="status">loading…</span>
   <div class="font-size">
     <button type="button" id="font-down" title="Smaller text">A−</button>
@@ -765,6 +823,7 @@
 </header>
 <div id="problems"></div>
 <main id="page"></main>
+<div id="term-store" hidden></div>
 <dialog id="modal">
   <form method="dialog">
     <p id="modal-text"></p>
@@ -883,36 +942,58 @@ const COUNT_FORMAT = new Intl.NumberFormat('en', { notation: 'compact', maximumS
 const LEFT_MIN = 320
 const RIGHT_MIN = 300
 
+const ACTION_ICONS = {
+  intellij: '<rect x="1.75" y="1.75" width="12.5" height="12.5" rx="1.5"/><path d="M5 4.75v6.5M11 4.75v4.5a1.75 1.75 0 0 1-3.5 0"/>',
+  zed: '<path d="M3.5 3.5h9l-9 9h9"/>',
+  iterm: '<path d="M3 4.5 6.5 8 3 11.5M8.5 11.5H13"/>',
+  lazygit: '<circle cx="5" cy="3.5" r="1.5"/><circle cx="5" cy="12.5" r="1.5"/><circle cx="11" cy="5.5" r="1.5"/><path d="M5 5v6M11 7c0 2.5-6 2-6 4"/>',
+  github: '<path d="M9 2.5h4.5V7M13.5 2.5 7.5 8.5M11.5 9.5v4h-9v-9h4"/>',
+  archive: '<rect x="2" y="2.5" width="12" height="3" rx=".5"/><path d="M3 5.5v8h10v-8M6.5 8h3"/>',
+}
 const CARD_ACTIONS = [
-  {
-    action: 'intellij',
-    title: 'Open in IntelliJ (i)',
-    icon: '<rect x="1.75" y="1.75" width="12.5" height="12.5" rx="1.5"/><path d="M5 4.75v6.5M11 4.75v4.5a1.75 1.75 0 0 1-3.5 0"/>',
-  },
-  { action: 'zed', title: 'Open in Zed (e)', icon: '<path d="M3.5 3.5h9l-9 9h9"/>' },
-  { action: 'iterm', title: 'Open in iTerm (t)', icon: '<path d="M3 4.5 6.5 8 3 11.5M8.5 11.5H13"/>' },
-  {
-    action: 'lazygit',
-    title: 'Open in lazygit (g)',
-    icon: '<circle cx="5" cy="3.5" r="1.5"/><circle cx="5" cy="12.5" r="1.5"/><circle cx="11" cy="5.5" r="1.5"/><path d="M5 5v6M11 7c0 2.5-6 2-6 4"/>',
-  },
-  {
-    action: 'archive',
-    title: 'Archive (a)',
-    icon: '<rect x="2" y="2.5" width="12" height="3" rx=".5"/><path d="M3 5.5v8h10v-8M6.5 8h3"/>',
-  },
+  { action: 'intellij', title: 'Open in IntelliJ (i)', icon: ACTION_ICONS.intellij },
+  { action: 'zed', title: 'Open in Zed (e)', icon: ACTION_ICONS.zed },
+  { action: 'iterm', title: 'Open in iTerm (t)', icon: ACTION_ICONS.iterm },
+  { action: 'lazygit', title: 'Open in lazygit (g)', icon: ACTION_ICONS.lazygit },
+  { action: 'archive', title: 'Archive (a)', icon: ACTION_ICONS.archive },
+]
+const WORKTREE_ACTIONS = [
+  { action: 'lazygit', title: 'Open lazygit in a tab', icon: ACTION_ICONS.lazygit },
+  { action: 'iterm', title: 'Open in iTerm', icon: ACTION_ICONS.iterm },
+  { action: 'zed', title: 'Open in Zed', icon: ACTION_ICONS.zed },
+  { action: 'intellij', title: 'Open in IntelliJ', icon: ACTION_ICONS.intellij },
+  { action: 'github', title: 'Open on GitHub', icon: ACTION_ICONS.github },
 ]
 const TOOL_LABELS = { intellij: 'IntelliJ', zed: 'Zed', iterm: 'iTerm', github: 'GitHub' }
 const ACTION_KEYS = { a: 'archive', t: 'iterm', e: 'zed', i: 'intellij', o: 'github', g: 'lazygit' }
 const BACK_KEYS = ['l', 'Escape', 'Meta+[']
+const TABS = [
+  { kind: 'repos', label: 'Repos', href: '#/' },
+  { kind: 'sessions', label: 'Sessions', href: '#/sessions' },
+]
+const REPOS_HELP = `
+  <p class="empty">Add <code>repos</code>, a list of paths to main checkouts, to <code>~/.jam-factory/config.json</code>:</p>
+  <pre class="config-example">{
+  "repos": [
+    "~/Sources/akka/sdk/main",
+    "~/Sources/octonato/jam-factory/main"
+  ]
+}</pre>`
 
 const $ = (id) => document.getElementById(id)
 const state = { sessions: [], problems: [], failedChecks: [] }
+let reposState = null
+let tabsHtml = ''
 let listView = { html: '', el: null }
+let reposView = { html: '', el: null }
 let sessionView = { dir: null, el: null, card: '', metro: '', head: '', stops: [], selected: -1 }
+let worktreeView = { path: null, el: null, card: '', sessions: '', tabs: '' }
 let lastView = { key: null, path: null, text: null, version: null }
 let editing = null
 let terminal = null
+// The terminal tabs of each worktree path: `{ tabs, active, shells }`, where `shells` counts the shell tabs ever opened.
+const worktreeTerms = new Map()
+let lastTabId = 0
 let shownHash = ''
 let renderSeq = 0
 let fontSize = FONT_DEFAULT
@@ -1081,6 +1162,16 @@ async function loadSessions() {
   return { sessions, problems }
 }
 
+// Stores the `api/repos` reply in `reposState`, or the failure as its error.
+async function loadRepos() {
+  try {
+    const { error, repos } = JSON.parse(await fetchText('api/repos'))
+    reposState = { error: stringOrNull(error), repos: Array.isArray(repos) ? repos : [] }
+  } catch (err) {
+    reposState = { error: err.message, repos: [] }
+  }
+}
+
 function decode(segment) {
   try {
     return decodeURIComponent(segment)
@@ -1089,12 +1180,19 @@ function decode(segment) {
   }
 }
 
+// Returns the page of `hash`: the repos, the sessions, a worktree with its path, or a session with its file path.
 function parseRoute(hash) {
   const segments = hash.replace(/^#\/?/, '').split('/').filter((s) => s !== '').map(decode)
-  if (segments.length === 0) return null
+  if (segments.length === 0) return { kind: 'repos' }
+  if (segments.length === 1 && segments[0] === 'sessions') return { kind: 'sessions' }
+  if (segments.length === 2 && segments[0] === 'worktree') return { kind: 'worktree', path: segments[1] }
 
   const [org, repo = '', branch = '', id = '', ...rest] = segments
-  return { org, repo, branch, id, path: rest.length > 0 ? rest.join('/') : null }
+  return { kind: 'session', org, repo, branch, id, path: rest.length > 0 ? rest.join('/') : null }
+}
+
+function worktreeHash(path) {
+  return `#/worktree/${encodeURIComponent(path)}`
 }
 
 // Returns `{org}/{repo}/{branch}/{id}` of `session`, each segment percent-encoded.
@@ -1124,6 +1222,17 @@ function fileHref(session, path) {
 
 function shortPath(worktree) {
   return String(worktree || '').split('/').filter((s) => s !== '').slice(-3).join('/')
+}
+
+// Returns true when paths `a` and `b` are equal once one trailing `/` is dropped from each.
+function sameWorktree(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string') return false
+  return a.replace(/\/$/, '') === b.replace(/\/$/, '')
+}
+
+// Returns the sessions whose worktree is `path`.
+function sessionsOf(path) {
+  return state.sessions.filter((session) => sameWorktree(session.worktree, path))
 }
 
 function sessionFlow(session) {
@@ -1227,7 +1336,12 @@ function rowContent(session) {
 }
 
 function cardActions(session) {
-  return CARD_ACTIONS.map(({ action, title, icon }) => `
+  return actionButtons(CARD_ACTIONS)
+}
+
+// Returns one icon button per entry of `actions`.
+function actionButtons(actions) {
+  return actions.map(({ action, title, icon }) => `
     <button type="button" class="icon" data-action="${action}" title="${title}">
       <svg viewBox="0 0 16 16" aria-hidden="true">${icon}</svg>
     </button>`).join('')
@@ -1327,6 +1441,180 @@ function onCardAction(event) {
   if (!session) return
 
   runAction(session, button.dataset.action)
+}
+
+// Returns the row of `worktree`: a link to its page with its branch or short sha, its path, its session count and its open terminal count.
+function worktreeRowHtml(worktree) {
+  const count = sessionsOf(worktree.path).length
+  const terms = worktreeTerms.get(worktree.path)?.tabs.length ?? 0
+  const termCount = terms > 0 ? ` · ▣ ${terms}` : ''
+  return `
+    <div class="row worktree">
+      <a class="body" href="${escape(worktreeHash(worktree.path))}">
+        <span class="name"><span class="id">${escape(worktree.branch ?? worktree.head ?? '')}</span> <span class="path">${escape(worktree.path)}</span></span>
+        <span class="label">${count} ${count === 1 ? 'session' : 'sessions'}${termCount}</span>
+      </a>
+    </div>`
+}
+
+// Returns the checkout `repo` under a header with its name and path, greyed with its error and no rows when it has one.
+function repoGroupHtml(repo) {
+  const name = `${escape(`${repo.org}/${repo.repo}`)} <span class="path">${escape(repo.path)}</span>`
+  if (repo.error !== null) {
+    return `
+      <section class="org-group">
+        <h2 class="org error">${name} <span class="reason">${escape(repo.error)}</span></h2>
+      </section>`
+  }
+
+  return `
+    <section class="org-group">
+      <h2 class="org">${name}</h2>
+      <div class="rows">${repo.worktrees.map(worktreeRowHtml).join('')}</div>
+    </section>`
+}
+
+// Returns the body of the repos page: the config error, the help for an empty config, or one group per checkout.
+function reposHtml() {
+  if (reposState === null) return '<p class="empty">loading…</p>'
+  if (reposState.error !== null) return `<p class="config-error">${escape(reposState.error)}</p>`
+  if (reposState.repos.length === 0) return REPOS_HELP
+  return reposState.repos.map(repoGroupHtml).join('')
+}
+
+function renderRepos() {
+  const html = `<div class="column">${reposHtml()}</div>`
+  if (reposView.el === $('page').firstElementChild && reposView.html === html) return
+
+  $('page').innerHTML = html
+  reposView = { html, el: $('page').firstElementChild }
+}
+
+// Returns the configured checkout and worktree at `path`, or null when no checkout lists it.
+function findWorktree(path) {
+  for (const repo of reposState?.repos ?? []) {
+    const worktree = repo.worktrees.find((w) => w.path === path)
+    if (worktree) return { repo, worktree }
+  }
+  return null
+}
+
+// Returns the worktree card: the checkout's name, the worktree's path and branch, and its actions.
+function worktreeCardHtml(repo, worktree) {
+  return `
+    <div class="session-card">
+      <div class="name">
+        <div class="id">${escape(`${repo.org}/${repo.repo}`)}</div>
+        <div class="path">${escape(worktree.path)}</div>
+      </div>
+      <div class="facts"><span class="pill">${escape(worktree.branch ?? worktree.head ?? '')}</span></div>
+      <div class="actions">${actionButtons(WORKTREE_ACTIONS)}</div>
+    </div>`
+}
+
+// Returns why the repos list lacks a worktree: still loading, the list's error, or not configured.
+function missingWorktreeHtml() {
+  if (reposState === null) return '<span class="empty">loading…</span>'
+  if (reposState.error !== null) return `<span class="config-error">${escape(reposState.error)}</span>`
+  return '<span class="empty">not a configured worktree</span>'
+}
+
+// Returns the card of the worktree at `path` when the repos list lacks it: its path and the reason.
+function missingWorktreeCardHtml(path) {
+  return `
+    <div class="session-card">
+      <div class="name"><div class="path">${escape(path)}</div></div>
+      <div class="facts">${missingWorktreeHtml()}</div>
+    </div>`
+}
+
+// Returns the live sessions of the worktree at `path`, each a link to its page with its id, flow and stage.
+function worktreeSessionsHtml(path) {
+  const rows = sessionsOf(path).map((session) => `
+    <div class="row session ${tint(session)}">
+      <a class="body" href="${escape(sessionHref(session))}">
+        <span class="name"><span class="id">${escape(session.id)}</span></span>
+        <span class="label"><span class="pill">${escape(sessionFlow(session))}</span> ${escape(session.stage ?? 'unknown')}</span>
+      </a>
+    </div>`)
+  return rows.length > 0 ? `<div class="rows">${rows.join('')}</div>` : '<p class="empty">No live sessions.</p>'
+}
+
+// Returns the tab strip of `terms`: one tab per terminal with its close button, then the `+` button.
+function termTabsHtml(terms) {
+  const tabs = (terms?.tabs ?? []).map((tab) => `
+    <span class="term-tab${tab.failed !== null ? ' failed' : ''}">
+      <button type="button" class="term-name" data-term="select" data-tab="${tab.id}" aria-pressed="${tab.id === terms.active}">${escape(tab.name)}</button>
+      <button type="button" class="term-close" data-term="close" data-tab="${tab.id}" title="Close ${escape(tab.name)}">×</button>
+    </span>`)
+  return `${tabs.join('')}<button type="button" class="term-add" data-term="add" title="Open a shell">+</button>`
+}
+
+// Writes `html` into the element `id` when it differs from the part `key` of the worktree page.
+function updateWorktreePart(key, id, html) {
+  if (worktreeView[key] === html) return
+
+  $(id).innerHTML = html
+  worktreeView[key] = html
+}
+
+// Renders the worktree page of `path`: its card, its sessions, and its terminal tabs with the active terminal. A worktree missing from the repos list keeps the page while it has tabs.
+function renderWorktreePage(path) {
+  const found = findWorktree(path)
+  const terms = worktreeTerms.get(path)
+  if (found === null && (terms?.tabs.length ?? 0) === 0) {
+    parkWorktreeTerminal()
+    $('page').innerHTML = `<div class="column"><p>${missingWorktreeHtml()}</p></div>`
+    return
+  }
+
+  if (worktreeView.el !== $('page').firstElementChild || worktreeView.path !== path) {
+    parkWorktreeTerminal()
+    $('page').innerHTML = `
+      <div class="session-page">
+        <div class="session-bar" id="worktree-card"></div>
+        <section id="worktree-sessions"></section>
+        <div id="splitter"></div>
+        <section class="viewer">
+          <div class="term-tabs" id="term-tabs"></div>
+          <div class="term-view" id="term-view"></div>
+        </section>
+      </div>`
+    const page = $('page').firstElementChild
+    resizeSessionPage(page)
+    $('worktree-card').addEventListener('click', onWorktreeCardAction)
+    $('term-tabs').addEventListener('click', onTermTabsClick)
+    $('splitter').addEventListener('pointerdown', onSplitterDown)
+    worktreeView = { path, el: page, card: '', sessions: '', tabs: '' }
+  }
+
+  const card = found === null ? missingWorktreeCardHtml(path) : worktreeCardHtml(found.repo, found.worktree)
+  updateWorktreePart('card', 'worktree-card', card)
+  updateWorktreePart('sessions', 'worktree-sessions', worktreeSessionsHtml(path))
+  updateWorktreePart('tabs', 'term-tabs', termTabsHtml(terms))
+  showWorktreeTerminal(path)
+}
+
+// Opens lazygit in a tab, or the worktree in a tool, for the clicked card button.
+function onWorktreeCardAction(event) {
+  const button = event.target.closest('button[data-action]')
+  if (!button) return
+
+  const path = worktreeView.path
+  if (button.dataset.action === 'lazygit') openWorktreeTerminal(path, 'lazygit')
+  else openWorktreeTool(path, button.dataset.action)
+}
+
+// Opens a shell, or selects or closes a tab, for the clicked button of the tab strip.
+function onTermTabsClick(event) {
+  const button = event.target.closest('button[data-term]')
+  if (!button) return
+
+  const path = worktreeView.path
+  const id = Number(button.dataset.tab)
+  if (button.dataset.term === 'add') openWorktreeTerminal(path, 'shell')
+  else if (button.dataset.term === 'select') selectWorktreeTerminal(path, id)
+  else if (button.dataset.term === 'close') closeWorktreeTerminal(path, id)
 }
 
 function missingScripts() {
@@ -2268,7 +2556,7 @@ function confirmDiscard(leave, stay = () => {}) {
 
 // Returns true when `route` shows `file`, a `{ key, path }`: its session with its path or with no path.
 function routeShows(route, file) {
-  const session = route === null ? undefined : state.sessions.find((s) => sessionHref(s) === sessionHref(route))
+  const session = route.kind === 'session' ? state.sessions.find((s) => sessionHref(s) === sessionHref(route)) : undefined
   return session !== undefined && file.key === session.dir + (route.path ?? file.path)
 }
 
@@ -2283,18 +2571,25 @@ async function archiveSession(session) {
     return
   }
 
-  location.hash = '#/'
+  location.hash = '#/sessions'
   poll()
 }
 
-async function openTool(session, tool) {
-  const label = TOOL_LABELS[tool]
+function openTool(session, tool) {
+  return postOpen(`api/open/${tool}/${sessionPath(session)}`, sessionName(session), tool)
+}
 
+function openWorktreeTool(path, tool) {
+  return postOpen(`api/open/${tool}?path=${encodeURIComponent(path)}`, path, tool)
+}
+
+// Posts `url` to open `name` in `tool`, and tells the user when it fails.
+async function postOpen(url, name, tool) {
   try {
-    const res = await fetch(`api/open/${tool}/${sessionPath(session)}`, { method: 'POST' })
+    const res = await fetch(url, { method: 'POST' })
     if (!res.ok) throw new Error((await res.text()).trim() || `${res.status} ${res.statusText}`)
   } catch (err) {
-    await tell(`Could not open ${sessionName(session)} in ${label}: ${err.message}`)
+    await tell(`Could not open ${name} in ${TOOL_LABELS[tool]}: ${err.message}`)
   }
 }
 
@@ -2308,26 +2603,25 @@ function openLazygit(session) {
 
   confirmDiscard(() => {
     const route = parseRoute(location.hash)
-    if (route === null || sessionHref(route) !== sessionHref(session)) location.hash = sessionHref(session)
+    if (route.kind !== 'session' || sessionHref(route) !== sessionHref(session)) location.hash = sessionHref(session)
 
     render()
     startTerminal(session)
   })
 }
 
-// Mounts xterm in the pane and connects it to lazygit on the worktree of `session`.
-function startTerminal(session) {
-  const view = $('view')
-  view.replaceChildren()
-  view.classList.add('terminal')
-
+// Returns an xterm in the board's font and colours, opened in `container`, and its fit addon.
+function createXterm(container) {
   const xterm = new Terminal({ fontFamily: MONO_FONT, fontSize: terminalFontSize(), theme: TERMINAL_THEME })
   const fit = new FitAddon.FitAddon()
   xterm.loadAddon(fit)
-  xterm.open(view)
-  fit.fit()
+  xterm.open(container)
+  return { xterm, fit }
+}
 
-  const socket = new WebSocket(`ws://${location.host}/api/lazygit/${sessionPath(session)}?cols=${xterm.cols}&rows=${xterm.rows}`)
+// Returns a socket to `url` that carries the bytes and the size changes of `xterm`.
+function connectXterm(xterm, url) {
+  const socket = new WebSocket(url)
   socket.binaryType = 'arraybuffer'
 
   const send = (data) => {
@@ -2337,6 +2631,23 @@ function startTerminal(session) {
 
   socket.onopen = () => sendSize(xterm)
   socket.onmessage = (event) => xterm.write(new Uint8Array(event.data))
+
+  xterm.onData((data) => send(new TextEncoder().encode(data)))
+  xterm.onBinary((data) => send(Uint8Array.from(data, (c) => c.charCodeAt(0))))
+  xterm.onResize(sendSize)
+  return socket
+}
+
+// Mounts xterm in the pane and connects it to lazygit on the worktree of `session`.
+function startTerminal(session) {
+  const view = $('view')
+  view.replaceChildren()
+  view.classList.add('terminal')
+
+  const { xterm, fit } = createXterm(view)
+  fit.fit()
+
+  const socket = connectXterm(xterm, `ws://${location.host}/api/lazygit/${sessionPath(session)}?cols=${xterm.cols}&rows=${xterm.rows}`)
   socket.onclose = (event) => {
     if (terminal?.socket !== socket) return
 
@@ -2344,10 +2655,6 @@ function startTerminal(session) {
     render()
     if (event.code !== 1000) tell(`lazygit stopped for ${sessionName(session)}: ${event.reason || 'the connection closed'}`)
   }
-
-  xterm.onData((data) => send(new TextEncoder().encode(data)))
-  xterm.onBinary((data) => send(Uint8Array.from(data, (c) => c.charCodeAt(0))))
-  xterm.onResize(sendSize)
   xterm.attachCustomKeyEventHandler((event) => zoomKey(event) === null)
 
   const observer = new ResizeObserver(() => fit.fit())
@@ -2383,6 +2690,89 @@ function zoomTerminal(on) {
   sessionView.el.classList.toggle('zoomed', on)
   terminal.fit.fit()
   terminal.xterm.focus()
+}
+
+function activeWorktreeTerminal(path) {
+  const terms = worktreeTerms.get(path)
+  return terms?.tabs.find((tab) => tab.id === terms.active)
+}
+
+// Opens a tab running `program` in the worktree at `path`, and selects it.
+function openWorktreeTerminal(path, program) {
+  if (!worktreeTerms.has(path)) worktreeTerms.set(path, { tabs: [], active: null, shells: 0 })
+  const terms = worktreeTerms.get(path)
+  if (program === 'shell') terms.shells += 1
+
+  const el = document.createElement('div')
+  el.className = 'term'
+  $('term-store').append(el)
+
+  const { xterm: term, fit } = createXterm(el)
+  const observer = new ResizeObserver(() => fit.fit())
+  observer.observe(el)
+
+  lastTabId += 1
+  const name = program === 'shell' ? `shell ${terms.shells}` : program
+  const tab = { id: lastTabId, name, term, fit, socket: null, el, observer, failed: null }
+  terms.tabs.push(tab)
+  selectWorktreeTerminal(path, tab.id)
+
+  const query = `path=${encodeURIComponent(path)}&program=${program}&cols=${term.cols}&rows=${term.rows}`
+  tab.socket = connectXterm(term, `ws://${location.host}/api/terminal?${query}`)
+  tab.socket.onclose = (event) => {
+    if (event.code === 1000) return closeWorktreeTerminal(path, tab.id)
+
+    tab.failed = event.reason || 'the connection closed'
+    term.write(`\r\n\x1b[31m${tab.failed}\x1b[0m\r\n`)
+    render()
+  }
+}
+
+// Makes tab `id` the active terminal of `path`, then shows and focuses it.
+function selectWorktreeTerminal(path, id) {
+  const terms = worktreeTerms.get(path)
+  const tab = terms?.tabs.find((t) => t.id === id)
+  if (tab === undefined) return
+
+  terms.active = id
+  render()
+  tab.term.focus()
+}
+
+// Closes tab `id` of `path`: ends its program, disposes its terminal, and selects the next tab when it was the active one.
+function closeWorktreeTerminal(path, id) {
+  const terms = worktreeTerms.get(path)
+  const index = terms?.tabs.findIndex((tab) => tab.id === id) ?? -1
+  if (index < 0) return
+
+  const [tab] = terms.tabs.splice(index, 1)
+  tab.socket.onclose = null
+  tab.socket.close()
+  tab.observer.disconnect()
+  tab.term.dispose()
+  tab.el.remove()
+
+  if (terms.active === id) terms.active = terms.tabs[Math.min(index, terms.tabs.length - 1)]?.id ?? null
+  render()
+}
+
+// Moves the terminal shown on the worktree page to `#term-store`.
+function parkWorktreeTerminal() {
+  const view = $('term-view')
+  if (view !== null) $('term-store').append(...view.children)
+}
+
+// Shows the active terminal of `path` in the pane of the worktree page, and fits it.
+function showWorktreeTerminal(path) {
+  const view = $('term-view')
+  const tab = activeWorktreeTerminal(path)
+  if (tab !== undefined && tab.el.parentElement === view) return
+
+  parkWorktreeTerminal()
+  if (tab === undefined) return
+
+  view.append(tab.el)
+  tab.fit.fit()
 }
 
 // Runs the card action `action` on `session`.
@@ -2462,7 +2852,8 @@ function resizeSessionPage(page, width = leftWidth) {
 }
 
 function onSessionResize() {
-  if (sessionView.el !== null && sessionView.el === $('page').firstElementChild) resizeSessionPage(sessionView.el)
+  const page = $('page').firstElementChild
+  if (page !== null && (page === sessionView.el || page === worktreeView.el)) resizeSessionPage(page)
 }
 
 // Resizes the left column while the splitter is dragged.
@@ -2554,15 +2945,31 @@ function renderNotFound() {
   $('page').innerHTML = '<div class="column"><p class="empty">session not found</p></div>'
 }
 
-// Shows the page of the route. While the editor is open, shows only the edited file. A new route ends lazygit.
+// Draws the tab strip and marks the tab of `kind` as the current page.
+function renderTabs(kind) {
+  const html = TABS.map((tab) => {
+    const current = tab.kind === kind ? ' aria-current="page"' : ''
+    return `<a class="tab" href="${tab.href}"${current}>${tab.label}</a>`
+  }).join('')
+  if (tabsHtml === html) return
+
+  $('tabs').innerHTML = html
+  tabsHtml = html
+}
+
+// Shows the page of the route. While the editor is open, shows only the edited file. A new route ends lazygit. A route off the worktree pages parks the shown worktree terminal.
 function render() {
   const route = parseRoute(location.hash)
   if (editing !== null && !routeShows(route, editing)) return
   if (terminal !== null && location.hash !== terminal.hash) closeTerminal()
+  if (route.kind !== 'worktree') parkWorktreeTerminal()
 
   renderSeq += 1
   shownHash = location.hash
-  if (!route) return renderList()
+  renderTabs(route.kind)
+  if (route.kind === 'repos') return renderRepos()
+  if (route.kind === 'sessions') return renderList()
+  if (route.kind === 'worktree') return renderWorktreePage(route.path)
 
   const session = state.sessions.find((s) => sessionHref(s) === sessionHref(route))
   if (!session) return renderNotFound()
@@ -2626,7 +3033,7 @@ function sessionKey(key, session) {
   if (BACK_KEYS.includes(key)) {
     confirmDiscard(() => {
       selectedDir = session.dir
-      location.hash = '#/'
+      location.hash = '#/sessions'
     })
     return true
   }
@@ -2639,6 +3046,14 @@ function sessionKey(key, session) {
   if (key === 'ArrowDown' || key === 'ArrowUp') return moveStop(session, key === 'ArrowDown' ? 1 : -1)
 
   return sessionAction(session, key)
+}
+
+// Runs the worktree page shortcut for `key` and returns true when it acted.
+function worktreeKey(key) {
+  if (!BACK_KEYS.includes(key)) return false
+
+  location.hash = '#/'
+  return true
 }
 
 // Returns the shortcut name of `event`, or null when its modifiers make it no shortcut.
@@ -2684,6 +3099,7 @@ function onKey(event) {
   }
 
   if (terminal !== null && event.target.closest('#view')) return
+  if (event.target.closest('#term-view')) return
 
   const key = shortcutKey(event)
   if (key === null) return
@@ -2692,8 +3108,15 @@ function onKey(event) {
   if (key === 'Enter' && event.target.closest('button, a')) return
 
   const route = parseRoute(location.hash)
-  if (!route) {
+  if (route.kind === 'repos') return
+
+  if (route.kind === 'sessions') {
     if (listKey(key)) event.preventDefault()
+    return
+  }
+
+  if (route.kind === 'worktree') {
+    if (worktreeKey(key)) event.preventDefault()
     return
   }
 
@@ -2724,6 +3147,13 @@ function showFontSize(size) {
   $('font-down').disabled = size <= FONT_MIN
   $('font-up').disabled = size >= FONT_MAX
 
+  for (const { tabs } of worktreeTerms.values()) {
+    for (const tab of tabs) {
+      tab.term.options.fontSize = terminalFontSize()
+      tab.fit.fit()
+    }
+  }
+
   if (terminal === null) return
 
   terminal.xterm.options.fontSize = terminalFontSize()
@@ -2753,7 +3183,7 @@ function writeOrgFilter(org) {
 
 async function poll() {
   try {
-    const { sessions, problems } = await loadSessions()
+    const [{ sessions, problems }] = await Promise.all([loadSessions(), loadRepos()])
     for (const session of sessions) {
       const problem = sessionProblem(session)
       if (problem !== null) problems.push(`${sessionName(session)}: ${problem}`)

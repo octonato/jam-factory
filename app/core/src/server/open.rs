@@ -12,32 +12,34 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Opens a session's worktree or open pull request in a tool.
-//! Route: `POST /api/open/<tool>/<org>/<repo>/<branch>/<id>`.
+//! Opens a session's worktree or a configured worktree in a tool, or its pull request or repository on GitHub.
+//! Routes: `POST /api/open/<tool>/<org>/<repo>/<branch>/<id>` and `POST /api/open/<tool>?path=<worktree>`.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use jam_factory_store::sessions::SESSION_FILE;
 
-use super::api::{error_response, same_origin, segments, session_ref, worktree};
+use super::api::{
+    Segments, configured_worktree, error_response, same_origin, segments, session_ref, worktree,
+};
 use super::http::{Request, Response};
+use super::repos::RepoList;
 use crate::store::Store;
 
 const TEXT: &str = "text/plain; charset=utf-8";
 
-/// A `sh` script that opens the open pull request of the worktree `$1` on GitHub.
+/// A `sh` script that opens the open pull request of the worktree `$1` on GitHub, or its repository page when it has none.
 const GITHUB_SCRIPT: &str = r#"cd "$1" || exit 1
 PATH="$PATH:/opt/homebrew/bin:/usr/local/bin"
-url=$(gh pr view --json url,state --jq 'select(.state == "OPEN") | .url') || exit 1
+url=$(gh pr view --json url,state --jq 'select(.state == "OPEN") | .url' 2>/dev/null)
 if [ -z "$url" ]; then
-    echo "no open pull request" >&2
-    exit 1
+    url=$(gh repo view --json url --jq .url) || exit 1
 fi
 open "$url"
 "#;
 
-/// A tool that opens a worktree or its open pull request.
+/// A tool that opens a worktree, or its pull request or repository on GitHub.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tool {
     IntelliJ,
@@ -111,37 +113,44 @@ impl Runner for SystemRunner {
     }
 }
 
-/// Answers `POST` with `store`.
-pub fn post(store: &dyn Store, request: &Request) -> Response {
-    post_with(store, request, &SystemRunner)
+/// Answers `POST` with `store` and `repos`.
+pub fn post(store: &dyn Store, repos: &dyn RepoList, request: &Request) -> Response {
+    post_with(store, repos, request, &SystemRunner)
 }
 
-/// Answers `POST` with `store`, running the tool with `runner`.
-pub fn post_with(store: &dyn Store, request: &Request, runner: &dyn Runner) -> Response {
+/// Answers `POST` with `store` and `repos`, running the tool with `runner`.
+pub fn post_with(
+    store: &dyn Store,
+    repos: &dyn RepoList,
+    request: &Request,
+    runner: &dyn Runner,
+) -> Response {
     if !same_origin(request) {
         return Response::error(403);
     }
 
     let segments = segments(&request.target);
 
-    let ["", "api", "open", tool, org, repo, branch, id] = segments.as_slice() else {
-        return Response::error(404);
+    let (tool, session) = match segments.as_slice() {
+        ["", "api", "open", tool] => (tool, None),
+        ["", "api", "open", tool, org, repo, branch, id] => {
+            (tool, Some([*org, *repo, *branch, *id]))
+        }
+        _ => return Response::error(404),
     };
 
     let Some(tool) = Tool::parse(tool) else {
         return Response::error(404);
     };
 
-    let session =
-        session_ref([org, repo, branch, id]).and_then(|s| store.read_file(&s, SESSION_FILE));
-
-    let session = match session {
-        Ok(file) => file.content,
-        Err(error) => return error_response(&error),
+    let worktree = match session {
+        Some(session) => session_worktree(store, session),
+        None => configured_worktree(repos, &request.target).ok_or_else(|| Response::error(404)),
     };
 
-    let Some(worktree) = worktree(&session) else {
-        return Response::error(404);
+    let worktree = match worktree {
+        Ok(worktree) => worktree,
+        Err(response) => return response,
     };
 
     let (program, args) = tool.command(&worktree);
@@ -150,6 +159,15 @@ pub fn post_with(store: &dyn Store, request: &Request, runner: &dyn Runner) -> R
         Ok(()) => Response::new(204, TEXT, Vec::new()),
         Err(error) => Response::new(500, TEXT, error.into_bytes()),
     }
+}
+
+/// The worktree of the session named by the percent-encoded segments `session`, or the error response.
+fn session_worktree(store: &dyn Store, session: Segments) -> Result<PathBuf, Response> {
+    let session = session_ref(session)
+        .and_then(|s| store.read_file(&s, SESSION_FILE))
+        .map_err(|error| error_response(&error))?;
+
+    worktree(&session.content).ok_or_else(|| Response::error(404))
 }
 
 /// The `open -a <app> <worktree>` command.
@@ -206,12 +224,15 @@ mod tests {
     use std::cell::RefCell;
     use std::fs;
     use std::path::PathBuf;
+    use std::process::Stdio;
 
     use jam_factory_store::StoreError;
+    use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
     use serde_json::Value;
 
     use super::*;
     use crate::server::fake_store::FakeStore;
+    use crate::server::repos::FixedRepos;
 
     const TARGET: &str = "/api/open/zed/o/stack/main/a";
 
@@ -287,25 +308,92 @@ mod tests {
         (program.to_string(), strings(args))
     }
 
+    /// The `/api/open/<tool>` target that opens the folder `path`.
+    fn open_target(tool: &str, path: &Path) -> String {
+        let path = utf8_percent_encode(&path.to_string_lossy(), NON_ALPHANUMERIC).to_string();
+        format!("/api/open/{tool}?path={path}")
+    }
+
+    /// Runs `git args` in `dir`, without the user and system git config.
+    fn git(dir: &Path, args: &[&str]) {
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .unwrap();
+
+        assert!(status.success(), "git {args:?}");
+    }
+
+    /// The canonical main checkout `o/r/main` under `dir` and its linked worktree `o/r/work tree's`, or `None` without git.
+    fn repo_with_worktree(dir: &Path) -> Option<(PathBuf, PathBuf)> {
+        if Command::new("git").arg("--version").output().is_err() {
+            return None;
+        }
+
+        let dir = fs::canonicalize(dir).unwrap();
+        let main = dir.join("o/r/main");
+        let linked = dir.join("o/r/work tree's");
+
+        git(&dir, &["init", "-q", "-b", "main", "o/r/main"]);
+        git(
+            &main,
+            &[
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                "init",
+            ],
+        );
+        git(
+            &main,
+            &["worktree", "add", "-q", "-b", "work", "../work tree's"],
+        );
+
+        Some((main, linked))
+    }
+
     /// A folder with stub `gh` and `open` programs in `bin/`, and the worktree `work tree/`.
     struct Stubs {
         dir: tempfile::TempDir,
     }
 
     impl Stubs {
-        /// Stubs where `gh` runs its `--jq` filter on a pull request in `state` at `url`, if `jq` is on `PATH`.
-        fn pr(state: &str, url: &str) -> Option<Stubs> {
+        /// Stubs where `gh` runs its `--jq` filter on the pull request `pr` (state and url) or on the repository at `repo`, if `jq` is on `PATH`.
+        fn github(pr: Option<(&str, &str)>, repo: &str) -> Option<Stubs> {
             let jq = find_program("jq")?;
-            let record = serde_json::json!({ "state": state, "url": url }).to_string();
+            let repo = serde_json::json!({ "url": repo }).to_string();
+
+            let pr = match pr {
+                Some((state, url)) => {
+                    let record = serde_json::json!({ "state": state, "url": url }).to_string();
+                    format!("record={}", shell_single_quote(&record))
+                }
+                None => "echo 'no pull requests found' >&2; exit 1".to_string(),
+            };
 
             let gh = format!(
-                r#"while [ $# -gt 0 ]; do
+                r#"case "$1" in
+    pr) {pr} ;;
+    repo) record={repo} ;;
+esac
+while [ $# -gt 0 ]; do
     if [ "$1" = --jq ]; then filter=$2; fi
     shift
 done
-printf '%s' {record} | {jq} -r "$filter"
+printf '%s' "$record" | {jq} -r "$filter"
 "#,
-                record = shell_single_quote(&record),
+                repo = shell_single_quote(&repo),
                 jq = shell_single_quote(&jq.to_string_lossy()),
             );
 
@@ -404,25 +492,28 @@ printf '%s' {record} | {jq} -r "$filter"
     }
 
     #[test]
-    fn github_script_without_an_open_pr_fails() {
-        for state in ["MERGED", "CLOSED"] {
-            let Some(stubs) = Stubs::pr(state, "https://github.com/o/r/pull/1") else {
+    fn github_script_without_an_open_pr_opens_the_repo() {
+        let pull = "https://github.com/o/r/pull/1";
+
+        for pr in [Some(("MERGED", pull)), Some(("CLOSED", pull)), None] {
+            let Some(stubs) = Stubs::github(pr, "https://github.com/o/r") else {
                 eprintln!("skipped: jq is not on PATH");
                 return;
             };
 
+            assert_eq!(stubs.run(), Ok(()), "{pr:?}");
             assert_eq!(
-                stubs.run(),
-                Err("no open pull request".to_string()),
-                "{state}"
+                stubs.opened().as_deref(),
+                Some("https://github.com/o/r"),
+                "{pr:?}"
             );
-            assert_eq!(stubs.opened(), None, "{state}");
         }
     }
 
     #[test]
     fn github_script_opens_the_pr_url() {
-        let Some(stubs) = Stubs::pr("OPEN", "https://github.com/o/r/pull/1") else {
+        let pr = Some(("OPEN", "https://github.com/o/r/pull/1"));
+        let Some(stubs) = Stubs::github(pr, "https://github.com/o/r") else {
             eprintln!("skipped: jq is not on PATH");
             return;
         };
@@ -436,9 +527,10 @@ printf '%s' {record} | {jq} -r "$filter"
 
     #[test]
     fn github_script_gives_the_gh_error() {
-        let stubs = Stubs::failing("no pull requests found");
+        let stubs = Stubs::failing("not a git repository");
 
-        assert_eq!(stubs.run(), Err("no pull requests found".to_string()));
+        assert_eq!(stubs.run(), Err("not a git repository".to_string()));
+        assert_eq!(stubs.opened(), None);
     }
 
     #[test]
@@ -461,7 +553,12 @@ printf '%s' {record} | {jq} -r "$filter"
         let f = fixture();
         let runner = RecordingRunner::new(Ok(()));
 
-        let response = post_with(&f.store, &request(TARGET, &[]), &runner);
+        let response = post_with(
+            &f.store,
+            &FixedRepos(vec![]),
+            &request(TARGET, &[]),
+            &runner,
+        );
 
         assert_eq!(response.status, 204);
         assert!(response.body.is_empty());
@@ -480,7 +577,12 @@ printf '%s' {record} | {jq} -r "$filter"
         let error = "Unable to find application named 'Zed'";
         let runner = RecordingRunner::new(Err(error.to_string()));
 
-        let response = post_with(&f.store, &request(TARGET, &[]), &runner);
+        let response = post_with(
+            &f.store,
+            &FixedRepos(vec![]),
+            &request(TARGET, &[]),
+            &runner,
+        );
 
         assert_eq!(response.status, 500);
         assert_eq!(response.body, error.as_bytes());
@@ -492,7 +594,12 @@ printf '%s' {record} | {jq} -r "$filter"
         f.store.failure = Some(StoreError::Io("the disk is full".to_string()));
         let runner = RecordingRunner::new(Ok(()));
 
-        let response = post_with(&f.store, &request(TARGET, &[]), &runner);
+        let response = post_with(
+            &f.store,
+            &FixedRepos(vec![]),
+            &request(TARGET, &[]),
+            &runner,
+        );
 
         assert_eq!(response.status, 500);
         assert_eq!(response.body, b"the disk is full");
@@ -515,13 +622,23 @@ printf '%s' {record} | {jq} -r "$filter"
         ] {
             f.write_session(&session);
 
-            let response = post_with(&f.store, &request(TARGET, &[]), &runner);
+            let response = post_with(
+                &f.store,
+                &FixedRepos(vec![]),
+                &request(TARGET, &[]),
+                &runner,
+            );
 
             assert_eq!(response.status, 404, "{session}");
         }
 
         f.store.write("session.json", "not json");
-        let response = post_with(&f.store, &request(TARGET, &[]), &runner);
+        let response = post_with(
+            &f.store,
+            &FixedRepos(vec![]),
+            &request(TARGET, &[]),
+            &runner,
+        );
 
         assert_eq!(response.status, 404);
         assert!(runner.calls.into_inner().is_empty());
@@ -539,7 +656,12 @@ printf '%s' {record} | {jq} -r "$filter"
             "/api/open/zed/stack/a",
             "/open/zed/stack/a",
         ] {
-            let response = post_with(&f.store, &request(target, &[]), &runner);
+            let response = post_with(
+                &f.store,
+                &FixedRepos(vec![]),
+                &request(target, &[]),
+                &runner,
+            );
 
             assert_eq!(response.status, 404, "{target}");
         }
@@ -561,7 +683,12 @@ printf '%s' {record} | {jq} -r "$filter"
             "/api/open/zed//stack/main/a",
             "/api/open/zed/o/%FF/main/a",
         ] {
-            let response = post_with(&f.store, &request(target, &[]), &runner);
+            let response = post_with(
+                &f.store,
+                &FixedRepos(vec![]),
+                &request(target, &[]),
+                &runner,
+            );
 
             assert_eq!(response.status, 404, "{target}");
         }
@@ -578,7 +705,12 @@ printf '%s' {record} | {jq} -r "$filter"
         let job = serde_json::json!({ "worktree": f.worktree });
         f.store.write("job.json", &job.to_string());
 
-        let response = post_with(&f.store, &request(TARGET, &[]), &runner);
+        let response = post_with(
+            &f.store,
+            &FixedRepos(vec![]),
+            &request(TARGET, &[]),
+            &runner,
+        );
 
         assert_eq!(response.status, 404);
         assert!(runner.calls.into_inner().is_empty());
@@ -590,10 +722,81 @@ printf '%s' {record} | {jq} -r "$filter"
         let runner = RecordingRunner::new(Ok(()));
         let foreign = request(TARGET, &[("Origin", "http://evil")]);
 
-        let response = post_with(&f.store, &foreign, &runner);
+        let response = post_with(&f.store, &FixedRepos(vec![]), &foreign, &runner);
 
         assert_eq!(response.status, 403);
         assert!(f.store.reads().is_empty());
+        assert!(runner.calls.into_inner().is_empty());
+    }
+
+    #[test]
+    fn opens_a_configured_worktree() {
+        let dir = tempfile::tempdir().unwrap();
+        let Some((main, linked)) = repo_with_worktree(dir.path()) else {
+            eprintln!("skipped: git is missing");
+            return;
+        };
+        let store = FakeStore::default();
+        let runner = RecordingRunner::new(Ok(()));
+        let repos = FixedRepos(vec![main]);
+
+        let target = open_target("zed", &linked);
+        let response = post_with(&store, &repos, &request(&target, &[]), &runner);
+
+        assert_eq!(response.status, 204);
+        assert!(store.reads().is_empty());
+
+        let linked = linked.to_string_lossy().into_owned();
+        assert_eq!(
+            runner.calls.into_inner(),
+            [command("open", &["-a", "Zed", linked.as_str()])]
+        );
+    }
+
+    #[test]
+    fn unconfigured_or_missing_path_is_404() {
+        let dir = tempfile::tempdir().unwrap();
+        let Some((main, linked)) = repo_with_worktree(dir.path()) else {
+            eprintln!("skipped: git is missing");
+            return;
+        };
+        let runner = RecordingRunner::new(Ok(()));
+        let parent = main.parent().unwrap().to_path_buf();
+        let repos = FixedRepos(vec![main]);
+
+        for target in [
+            "/api/open/zed".to_string(),
+            "/api/open/zed?path=".to_string(),
+            open_target("zed", &parent),
+            open_target("vim", &linked),
+        ] {
+            let response = post_with(
+                &FakeStore::default(),
+                &repos,
+                &request(&target, &[]),
+                &runner,
+            );
+
+            assert_eq!(response.status, 404, "{target}");
+        }
+
+        assert!(runner.calls.into_inner().is_empty());
+    }
+
+    #[test]
+    fn worktree_open_checks_the_origin() {
+        let dir = tempfile::tempdir().unwrap();
+        let Some((main, linked)) = repo_with_worktree(dir.path()) else {
+            eprintln!("skipped: git is missing");
+            return;
+        };
+        let runner = RecordingRunner::new(Ok(()));
+        let repos = FixedRepos(vec![main]);
+        let foreign = request(&open_target("zed", &linked), &[("Origin", "http://evil")]);
+
+        let response = post_with(&FakeStore::default(), &repos, &foreign, &runner);
+
+        assert_eq!(response.status, 403);
         assert!(runner.calls.into_inner().is_empty());
     }
 

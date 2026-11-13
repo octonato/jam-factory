@@ -21,6 +21,7 @@ use std::thread;
 
 use jam_board_core::mcp_client::{MCP_BINARY, McpStore, find_mcp_binary};
 use jam_board_core::server::Server;
+use jam_board_core::server::repos::ConfigRepos;
 use jam_factory_store::root::resolve_port;
 
 fn main() -> ExitCode {
@@ -52,7 +53,7 @@ fn main() -> ExitCode {
         }
     };
 
-    let server = match Server::start(Arc::new(store), port) {
+    let server = match Server::start(Arc::new(store), Arc::new(ConfigRepos { home }), port) {
         Ok(server) => server,
         Err(error) => {
             eprintln!("Cannot listen on 127.0.0.1:{port}: {error}");

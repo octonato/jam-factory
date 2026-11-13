@@ -22,18 +22,20 @@ use serde_json::{Value, json};
 
 use super::http::{Request, Response};
 use super::open;
+use super::repos::{RepoList, is_worktree, repos_json};
 use crate::store::Store;
 
 const HTML: &str = "text/html; charset=utf-8";
 const JSON: &str = "application/json";
 const TEXT: &str = "text/plain; charset=utf-8";
 
-/// Answers `GET target` with `store`.
-pub fn get(store: &dyn Store, target: &str) -> Response {
+/// Answers `GET target` with `store` and `repos`.
+pub fn get(store: &dyn Store, repos: &dyn RepoList, target: &str) -> Response {
     let segments = segments(target);
 
     let result = match segments.as_slice() {
         ["", "api", "sessions"] => sessions(store),
+        ["", "api", "repos"] => Ok(json_response(&repos_json(repos))),
         ["", "api", "files", org, repo, branch, id] => files(store, [org, repo, branch, id]),
         ["", "api", "file", org, repo, branch, id, path @ ..] if !path.is_empty() => {
             file(store, [org, repo, branch, id], path)
@@ -44,15 +46,15 @@ pub fn get(store: &dyn Store, target: &str) -> Response {
     result.unwrap_or_else(|error| error_response(&error))
 }
 
-/// Answers `POST` with `store`.
-pub fn post(store: &dyn Store, request: &Request) -> Response {
+/// Answers `POST` with `store` and `repos`.
+pub fn post(store: &dyn Store, repos: &dyn RepoList, request: &Request) -> Response {
     let segments = segments(&request.target);
 
     match segments.as_slice() {
         ["", "api", "archive", org, repo, branch, id] => {
             archive(store, request, [org, repo, branch, id])
         }
-        ["", "api", "open", ..] => open::post(store, request),
+        ["", "api", "open", ..] => open::post(store, repos, request),
         _ => Response::error(404),
     }
 }
@@ -190,6 +192,25 @@ pub(super) fn worktree(text: &str) -> Option<PathBuf> {
 
     let worktree = PathBuf::from(session.get("worktree")?.as_str()?);
     worktree.is_dir().then_some(worktree)
+}
+
+/// The folder in the `path` field of the query in `target`, if it exists and is a worktree of `repos`.
+pub(super) fn configured_worktree(repos: &dyn RepoList, target: &str) -> Option<PathBuf> {
+    query_field(target, "path")
+        .map(PathBuf::from)
+        .filter(|path| path.is_dir() && is_worktree(repos, path))
+}
+
+/// The percent-decoded value of the field `name` in the query of `target`.
+pub(super) fn query_field(target: &str, name: &str) -> Option<String> {
+    let query = target.split_once('?').map_or("", |(_, query)| query);
+
+    query
+        .split('&')
+        .filter_map(|pair| pair.split_once('='))
+        .find(|(key, _)| *key == name)
+        .and_then(|(_, value)| percent_decode_str(value).decode_utf8().ok())
+        .map(|value| value.into_owned())
 }
 
 /// The file path named by the percent-encoded segments `path`.

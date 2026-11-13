@@ -93,16 +93,18 @@ mod tests {
     }
 
     #[test]
-    fn dashboard_header_has_a_sessions_tab() {
+    fn dashboard_header_has_repos_and_sessions_tabs() {
         let html = std::str::from_utf8(embedded("/dashboard.html").unwrap().bytes).unwrap();
         let start = html.find("<header>").unwrap();
         let end = html.find("</header>").unwrap();
         let header = &html[start..end];
 
         let title = header.find("<h1>Jam Board</h1>").unwrap();
-        let tabs = header.find("<nav class=\"tabs\">").unwrap();
+        let tabs = header.find("<nav class=\"tabs\" id=\"tabs\">").unwrap();
         assert!(tabs > title);
-        assert!(header.contains("<a class=\"tab\" href=\"#/\" aria-current=\"page\">Sessions</a>"));
+        assert!(header.contains(
+            "<a class=\"tab\" href=\"#/\" aria-current=\"page\">Repos</a><a class=\"tab\" href=\"#/sessions\">Sessions</a>"
+        ));
     }
 
     #[test]

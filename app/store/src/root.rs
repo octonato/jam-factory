@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Finds the factory root and the server port from `~/.jam-factory/config.json`.
+//! Finds the factory root, the server port and the repos from `~/.jam-factory/config.json`.
 
 use std::fs;
 use std::io;
@@ -43,6 +43,14 @@ pub struct PortError {
     pub reason: String,
 }
 
+/// A config file whose repos cannot be read, with its path and the reason.
+#[derive(Debug, Error)]
+#[error("Cannot read the repos from {}: {reason}", path.display())]
+pub struct ReposError {
+    pub path: PathBuf,
+    pub reason: String,
+}
+
 #[derive(Default, Deserialize)]
 struct RootConfig {
     root: Option<String>,
@@ -51,6 +59,11 @@ struct RootConfig {
 #[derive(Default, Deserialize)]
 struct PortConfig {
     port: Option<u16>,
+}
+
+#[derive(Default, Deserialize)]
+struct ReposConfig {
+    repos: Option<Vec<String>>,
 }
 
 /// Returns the factory root for the home folder `home`.
@@ -94,6 +107,30 @@ pub fn resolve_port(home: &Path) -> Result<u16, PortError> {
         Some(0) => Err(error("port 0 is not between 1 and 65535".to_string())),
         Some(port) => Ok(port),
     }
+}
+
+/// Returns the main checkouts listed in the config for the home folder `home`.
+pub fn resolve_repos(home: &Path) -> Result<Vec<PathBuf>, ReposError> {
+    let path = home.join(CONFIG_DIR).join(CONFIG_FILE);
+
+    let error = |reason: String| ReposError {
+        path: path.clone(),
+        reason,
+    };
+
+    let config: ReposConfig = read_config(&path).map_err(error)?;
+
+    let mut repos = Vec::new();
+    for repo in config.repos.unwrap_or_default() {
+        let expanded = expand(home, &repo);
+        if !expanded.is_absolute() {
+            return Err(error(format!("repo {repo:?} is not an absolute path")));
+        }
+
+        repos.push(expanded);
+    }
+
+    Ok(repos)
 }
 
 /// Reads and parses the config file at `path`, or returns an empty config when it is missing.
@@ -265,6 +302,75 @@ mod tests {
 
         let port = resolve_port(home.path()).unwrap();
 
+        assert_eq!(port, 9000);
+    }
+
+    #[test]
+    fn no_repos_without_config() {
+        let home = tempfile::tempdir().unwrap();
+
+        let repos = resolve_repos(home.path()).unwrap();
+
+        assert_eq!(repos, Vec::<PathBuf>::new());
+    }
+
+    #[test]
+    fn config_without_repos_is_empty() {
+        let home = tempfile::tempdir().unwrap();
+        write_config(home.path(), r#"{ "root": "/x" }"#);
+
+        let repos = resolve_repos(home.path()).unwrap();
+
+        assert_eq!(repos, Vec::<PathBuf>::new());
+    }
+
+    #[test]
+    fn repos_expand_tilde() {
+        let home = tempfile::tempdir().unwrap();
+        write_config(home.path(), r#"{ "repos": ["~/a/b/main", "/x/y/main"] }"#);
+
+        let repos = resolve_repos(home.path()).unwrap();
+
+        assert_eq!(
+            repos,
+            vec![home.path().join("a/b/main"), PathBuf::from("/x/y/main")]
+        );
+    }
+
+    #[test]
+    fn bad_repos_is_an_error() {
+        let home = tempfile::tempdir().unwrap();
+
+        for text in [
+            r#"{ "repos": "x" }"#,
+            r#"{ "repos": [3] }"#,
+            r#"{ "repos": ["rel/path"] }"#,
+            r#"{ "repos": [""] }"#,
+            "not json",
+        ] {
+            let config = write_config(home.path(), text);
+
+            let err = resolve_repos(home.path()).unwrap_err();
+
+            assert!(
+                err.to_string().contains(&config.display().to_string()),
+                "{text}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn bad_repos_does_not_break_root_or_port() {
+        let home = tempfile::tempdir().unwrap();
+        write_config(
+            home.path(),
+            r#"{ "root": "/x/y", "port": 9000, "repos": 3 }"#,
+        );
+
+        let root = resolve(home.path()).unwrap();
+        assert_eq!(root, PathBuf::from("/x/y"));
+
+        let port = resolve_port(home.path()).unwrap();
         assert_eq!(port, 9000);
     }
 }

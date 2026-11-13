@@ -134,7 +134,20 @@ just uninstall-server
 { "root": "~/Sources/factory", "port": 9000 }
 ```
 
-Restart `jam-factory-server` after you change `config.json`:
+To list main checkouts on the Repos tab of Jam Board, set `repos` to a list of their paths. A leading `~` expands to your home folder. Each path must be absolute after expansion:
+
+```json
+{
+  "repos": [
+    "~/Sources/akka/sdk/main",
+    "~/Sources/octonato/jam-factory/main"
+  ]
+}
+```
+
+The Repos tab lists each checkout with its worktrees. A worktree's page lists its live sessions and runs a shell or lazygit in each tab. `jam-factory-server` reads `repos` on each request, so a change to `repos` needs no restart.
+
+Restart `jam-factory-server` after you change `root` or `port`:
 
 ```sh
 launchctl kickstart -k "gui/$(id -u)/io.github.octonato.jam-factory.server"
@@ -299,7 +312,7 @@ A step in changes mode holds git diffs. A step in code-path mode holds lines of 
 
 ```
 ~/.jam-factory/
-  config.json                    optional: { "root": "<root>", "port": <port> }
+  config.json                    optional: { "root": "<root>", "port": <port>, "repos": ["<path>", ...] }
 <root>/                          ~/.jam-factory/factory by default
   <org>/<repo>/sessions/<branch>/<session id>/
     session.json                 the session's mode, stage, round and counts

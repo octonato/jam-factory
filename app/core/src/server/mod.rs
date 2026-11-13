@@ -21,6 +21,7 @@ mod fake_store;
 pub mod http;
 pub mod open;
 pub mod pty;
+pub mod repos;
 pub mod terminal;
 
 use std::io;
@@ -32,6 +33,7 @@ use std::time::Duration;
 
 use dashboard::embedded;
 use http::{ReadError, Request, Response, read_request};
+use repos::RepoList;
 
 use crate::store::Store;
 
@@ -46,8 +48,8 @@ pub struct Server {
 }
 
 impl Server {
-    /// Serves `store` on `127.0.0.1:port`, or on a free port if `port` is 0.
-    pub fn start(store: Arc<dyn Store>, port: u16) -> io::Result<Server> {
+    /// Serves `store` and `repos` on `127.0.0.1:port`, or on a free port if `port` is 0.
+    pub fn start(store: Arc<dyn Store>, repos: Arc<dyn RepoList>, port: u16) -> io::Result<Server> {
         let listener = TcpListener::bind(("127.0.0.1", port))?;
         let address = listener.local_addr()?;
         let stop = Arc::new(AtomicBool::new(false));
@@ -57,7 +59,7 @@ impl Server {
             let port = address.port();
             thread::Builder::new()
                 .name(format!("jam-board-server-{port}"))
-                .spawn(move || accept_loop(listener, store, port, &stop))?
+                .spawn(move || accept_loop(listener, store, repos, port, &stop))?
         };
 
         Ok(Server {
@@ -85,16 +87,16 @@ impl Drop for Server {
     }
 }
 
-/// Answers one request with `store`, served on `port`.
-pub fn handle(store: &dyn Store, port: u16, request: &Request) -> Response {
+/// Answers one request with `store` and `repos`, served on `port`.
+pub fn handle(store: &dyn Store, repos: &dyn RepoList, port: u16, request: &Request) -> Response {
     if !local_host(request, port) {
         return Response::error(403);
     }
 
     match request.method.as_str() {
-        "GET" if request.target.starts_with("/api/") => api::get(store, &request.target),
+        "GET" if request.target.starts_with("/api/") => api::get(store, repos, &request.target),
         "GET" => dashboard_file(&request.target),
-        "POST" => api::post(store, request),
+        "POST" => api::post(store, repos, request),
         "PUT" => api::put(store, request),
         _ => Response::error(405),
     }
@@ -117,7 +119,13 @@ fn dashboard_file(target: &str) -> Response {
     }
 }
 
-fn accept_loop(listener: TcpListener, store: Arc<dyn Store>, port: u16, stop: &AtomicBool) {
+fn accept_loop(
+    listener: TcpListener,
+    store: Arc<dyn Store>,
+    repos: Arc<dyn RepoList>,
+    port: u16,
+    stop: &AtomicBool,
+) {
     for stream in listener.incoming() {
         if stop.load(Ordering::SeqCst) {
             break;
@@ -129,11 +137,13 @@ fn accept_loop(listener: TcpListener, store: Arc<dyn Store>, port: u16, stop: &A
         };
 
         let store = Arc::clone(&store);
-        let _ = thread::Builder::new().spawn(move || serve(store.as_ref(), port, stream));
+        let repos = Arc::clone(&repos);
+        let _ = thread::Builder::new()
+            .spawn(move || serve(store.as_ref(), repos.as_ref(), port, stream));
     }
 }
 
-fn serve(store: &dyn Store, port: u16, mut stream: TcpStream) {
+fn serve(store: &dyn Store, repos: &dyn RepoList, port: u16, mut stream: TcpStream) {
     if stream.set_read_timeout(Some(READ_TIMEOUT)).is_err() {
         return;
     }
@@ -141,11 +151,11 @@ fn serve(store: &dyn Store, port: u16, mut stream: TcpStream) {
     let response = match read_request(&mut stream) {
         Ok(request) if local_host(&request, port) && terminal::is_upgrade(&request) => {
             if stream.set_read_timeout(None).is_ok() {
-                terminal::serve(store, &request, stream);
+                terminal::serve(store, repos, &request, stream);
             }
             return;
         }
-        Ok(request) => handle(store, port, &request),
+        Ok(request) => handle(store, repos, port, &request),
         Err(ReadError::Status(status)) => Response::error(status),
         Err(ReadError::Closed) => return,
     };

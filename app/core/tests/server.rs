@@ -13,17 +13,22 @@
 // limitations under the License.
 
 use std::collections::{BTreeMap, HashMap};
+use std::fs;
 use std::io::{ErrorKind, Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use jam_board_core::server::Server;
 use jam_board_core::server::dashboard::embedded;
+use jam_board_core::server::repos::FixedRepos;
 use jam_board_core::store::Store;
 use jam_factory_store::name::check_path;
 use jam_factory_store::sessions::SESSION_FILE;
 use jam_factory_store::{Category, FileRead, SessionEntry, SessionRef, StoreError};
+use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use serde_json::{Map, Value, json};
 use tungstenite::{ClientRequestBuilder, Message};
 
@@ -212,7 +217,7 @@ impl Fixture {
 /// A server on a free port over an empty fake store.
 fn fixture() -> Fixture {
     let store = Arc::new(FakeStore::default());
-    let server = Server::start(store.clone(), 0).unwrap();
+    let server = Server::start(store.clone(), Arc::new(FixedRepos(vec![])), 0).unwrap();
 
     Fixture { server, store }
 }
@@ -352,6 +357,69 @@ fn upgrade<'a>(
     headers
 }
 
+/// Runs `git args` in `dir`, without the user and system git config.
+fn git(dir: &Path, args: &[&str]) {
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .unwrap();
+
+    assert!(status.success(), "git {args:?}");
+}
+
+/// The canonical main checkout `o/r/main` under `dir` and its linked worktree `o/r/feature x`, or `None` without git.
+fn repo_with_worktree(dir: &Path) -> Option<(PathBuf, PathBuf)> {
+    if Command::new("git").arg("--version").output().is_err() {
+        return None;
+    }
+
+    let dir = fs::canonicalize(dir).unwrap();
+    let main = dir.join("o/r/main");
+    let linked = dir.join("o/r/feature x");
+
+    git(&dir, &["init", "-q", "-b", "main", "o/r/main"]);
+    git(
+        &main,
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "init",
+        ],
+    );
+    git(
+        &main,
+        &["worktree", "add", "-q", "-b", "feature", "../feature x"],
+    );
+
+    Some((main, linked))
+}
+
+/// A server on a free port over an empty fake store, with `main` as its one configured repo.
+fn repo_fixture(main: PathBuf) -> Fixture {
+    let store = Arc::new(FakeStore::default());
+    let server = Server::start(store.clone(), Arc::new(FixedRepos(vec![main])), 0).unwrap();
+
+    Fixture { server, store }
+}
+
+/// The `/api/terminal` target that runs `program` in the folder `path`.
+fn terminal_target(path: &Path, program: &str) -> String {
+    let path = utf8_percent_encode(&path.to_string_lossy(), NON_ALPHANUMERIC).to_string();
+    format!("/api/terminal?path={path}&program={program}")
+}
+
 #[test]
 fn sessions_route_returns_the_entries() {
     let f = session_fixture();
@@ -383,6 +451,40 @@ fn sessions_route_returns_the_entries() {
                 "error": error,
             },
         ] })
+    );
+}
+
+#[test]
+fn get_repos_lists_worktrees() {
+    let dir = tempfile::tempdir().unwrap();
+    let Some((main, linked)) = repo_with_worktree(dir.path()) else {
+        eprintln!("skipped: git is missing");
+        return;
+    };
+
+    let store = Arc::new(FakeStore::default());
+    let repos = Arc::new(FixedRepos(vec![main.clone()]));
+    let server = Server::start(store, repos, 0).unwrap();
+
+    let reply = get(server.port(), "/api/repos");
+
+    assert_eq!(reply.status, 200);
+    assert_eq!(reply.header("Content-Type"), Some("application/json"));
+    assert_eq!(
+        reply.json(),
+        json!({
+            "error": null,
+            "repos": [{
+                "org": "o",
+                "repo": "r",
+                "path": main,
+                "error": null,
+                "worktrees": [
+                    { "path": main, "branch": "main", "head": null },
+                    { "path": linked, "branch": "feature", "head": null },
+                ],
+            }],
+        })
     );
 }
 
@@ -972,11 +1074,55 @@ fn lazygit_on_an_unknown_session_closes_with_1011() {
 }
 
 #[test]
+fn terminal_upgrade_needs_the_board_origin() {
+    let dir = tempfile::tempdir().unwrap();
+    let Some((main, linked)) = repo_with_worktree(dir.path()) else {
+        eprintln!("skipped: git is missing");
+        return;
+    };
+    let f = repo_fixture(main);
+    let target = terminal_target(&linked, "shell");
+
+    let missing = upgrade(None, "13", Some(KEY));
+    let missing = request(f.port(), "GET", &target, &missing);
+    let foreign = upgrade(Some("http://evil"), "13", Some(KEY));
+    let foreign = request(f.port(), "GET", &target, &foreign);
+
+    assert_eq!(missing.status, 403);
+    assert_eq!(foreign.status, 403);
+}
+
+#[test]
+fn a_session_page_cannot_open_a_terminal() {
+    let dir = tempfile::tempdir().unwrap();
+    let Some((main, linked)) = repo_with_worktree(dir.path()) else {
+        eprintln!("skipped: git is missing");
+        return;
+    };
+    let f = repo_fixture(main);
+    f.store.write(&session_a(), SESSION_FILE, SESSION);
+    f.store
+        .write(&session_a(), "report.html", "<script></script>");
+    let target = terminal_target(&linked, "shell");
+
+    let page = get(f.port(), "/api/file/o/stack/main/a/report.html");
+    let sandboxed = upgrade(Some("null"), "13", Some(KEY));
+    let sandboxed = request(f.port(), "GET", &target, &sandboxed);
+
+    assert_eq!(page.status, 200);
+    assert_eq!(page.header("Content-Security-Policy"), Some("sandbox"));
+    assert_eq!(sandboxed.status, 403);
+}
+
+#[test]
 fn taken_port_is_an_error() {
     let taken = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = taken.local_addr().unwrap().port();
 
-    let Err(err) = Server::start(Arc::new(FakeStore::default()), port) else {
+    let store = Arc::new(FakeStore::default());
+    let repos = Arc::new(FixedRepos(vec![]));
+
+    let Err(err) = Server::start(store, repos, port) else {
         panic!("started on taken port {port}");
     };
 
@@ -990,7 +1136,7 @@ fn port_is_free_after_drop() {
 
     drop(server);
 
-    let again = Server::start(store, port).unwrap();
+    let again = Server::start(store, Arc::new(FixedRepos(vec![])), port).unwrap();
     assert_eq!(again.port(), port);
 }
 

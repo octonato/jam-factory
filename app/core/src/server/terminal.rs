@@ -12,8 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Runs lazygit on a session's worktree over a WebSocket on `GET /api/lazygit/<org>/<repo>/<branch>/<id>`.
+//! Runs a program in a worktree over a WebSocket on `GET /api/lazygit/<org>/<repo>/<branch>/<id>` and `GET /api/terminal`.
 
+use std::env;
+use std::ffi::OsStr;
 use std::io::{self, Write};
 use std::net::TcpStream;
 use std::path::PathBuf;
@@ -27,13 +29,20 @@ use tungstenite::protocol::frame::coding::CloseCode;
 use tungstenite::protocol::{CloseFrame, Role};
 use tungstenite::{Error, Message, WebSocket};
 
-use super::api::{segments, session_ref, worktree};
+use super::api::{configured_worktree, query_field, segments, session_ref, worktree};
 use super::http::{Request, Response};
 use super::pty::{Program, Pty};
+use super::repos::RepoList;
 use crate::store::Store;
 
 const DEFAULT_COLS: u16 = 80;
 const DEFAULT_ROWS: u16 = 24;
+
+/// The shell that `shell` runs when `SHELL` is unset or empty.
+const DEFAULT_SHELL: &str = "/bin/zsh";
+
+/// The close reason for a path that is not a folder of a configured worktree.
+const NOT_A_WORKTREE: &str = "not a configured worktree";
 
 /// The read timeout of the socket while it relays.
 const POLL: Duration = Duration::from_millis(10);
@@ -44,27 +53,93 @@ const CLOSE_WAIT: Duration = Duration::from_secs(1);
 /// The longest close reason, in bytes.
 const MAX_REASON: usize = 123;
 
-/// Whether `request` is a `GET` on `/api/lazygit/` that asks for a WebSocket.
+/// Whether `request` is a `GET` on `/api/lazygit/` or `/api/terminal` that asks for a WebSocket.
 pub fn is_upgrade(request: &Request) -> bool {
     request.method == "GET"
-        && segments(&request.target).starts_with(&["", "api", "lazygit"])
+        && (lazygit_route(request) || terminal_route(request))
         && request
             .header("Upgrade")
             .is_some_and(|upgrade| upgrade.eq_ignore_ascii_case("websocket"))
 }
 
-/// Upgrades `request` on `stream` and runs lazygit in the worktree of its session.
-pub fn serve(store: &dyn Store, request: &Request, stream: TcpStream) {
-    let program = Program {
-        name: "lazygit".to_string(),
-        args: Vec::new(),
-    };
+/// Whether the path of `request` starts with `/api/lazygit`.
+fn lazygit_route(request: &Request) -> bool {
+    segments(&request.target).starts_with(&["", "api", "lazygit"])
+}
 
-    serve_with(store, request, stream, &program);
+/// Whether the path of `request` is `/api/terminal`.
+fn terminal_route(request: &Request) -> bool {
+    segments(&request.target) == ["", "api", "terminal"]
+}
+
+/// Upgrades `request` on `stream` and runs its program in the worktree that its path names.
+pub fn serve(store: &dyn Store, repos: &dyn RepoList, request: &Request, stream: TcpStream) {
+    if terminal_route(request) {
+        let shell = env::var_os("SHELL");
+        serve_worktree_with(repos, request, stream, shell.as_deref());
+    } else {
+        serve_with(store, request, stream, &lazygit());
+    }
 }
 
 /// Upgrades `request` on `stream` and runs `program` in the worktree of its session.
-pub fn serve_with(store: &dyn Store, request: &Request, mut stream: TcpStream, program: &Program) {
+pub fn serve_with(store: &dyn Store, request: &Request, stream: TcpStream, program: &Program) {
+    let target = session_worktree(store, &request.target).map(|dir| (dir, program.clone()));
+
+    bridge(request, stream, target);
+}
+
+/// Upgrades `request` on `stream` and runs the `program` of its query in the configured worktree at its `path`.
+pub fn serve_worktree_with(
+    repos: &dyn RepoList,
+    request: &Request,
+    mut stream: TcpStream,
+    shell: Option<&OsStr>,
+) {
+    let name = query_field(&request.target, "program").unwrap_or_default();
+
+    let Some(program) = program_for(&name, shell) else {
+        let _ = Response::error(400).write_to(&mut stream);
+        return;
+    };
+
+    let target = configured_worktree(repos, &request.target)
+        .map(|dir| (dir, program))
+        .ok_or_else(|| NOT_A_WORKTREE.to_string());
+
+    bridge(request, stream, target);
+}
+
+/// The program named `name`: the login shell `shell` for `shell`, or lazygit for `lazygit`.
+fn program_for(name: &str, shell: Option<&OsStr>) -> Option<Program> {
+    match name {
+        "shell" => {
+            let shell = shell
+                .filter(|shell| !shell.is_empty())
+                .map_or(DEFAULT_SHELL.to_string(), |shell| {
+                    shell.to_string_lossy().into_owned()
+                });
+
+            Some(Program {
+                name: shell,
+                args: vec!["-l".to_string()],
+            })
+        }
+        "lazygit" => Some(lazygit()),
+        _ => None,
+    }
+}
+
+/// The program `lazygit`.
+fn lazygit() -> Program {
+    Program {
+        name: "lazygit".to_string(),
+        args: Vec::new(),
+    }
+}
+
+/// Upgrades `request` on `stream` and runs the program of `target` in its folder, or closes with 1011 and the reason.
+fn bridge(request: &Request, mut stream: TcpStream, target: Result<(PathBuf, Program), String>) {
     let key = match handshake_key(request) {
         Ok(key) => key,
         Err(status) => {
@@ -79,9 +154,9 @@ pub fn serve_with(store: &dyn Store, request: &Request, mut stream: TcpStream, p
 
     let mut socket = WebSocket::from_raw_socket(stream, Role::Server, None);
 
-    let pty = session_worktree(store, &request.target).and_then(|worktree| {
+    let pty = target.and_then(|(dir, program)| {
         let (cols, rows) = size(&request.target);
-        Pty::spawn(program, &worktree, cols, rows)
+        Pty::spawn(&program, &dir, cols, rows)
     });
 
     match pty {
@@ -151,14 +226,9 @@ fn session_worktree(store: &dyn Store, target: &str) -> Result<PathBuf, String> 
 
 /// The `cols` and `rows` of the query in `target`, each 80 or 24 when missing or invalid.
 fn size(target: &str) -> (u16, u16) {
-    let query = target.split_once('?').map_or("", |(_, query)| query);
-
     let field = |name: &str| {
-        query
-            .split('&')
-            .filter_map(|pair| pair.split_once('='))
-            .find(|(key, _)| *key == name)
-            .and_then(|(_, value)| value.parse::<u16>().ok())
+        query_field(target, name)
+            .and_then(|value| value.parse::<u16>().ok())
             .filter(|value| *value > 0)
     };
 
@@ -252,16 +322,19 @@ fn finish(socket: &mut WebSocket<TcpStream>) {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
     use std::net::TcpListener;
     use std::path::Path;
     use std::process::{Command, Stdio};
     use std::thread;
 
-    use tungstenite::{Bytes, ClientRequestBuilder};
+    use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
+    use tungstenite::{Bytes, ClientRequestBuilder, HandshakeError};
 
     use super::*;
     use crate::server::fake_store::FakeStore;
     use crate::server::http::read_request;
+    use crate::server::repos::FixedRepos;
 
     const TIMEOUT: Duration = Duration::from_secs(5);
     const TARGET: &str = "/api/lazygit/o/stack/main/a";
@@ -314,6 +387,107 @@ mod tests {
 
         let (socket, _) = tungstenite::client(client, stream).unwrap();
         socket
+    }
+
+    /// A client socket on `target`, which `serve_worktree_with` answers with `repos` and `shell` on another thread, or the status that refuses it.
+    fn connect_worktree(
+        repos: FixedRepos,
+        target: &str,
+        shell: &Path,
+    ) -> Result<WebSocket<TcpStream>, u16> {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let shell = shell.as_os_str().to_owned();
+
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let request = read_request(&mut stream).unwrap();
+            serve_worktree_with(&repos, &request, stream, Some(&shell));
+        });
+
+        let stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        stream.set_read_timeout(Some(TIMEOUT)).unwrap();
+
+        let uri = format!("ws://127.0.0.1:{port}{target}").parse().unwrap();
+        let client = ClientRequestBuilder::new(uri)
+            .with_header("Origin", format!("http://127.0.0.1:{port}"));
+
+        match tungstenite::client(client, stream) {
+            Ok((socket, _)) => Ok(socket),
+            Err(HandshakeError::Failure(Error::Http(response))) => Err(response.status().as_u16()),
+            Err(error) => panic!("no handshake: {error}"),
+        }
+    }
+
+    /// The `/api/terminal` target that runs `program` in the folder `path`.
+    fn terminal_target(path: &Path, program: &str) -> String {
+        let path = utf8_percent_encode(&path.to_string_lossy(), NON_ALPHANUMERIC).to_string();
+        format!("/api/terminal?path={path}&program={program}")
+    }
+
+    /// Writes the executable shell script `body` to `file`.
+    fn write_program(file: &Path, body: &str) {
+        use std::os::unix::fs::PermissionsExt;
+
+        fs::write(file, format!("#!/bin/sh\n{body}")).unwrap();
+        fs::set_permissions(file, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    /// A stub shell in `dir` that creates `dir/ran` and prints its folder.
+    fn stub_shell(dir: &Path) -> PathBuf {
+        let shell = dir.join("shell");
+        let ran = dir.join("ran");
+        write_program(&shell, &format!("touch '{}'\npwd", ran.display()));
+        shell
+    }
+
+    /// Runs `git args` in `dir`, without the user and system git config.
+    fn git(dir: &Path, args: &[&str]) {
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .unwrap();
+
+        assert!(status.success(), "git {args:?}");
+    }
+
+    /// The canonical main checkout `o/r/main` under `dir` and its linked worktree `o/r/work tree's`, or `None` without git.
+    fn repo_with_worktree(dir: &Path) -> Option<(PathBuf, PathBuf)> {
+        if Command::new("git").arg("--version").output().is_err() {
+            return None;
+        }
+
+        let dir = fs::canonicalize(dir).unwrap();
+        let main = dir.join("o/r/main");
+        let linked = dir.join("o/r/work tree's");
+
+        git(&dir, &["init", "-q", "-b", "main", "o/r/main"]);
+        git(
+            &main,
+            &[
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                "init",
+            ],
+        );
+        git(
+            &main,
+            &["worktree", "add", "-q", "-b", "work", "../work tree's"],
+        );
+
+        Some((main, linked))
     }
 
     /// The binary frames of `socket` up to the first one that makes them hold `needle`.
@@ -383,6 +557,34 @@ mod tests {
         assert!(!is_upgrade(&request("POST", TARGET, &upgrade)));
         assert!(!is_upgrade(&request("GET", TARGET, &[])));
         assert!(!is_upgrade(&files));
+    }
+
+    #[test]
+    fn is_upgrade_matches_the_terminal_route() {
+        let upgrade = [("Upgrade", "websocket")];
+        let target = "/api/terminal?path=%2Fa&program=shell";
+
+        assert!(is_upgrade(&request("GET", target, &upgrade)));
+        assert!(!is_upgrade(&request("POST", target, &upgrade)));
+        assert!(!is_upgrade(&request("GET", target, &[])));
+        assert!(!is_upgrade(&request("GET", "/api/terminal/x", &upgrade)));
+    }
+
+    #[test]
+    fn program_for_maps_names() {
+        let program = |name: &str, shell: Option<&str>| {
+            program_for(name, shell.map(OsStr::new)).map(|program| (program.name, program.args))
+        };
+        let login = |name: &str| Some((name.to_string(), vec!["-l".to_string()]));
+        let lazygit = Some(("lazygit".to_string(), Vec::new()));
+
+        assert_eq!(program("shell", Some("/bin/bash")), login("/bin/bash"));
+        assert_eq!(program("shell", None), login("/bin/zsh"));
+        assert_eq!(program("shell", Some("")), login("/bin/zsh"));
+        assert_eq!(program("lazygit", None), lazygit);
+        assert_eq!(program("lazygit", Some("/bin/bash")), lazygit);
+        assert_eq!(program("vim", None), None);
+        assert_eq!(program("vim", Some("/bin/bash")), None);
     }
 
     #[test]
@@ -531,5 +733,78 @@ mod tests {
 
         assert_eq!(code, 1011);
         assert!(!reason.is_empty());
+    }
+
+    #[test]
+    fn terminal_runs_the_shell_in_a_configured_worktree() {
+        let dir = tempfile::tempdir().unwrap();
+        let Some((main, linked)) = repo_with_worktree(dir.path()) else {
+            eprintln!("skipped: git is missing");
+            return;
+        };
+        let shell = stub_shell(dir.path());
+
+        let repos = FixedRepos(vec![main]);
+        let target = terminal_target(&linked, "shell");
+        let mut socket = connect_worktree(repos, &target, &shell).unwrap();
+
+        read_until(&mut socket, &linked.to_string_lossy());
+    }
+
+    #[test]
+    fn unknown_program_is_400() {
+        let dir = tempfile::tempdir().unwrap();
+        let Some((main, linked)) = repo_with_worktree(dir.path()) else {
+            eprintln!("skipped: git is missing");
+            return;
+        };
+        let shell = stub_shell(dir.path());
+
+        let repos = FixedRepos(vec![main]);
+        let target = terminal_target(&linked, "vim");
+        let status = connect_worktree(repos, &target, &shell).err();
+
+        assert_eq!(status, Some(400));
+        assert!(!dir.path().join("ran").exists());
+    }
+
+    #[test]
+    fn unconfigured_path_closes_with_1011() {
+        let dir = tempfile::tempdir().unwrap();
+        let Some((main, _)) = repo_with_worktree(dir.path()) else {
+            eprintln!("skipped: git is missing");
+            return;
+        };
+        let shell = stub_shell(dir.path());
+        let parent = main.parent().unwrap().to_path_buf();
+
+        let repos = FixedRepos(vec![main]);
+        let target = terminal_target(&parent, "shell");
+        let mut socket = connect_worktree(repos, &target, &shell).unwrap();
+        let (code, reason) = close_of(&mut socket);
+
+        assert_eq!(code, 1011);
+        assert_eq!(reason, "not a configured worktree");
+        assert!(!dir.path().join("ran").exists());
+    }
+
+    #[test]
+    fn missing_worktree_folder_closes_with_1011() {
+        let dir = tempfile::tempdir().unwrap();
+        let Some((main, linked)) = repo_with_worktree(dir.path()) else {
+            eprintln!("skipped: git is missing");
+            return;
+        };
+        let shell = stub_shell(dir.path());
+        fs::remove_dir_all(&linked).unwrap();
+
+        let repos = FixedRepos(vec![main]);
+        let target = terminal_target(&linked, "shell");
+        let mut socket = connect_worktree(repos, &target, &shell).unwrap();
+        let (code, reason) = close_of(&mut socket);
+
+        assert_eq!(code, 1011);
+        assert_eq!(reason, "not a configured worktree");
+        assert!(!dir.path().join("ran").exists());
     }
 }
