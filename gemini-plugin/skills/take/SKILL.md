@@ -192,9 +192,8 @@ Append an `implement` line to `runs.jsonl` with `append_file`, `agent: "implemen
 
 Commit as section **4. Commit** of the extension root's `commands/autonomously.toml` says. The task is the phase. The session is the task that section names:
 
-- In each repository, the session's first commit is phase 0. Take its subject and body from `spec.md`: they describe the whole session.
-- The phase number `N` counts the session's commits already recorded in `tasks.md` for that repository.
-- For a fix task, the body names the finding it fixes.
+- In each repository, the session's first commit describes the whole session. Take its subject and body from `spec.md`.
+- For a fix task, the body names the finding it fixes. Its type is `fix` only when the finding is a real bug, as that section says.
 
 If the commit fails, set `stage: blocked` and `blocked: { "stage": "implement", "reason": "<git's error>" }`. Leave the changes in place. Stop.
 

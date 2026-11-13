@@ -10,7 +10,8 @@ The message file is `fix.commit-msg` in the run directory, next to the state fil
 
 Write the commit message to the message file:
 
-- The subject is `fix({IDs}): {what the phase fixes}`, in the imperative, under 72 characters. `{IDs}` lists the phase's finding IDs, comma-separated: `fix(F1):`, or `fix(F2,F5):`.
+- The subject is `{type}({IDs}): {what the phase changes}`, in the imperative, under 72 characters. `{IDs}` lists the phase's finding IDs, comma-separated: `refactor(F1):`, or `docs(F2,F5):`.
+- The type is one of `feat`, `fix`, `docs`, `refactor`, `perf`, `test`, `build`, `ci` and `chore`. Use `fix` only when the finding is a real bug that must be fixed and deployed as soon as possible. Otherwise pick the type that matches the change, such as `refactor`, `docs` or `test`.
 - The body follows the format and rules below. Add the caller's note at the end, if there is one.
 - Add no `Co-Authored-By` line.
 

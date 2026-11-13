@@ -185,7 +185,7 @@ spec ─► plan ─► implement ─► verify(N) ─► triage(N) ─┬─►
 ```
 
 - **spec** and **plan**: the factory writes `spec.md` and `plan.md` to the session folder. It brainstorms the spec with you through `superpowers:brainstorming` when the mode asks for it. It writes the plan with `superpowers:writing-plans`.
-- **implement**: a fresh `jam:implementer` agent makes each task's change. The factory then commits it. In each git repository, the session's first commit is phase 0: a Conventional Commit that describes the whole session, ready to keep when you squash. Later commits are `phase N:`.
+- **implement**: a fresh `jam:implementer` agent makes each task's change. The factory then commits it. Every commit is a Conventional Commit. In each git repository, the session's first commit describes the whole session, ready to keep when you squash. Later commits describe their own task. The factory uses `fix` only for a real bug that must be fixed and deployed as soon as possible.
 - **verify**: runs one `/jam:verify` round over the branch. A round never sees earlier rounds.
 - **triage**: the factory hides findings dismissed or deferred in earlier rounds. In `interactive` mode, you mark each remaining finding as fix, dismiss or defer. Then you pick `next round`, `last round` or `finalize`. In the other modes, the factory checks each finding against the code:
   - A valid must-fix or should-fix finding becomes a fix task.
@@ -268,7 +268,7 @@ A vibe session runs a quick task with no spec, no plan and no review. Start it w
 implement ─► done
 ```
 
-- **implement**: the factory clarifies the request when the mode asks for it. It makes the change, then runs the build, the tests and the formatter check. In each git repository the work changed, it makes one commit: phase 0, a Conventional Commit.
+- **implement**: the factory clarifies the request when the mode asks for it. It makes the change, then runs the build, the tests and the formatter check. In each git repository the work changed, it makes one Conventional Commit.
 - **done**: shows the commits and the choices the factory made alone. The branch is yours to push, merge or open as a PR. Run `/jam:verify` to review it.
 
 The session's `mode` sets when a vibe session asks you something:

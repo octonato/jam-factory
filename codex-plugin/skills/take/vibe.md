@@ -54,7 +54,7 @@ Re-read `session.json` before each stage and before each step that may ask me so
    2. In each git repository, delete only the untracked files the session created, as `git status --porcelain` lists them.
    3. Set `T1` to `status: failed` with `edit_file`.
    4. Set `stage: blocked` and `blocked: { "stage": "implement", "reason": "<the failure's reason>" }`. Stop.
-8. **Commit** as section **4. Commit** of the plugin root's `skills/autonomously/SKILL.md` says. The request is the task. In each git repository the work changed, the session makes one commit: phase 0, with a Conventional Commit subject. Take its subject and body from the request and the change. If a commit fails, set `stage: blocked` and `blocked: { "stage": "implement", "reason": "<git's error>" }`. Leave the changes in place. Stop.
+8. **Commit** as section **4. Commit** of the plugin root's `skills/autonomously/SKILL.md` says. The request is the task. In each git repository the work changed, the session makes one commit, with a Conventional Commit subject. Take its subject and body from the request and the change. If a commit fails, set `stage: blocked` and `blocked: { "stage": "implement", "reason": "<git's error>" }`. Leave the changes in place. Stop.
 9. With `edit_file`, record each commit in the `commit` field of `T1`, as `state.md` shows, and set `T1` to `status: done`. With one `update_session` call, update `tasksOpen` and `tasksDone` and set `stage: done`. Go to **Done**.
 
 ## Done

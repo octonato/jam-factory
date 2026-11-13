@@ -60,13 +60,14 @@ In each repository, stage only the files the phase changed. Never stage `.nogit/
 
 Write the commit message for each repository. I squash the commits of a task into its first one, so the first commit carries the final message.
 
-- **Phase 0** is the first commit this task makes in that repository. It describes the whole task, not only this phase.
-  - The subject is a Conventional Commit: `{type}({scope}): {summary}`, in the imperative, under 72 characters. The type is one of `feat`, `fix`, `docs`, `refactor`, `perf`, `test`, `build`, `ci` and `chore`. The scope is optional.
-  - The body explains the whole change for a reader who has not seen this conversation.
-- **Later commits** in that repository have the subject `phase N: {what the phase does}`, in the imperative, under 72 characters. `N` counts this task's commits in that repository, from 1. The body explains this phase only.
+- **The first commit** this task makes in that repository describes the whole task, not only this phase. Its body explains the whole change for a reader who has not seen this conversation.
+- **Later commits** in that repository describe this phase only.
 
 For every message:
 
+- The subject is a Conventional Commit: `{type}({scope}): {summary}`, in the imperative, under 72 characters. The scope is optional. Never start a subject with `phase N:`.
+- The type is one of `feat`, `fix`, `docs`, `refactor`, `perf`, `test`, `build`, `ci` and `chore`.
+- Use `fix` only for a real bug that must be fixed and deployed as soon as possible. A small fix or a cleanup takes another type, such as `refactor`, `docs`, `test` or `chore`.
 - Do not repeat the subject in the body.
 - Use a list in the body when the change has several separate parts.
 - Put code names in backticks: classes, methods, fields, files and commands.
