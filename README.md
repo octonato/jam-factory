@@ -116,12 +116,28 @@ mise install
 just install
 ```
 
-`just install` builds Jam Board and the server. It copies `jam-factory-mcp` to `~/.local/bin`, which must be on your `PATH`.
+`just install` builds Jam Board, `jam-factory-mcp` and `jam-factory-server`. It copies both binaries to `~/.local/bin`, which must be on your `PATH`.
 
-The server keeps every session under one root folder, `~/.jam-factory/factory` by default. To use another folder, set `root` in `~/.jam-factory/config.json`. A leading `~/` expands to your home folder:
+`just install` also installs a launchd agent that keeps `jam-factory-server` running on port 8731. Jam Board and the editors read sessions from `jam-factory-server`. Jam Board shows an error when `jam-factory-server` is down. The log is `~/.jam-factory/logs/server.log`.
+
+`jam-factory-server` serves the dashboard at `http://127.0.0.1:8731/dashboard.html`. The port in that URL follows `port` in `~/.jam-factory/config.json`.
+
+To stop the agent and remove it with `jam-factory-server`, run this in `app/`:
+
+```sh
+just uninstall-server
+```
+
+`jam-factory-mcp` keeps every session under one root folder, `~/.jam-factory/factory` by default. To use another folder, set `root` in `~/.jam-factory/config.json`. A leading `~/` expands to your home folder. To run `jam-factory-server` on another port, set `port` to a number from 1 to 65535:
 
 ```json
-{ "root": "~/Sources/factory" }
+{ "root": "~/Sources/factory", "port": 9000 }
+```
+
+Restart `jam-factory-server` after you change `config.json`:
+
+```sh
+launchctl kickstart -k "gui/$(id -u)/io.github.octonato.jam-factory.server"
 ```
 
 Each session lives in `<root>/<org>/<repo>/sessions/<branch>/<session id>/`. `<repo>` is the name of the worktree's parent folder, and `<org>` is the name of the folder above it. For the worktree `~/Sources/my-team/sdk/rate-limit`, `<org>` is `my-team` and `<repo>` is `sdk`. `<branch>` is the last segment of the branch name: `octonato/rate-limit` gives `rate-limit`.
@@ -283,7 +299,7 @@ A step in changes mode holds git diffs. A step in code-path mode holds lines of 
 
 ```
 ~/.jam-factory/
-  config.json                    optional: { "root": "<root>" }
+  config.json                    optional: { "root": "<root>", "port": <port> }
 <root>/                          ~/.jam-factory/factory by default
   <org>/<repo>/sessions/<branch>/<session id>/
     session.json                 the session's mode, stage, round and counts

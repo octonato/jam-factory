@@ -14,6 +14,8 @@
 
 //! A store that calls the tools of a `jam-factory-mcp` child process.
 
+use std::env;
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -34,6 +36,8 @@ use tokio::time::timeout;
 use crate::store::Store;
 
 type Client = RunningService<RoleClient, ()>;
+
+pub const MCP_BINARY: &str = "jam-factory-mcp";
 
 /// The longest wait for the stderr of a server child that failed to start.
 const STDERR_TIMEOUT: Duration = Duration::from_secs(2);
@@ -189,6 +193,18 @@ impl Store for McpStore {
     }
 }
 
+/// Finds `jam-factory-mcp` in `{home}/.local/bin`, else in the first folder of `path_var` that has it.
+pub fn find_mcp_binary(home: &Path, path_var: Option<&OsStr>) -> Option<PathBuf> {
+    let local = home.join(".local").join("bin").join(MCP_BINARY);
+    if local.is_file() {
+        return Some(local);
+    }
+
+    env::split_paths(path_var?)
+        .map(|dir| dir.join(MCP_BINARY))
+        .find(|candidate| candidate.is_file())
+}
+
 /// Spawns `program`, with `HOME` set to `home` when given, and initializes an MCP client on its stdio.
 async fn connect(program: &Path, home: Option<&Path>) -> Result<Child, String> {
     let mut command = Command::new(program);
@@ -303,6 +319,7 @@ fn field<T: DeserializeOwned>(reply: &mut Value, name: &str) -> Result<T, StoreE
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::OsString;
     use std::fs;
     use std::process::Command;
     use std::thread;
@@ -385,6 +402,58 @@ mod tests {
         } else {
             CallToolResult::success(content)
         }
+    }
+
+    fn binary_in(dir: &Path) -> PathBuf {
+        fs::create_dir_all(dir).unwrap();
+        let binary = dir.join(MCP_BINARY);
+        fs::write(&binary, "").unwrap();
+        binary
+    }
+
+    fn path_var(dirs: &[&Path]) -> OsString {
+        env::join_paths(dirs).unwrap()
+    }
+
+    #[test]
+    fn prefers_local_bin() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let local = binary_in(&home.join(".local").join("bin"));
+        let on_path = dir.path().join("bin");
+        binary_in(&on_path);
+
+        let found = find_mcp_binary(&home, Some(&path_var(&[&on_path])));
+
+        assert_eq!(found, Some(local));
+    }
+
+    #[test]
+    fn falls_back_to_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let empty = dir.path().join("empty");
+        fs::create_dir_all(&empty).unwrap();
+        let first = dir.path().join("first");
+        let expected = binary_in(&first);
+        let second = dir.path().join("second");
+        binary_in(&second);
+
+        let found = find_mcp_binary(&home, Some(&path_var(&[&empty, &first, &second])));
+
+        assert_eq!(found, Some(expected));
+    }
+
+    #[test]
+    fn none_when_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let empty = dir.path().join("empty");
+        fs::create_dir_all(&empty).unwrap();
+        fs::create_dir_all(home.join(".local").join("bin").join(MCP_BINARY)).unwrap();
+
+        assert_eq!(find_mcp_binary(&home, Some(&path_var(&[&empty]))), None);
+        assert_eq!(find_mcp_binary(&home, None), None);
     }
 
     #[test]

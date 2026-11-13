@@ -16,6 +16,7 @@
 
 mod menu;
 mod navigation;
+mod probe;
 mod windows;
 
 fn main() {

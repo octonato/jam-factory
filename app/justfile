@@ -1,3 +1,5 @@
+server_label := "io.github.octonato.jam-factory.server"
+
 # Default recipe — list available recipes when `just` is run with no args.
 default:
     @just --list --unsorted
@@ -31,7 +33,7 @@ test:
 # Run the full CI quality-gate set: fmt, clippy, test.
 build: check test
 
-# Run the gates, copy the app bundle to /Applications and the MCP server to ~/.local/bin.
+# Run the gates, copy the app bundle to /Applications and both servers to ~/.local/bin, then reload the server agent.
 install: build
     #!/usr/bin/env bash
     set -euo pipefail
@@ -53,6 +55,52 @@ install: build
     mkdir -p "$HOME/.local/bin"
     rm -f "$HOME/.local/bin/jam-factory-mcp"
     cp target/release/jam-factory-mcp "$HOME/.local/bin/"
+
+    cargo build --release -p jam-factory-server
+    rm -f "$HOME/.local/bin/jam-factory-server"
+    cp target/release/jam-factory-server "$HOME/.local/bin/"
+
+    mkdir -p "$HOME/.jam-factory/logs" "$HOME/Library/LaunchAgents"
+
+    plist="$HOME/Library/LaunchAgents/{{server_label}}.plist"
+    log="$HOME/.jam-factory/logs/server.log"
+
+    cat > "$plist" <<EOF
+    <?xml version="1.0" encoding="UTF-8"?>
+    <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+    <plist version="1.0">
+    <dict>
+        <key>Label</key>
+        <string>{{server_label}}</string>
+        <key>ProgramArguments</key>
+        <array>
+            <string>$HOME/.local/bin/jam-factory-server</string>
+        </array>
+        <key>RunAtLoad</key>
+        <true/>
+        <key>KeepAlive</key>
+        <true/>
+        <key>ProcessType</key>
+        <string>Interactive</string>
+        <key>StandardOutPath</key>
+        <string>$log</string>
+        <key>StandardErrorPath</key>
+        <string>$log</string>
+    </dict>
+    </plist>
+    EOF
+
+    launchctl bootout "gui/$(id -u)/{{server_label}}" 2>/dev/null || true
+    launchctl bootstrap "gui/$(id -u)" "$plist"
+
+# Stop the server agent and remove its plist and binary.
+uninstall-server:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    launchctl bootout "gui/$(id -u)/{{server_label}}" 2>/dev/null || true
+    rm -f "$HOME/Library/LaunchAgents/{{server_label}}.plist"
+    rm -f "$HOME/.local/bin/jam-factory-server"
 
 # Build release (no gates) and run the produced binary, forwarding args.
 run *ARGS:

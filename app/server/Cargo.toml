@@ -1,0 +1,16 @@
+[package]
+name = "jam-factory-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "jam-factory-server"
+path = "src/main.rs"
+
+[dependencies]
+jam-board-core = { path = "../core" }
+jam-factory-store = { path = "../store" }
+
+[dev-dependencies]
+tempfile = "3"
