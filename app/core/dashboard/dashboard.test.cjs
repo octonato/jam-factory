@@ -79,9 +79,12 @@ function dashboard({ script = source, pageWidth = 1200, pageLeft = 0, splitterWi
         contains: (name) => classes.has(name),
       },
       setPointerCapture: () => {},
+      value: '',
+      selected: false,
       focused: false,
       focus: () => { el.focused = true },
       blur: () => { el.focused = false },
+      select: () => { el.selected = true },
       querySelector: () => null,
       querySelectorAll: () => [],
       closest: (selector) => (selector === `#${id}` ? el : el.parentElement?.closest(selector) ?? null),
@@ -105,6 +108,15 @@ function dashboard({ script = source, pageWidth = 1200, pageLeft = 0, splitterWi
       set: (value) => {
         html = value
         el.children = []
+        if (id === 'term-tabs') {
+          elements.delete('term-rename')
+          const rename = value.match(/ id="term-rename" value="([^"]*)"/)
+          if (rename !== null) {
+            const input = element('term-rename')
+            input.parentElement = el
+            input.value = rename[1].replace(/&#(\d+);/g, (_, code) => String.fromCharCode(code))
+          }
+        }
       },
     })
     elements.set(id, el)
@@ -2661,6 +2673,157 @@ test('the zoom keys leave a parked worktree terminal alone on another page', asy
 
   assert.equal(press(app, 'K', zoomKeys), false)
   assert.equal(terminals[0].focused, false)
+})
+
+const tabKeyModifiers = { metaKey: true, shiftKey: true }
+const cmd = { metaKey: true }
+
+// Presses `key` in the tab name field and returns true when the page took it.
+function pressInRename(app, key) {
+  let prevented = false
+  app.elements.get('term-tabs').dispatch('keydown', {
+    key,
+    target: app.elements.get('term-rename'),
+    stopPropagation: () => {},
+    preventDefault: () => { prevented = true },
+  })
+  return prevented
+}
+
+test('Shift+Cmd+[ and Shift+Cmd+] move through the tabs and wrap around', async () => {
+  const { app, terminals } = await worktreeApp()
+  for (let i = 0; i < 3; i += 1) clickTab(app, 'add')
+  const tabs = tabsOf(app)
+  assert.deepEqual(tabNames(app), ['shell 1', 'shell 2', 'shell 3*'])
+
+  assert.ok(press(app, '}', tabKeyModifiers, terminals[2].element))
+  assert.deepEqual(tabNames(app), ['shell 1*', 'shell 2', 'shell 3'])
+  assert.deepEqual(shownTerms(app), [tabs[0].el])
+  assert.equal(terminals[0].focused, true)
+
+  assert.ok(press(app, '{', tabKeyModifiers))
+  assert.deepEqual(tabNames(app), ['shell 1', 'shell 2', 'shell 3*'])
+
+  assert.ok(press(app, '[', tabKeyModifiers))
+  assert.deepEqual(tabNames(app), ['shell 1', 'shell 2*', 'shell 3'])
+
+  assert.ok(press(app, ']', tabKeyModifiers))
+  assert.deepEqual(tabNames(app), ['shell 1', 'shell 2', 'shell 3*'])
+})
+
+test('Cmd+T opens a shell tab', async () => {
+  const { app, sockets, terminals } = await worktreeApp()
+
+  assert.ok(press(app, 't', cmd))
+  assert.equal(sockets[0].url, `ws://127.0.0.1:8731/api/terminal?path=${encodedWorktree}&program=shell&cols=100&rows=30`)
+  assert.deepEqual(tabNames(app), ['shell 1*'])
+
+  assert.ok(press(app, 't', cmd, terminals[0].element))
+  assert.deepEqual(tabNames(app), ['shell 1', 'shell 2*'])
+})
+
+test('the tab keys do nothing without tabs or off the worktree page', async () => {
+  const { app, sockets } = await worktreeApp()
+
+  assert.equal(press(app, ']', tabKeyModifiers), false)
+  assert.equal(press(app, 'i', cmd), false)
+  assert.equal(app.elements.get('term-rename'), undefined)
+
+  navigate(app, '#/')
+  assert.equal(press(app, 't', cmd), false)
+  assert.equal(sockets.length, 0)
+})
+
+test('worktree terminals keep the tab keys', async () => {
+  const { app, terminals } = await worktreeApp()
+  clickTab(app, 'add')
+  const { key } = terminals[0].handlers
+  const event = (name, modifiers = {}) => ({ key: name, metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, ...modifiers })
+
+  for (const name of ['[', '{', ']', '}']) assert.equal(key(event(name, tabKeyModifiers)), false, `${name} stays out of the terminal`)
+  for (const name of ['i', 't']) assert.equal(key(event(name, cmd)), false, `${name} stays out of the terminal`)
+  assert.equal(key(event('i')), true)
+  assert.equal(key(event('[', cmd)), true)
+})
+
+test('Cmd+I edits the active tab name and Enter saves it', async () => {
+  const { app, terminals } = await worktreeApp()
+  clickTab(app, 'add')
+  clickTab(app, 'add')
+
+  assert.ok(press(app, 'i', cmd, terminals[1].element))
+  const input = app.elements.get('term-rename')
+  assert.equal(input.value, 'shell 2')
+  assert.equal(input.focused, true)
+  assert.equal(input.selected, true)
+  assert.deepEqual(tabNames(app), ['shell 1'])
+
+  assert.equal(press(app, '}', tabKeyModifiers), false, 'the tab keys wait for the edit')
+  assert.equal(press(app, 'i', cmd), false)
+
+  terminals[1].blur()
+  input.value = '  build  '
+  assert.ok(pressInRename(app, 'Enter'))
+  assert.deepEqual(tabNames(app), ['shell 1', 'build*'])
+  assert.equal(app.elements.get('term-rename'), undefined)
+  assert.equal(terminals[1].focused, true)
+})
+
+test('Escape drops the edit, and a blank name keeps the old one', async () => {
+  const { app } = await worktreeApp()
+  clickTab(app, 'add')
+
+  press(app, 'i', cmd)
+  app.elements.get('term-rename').value = 'build'
+  assert.ok(pressInRename(app, 'Escape'))
+  assert.deepEqual(tabNames(app), ['shell 1*'])
+  assert.equal(app.context.location.hash, worktreeHashOf(worktreePath))
+
+  press(app, 'i', cmd)
+  app.elements.get('term-rename').value = '   '
+  pressInRename(app, 'Enter')
+  assert.deepEqual(tabNames(app), ['shell 1*'])
+})
+
+test('leaving the text field saves the name', async () => {
+  const { app } = await worktreeApp()
+  clickTab(app, 'add')
+
+  press(app, 'i', cmd)
+  const input = app.elements.get('term-rename')
+  input.value = 'build'
+  app.elements.get('term-tabs').dispatch('focusout', { target: input })
+  assert.deepEqual(tabNames(app), ['build*'])
+})
+
+test('a poll keeps the text field and its draft', async () => {
+  const { app } = await worktreeApp()
+  clickTab(app, 'add')
+
+  press(app, 'i', cmd)
+  const input = app.elements.get('term-rename')
+  input.value = 'bui'
+  await app.run('poll()')
+  assert.equal(app.elements.get('term-rename'), input)
+  assert.equal(input.value, 'bui')
+})
+
+test('the edit ends when its tab closes or the page changes', async () => {
+  const { app, sockets } = await worktreeApp()
+  clickTab(app, 'add')
+  clickTab(app, 'add')
+
+  press(app, 'i', cmd)
+  sockets[1].onclose({ code: 1000, reason: '' })
+  assert.equal(app.elements.get('term-rename'), undefined)
+  assert.deepEqual(tabNames(app), ['shell 1*'])
+
+  press(app, 'i', cmd)
+  app.elements.get('term-rename').value = 'build'
+  navigate(app, '#/')
+  navigate(app, worktreeHashOf(worktreePath))
+  assert.equal(app.elements.get('term-rename'), undefined)
+  assert.deepEqual(tabNames(app), ['shell 1*'])
 })
 
 // Returns `worktreeApp()` on the repos page with `worktreePath` selected.

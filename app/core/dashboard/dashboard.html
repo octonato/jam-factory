@@ -326,7 +326,7 @@
   .session-page.zoomed #metro-pane,
   .session-page.zoomed #splitter,
   .session-page.zoomed #worktree-sessions,
-  .session-page.zoomed .term-tabs,
+  .session-page.zoomed .term-tabs:not(:has(.term-rename)),
   .session-page.zoomed .viewer-head {
     display: none;
   }
@@ -408,7 +408,10 @@
     border-radius: 6px;
   }
 
-  .term-tab:has(> [aria-pressed="true"]) { border-color: var(--accent); }
+  .term-tab:has(> [aria-pressed="true"]),
+  .term-tab:has(> .term-rename) {
+    border-color: var(--accent);
+  }
 
   .term-tabs button {
     padding: 2px 8px;
@@ -425,6 +428,18 @@
   .term-tabs .term-close { padding-left: 0; }
   .term-tabs .term-add { border: 1px solid var(--line); border-radius: 6px; }
   .term-tab.failed .term-name { color: var(--critical); }
+
+  .term-tabs .term-rename {
+    width: 12ch;
+    padding: 2px 8px;
+    color: var(--ink);
+    font: inherit;
+    font-size: 0.857rem;
+    background: var(--bg);
+    border: 0;
+    border-radius: 6px;
+    outline: none;
+  }
 
   .term-view { flex: 1; min-height: 0; overflow: hidden; background: #142b37; }
   .term-view:empty { background: none; }
@@ -1011,6 +1026,8 @@ let editing = null
 let terminal = null
 // The terminal tabs of each worktree path: `{ tabs, active, shells }`, where `shells` counts the shell tabs ever opened.
 const worktreeTerms = new Map()
+// The tab whose name the tab strip edits: `{ path, id }`, or null.
+let renaming = null
 let lastTabId = 0
 let shownHash = ''
 let renderSeq = 0
@@ -1630,11 +1647,15 @@ function worktreeSessionsHtml(path) {
   return rows.length > 0 ? `<div class="rows">${rows.join('')}</div>` : '<p class="empty">No live sessions.</p>'
 }
 
-// Returns the tab strip of `terms`: one tab per terminal with its close button, then the `+` button.
-function termTabsHtml(terms) {
+// Returns the tab strip of `terms`: one tab per terminal with its close button, then the `+` button. Tab `renamingId` shows its name in a text field.
+function termTabsHtml(terms, renamingId) {
+  const nameHtml = (tab) => tab.id === renamingId
+    ? `<input class="term-rename" id="term-rename" value="${escape(tab.name)}" aria-label="Tab name" spellcheck="false">`
+    : `<button type="button" class="term-name" data-term="select" data-tab="${tab.id}" aria-pressed="${tab.id === terms.active}">${escape(tab.name)}</button>`
+
   const tabs = (terms?.tabs ?? []).map((tab) => `
     <span class="term-tab${tab.failed !== null ? ' failed' : ''}">
-      <button type="button" class="term-name" data-term="select" data-tab="${tab.id}" aria-pressed="${tab.id === terms.active}">${escape(tab.name)}</button>
+      ${nameHtml(tab)}
       <button type="button" class="term-close" data-term="close" data-tab="${tab.id}" title="Close ${escape(tab.name)}">×</button>
     </span>`)
   return `${tabs.join('')}<button type="button" class="term-add" data-term="add" title="Open a shell (t)">+</button>`
@@ -1674,6 +1695,8 @@ function renderWorktreePage(path) {
     resizeSessionPage(page)
     $('worktree-card').addEventListener('click', onWorktreeCardAction)
     $('term-tabs').addEventListener('click', onTermTabsClick)
+    $('term-tabs').addEventListener('keydown', onRenameKey)
+    $('term-tabs').addEventListener('focusout', onRenameBlur)
     $('splitter').addEventListener('pointerdown', onSplitterDown)
     worktreeView = { path, el: page, card: '', sessions: '', tabs: '' }
   }
@@ -1681,7 +1704,9 @@ function renderWorktreePage(path) {
   const card = found === null ? missingWorktreeCardHtml(path) : worktreeCardHtml(found.repo, found.worktree)
   updateWorktreePart('card', 'worktree-card', card)
   updateWorktreePart('sessions', 'worktree-sessions', worktreeSessionsHtml(path))
-  updateWorktreePart('tabs', 'term-tabs', termTabsHtml(terms))
+
+  if (renaming !== null && !terms?.tabs.some((tab) => tab.id === renaming.id)) renaming = null
+  if (renaming === null || $('term-rename') === null) updateWorktreePart('tabs', 'term-tabs', termTabsHtml(terms, renaming?.id))
   showWorktreeTerminal(path)
   if (activeWorktreeTerminal(path) === undefined) worktreeView.el.classList.remove('zoomed')
 }
@@ -1706,6 +1731,22 @@ function onTermTabsClick(event) {
   if (button.dataset.term === 'add') openWorktreeTerminal(path, 'shell')
   else if (button.dataset.term === 'select') selectWorktreeTerminal(path, id)
   else if (button.dataset.term === 'close') closeWorktreeTerminal(path, id)
+}
+
+// Saves the edited tab name on `Enter` and drops it on `Escape`. Keeps every key in the text field from the board shortcuts.
+function onRenameKey(event) {
+  if (event.target.id !== 'term-rename') return
+
+  event.stopPropagation()
+  if (event.key === 'Enter' || event.key === 'Escape') {
+    event.preventDefault()
+    endRename(event.key === 'Enter')
+  }
+}
+
+// Saves the edited tab name when the text field loses the focus.
+function onRenameBlur(event) {
+  if (event.target.id === 'term-rename') endRename(true)
 }
 
 function missingScripts() {
@@ -2799,7 +2840,7 @@ function openWorktreeTerminal(path, program) {
   $('term-store').append(el)
 
   const { xterm: term, fit } = createXterm(el)
-  term.attachCustomKeyEventHandler((event) => zoomKey(event) === null)
+  term.attachCustomKeyEventHandler((event) => zoomKey(event) === null && tabKey(event) === null)
   const observer = new ResizeObserver(() => fit.fit())
   observer.observe(el)
 
@@ -2897,6 +2938,56 @@ function zoomWorktreeTerminal(on) {
   tab.fit.fit()
   tab.term.focus()
   return true
+}
+
+// Runs the tab `action` of `tabKey` on the shown worktree page. Returns false when no worktree page is shown, a tab name is being edited, or the action has no tab to act on.
+function worktreeTabAction(action) {
+  if (worktreeView.el !== $('page').firstElementChild || renaming !== null) return false
+
+  const path = worktreeView.path
+  if (action === 'new') {
+    openWorktreeTerminal(path, 'shell')
+    return true
+  }
+  if (action === 'rename') return renameWorktreeTerminal(path)
+  return stepWorktreeTerminal(path, action === 'next' ? 1 : -1)
+}
+
+// Selects the tab `step` places after the active tab of `path`, wrapping around the ends. Returns false when `path` has no tab.
+function stepWorktreeTerminal(path, step) {
+  const terms = worktreeTerms.get(path)
+  const count = terms?.tabs.length ?? 0
+  if (count === 0) return false
+
+  const index = terms.tabs.findIndex((tab) => tab.id === terms.active)
+  selectWorktreeTerminal(path, terms.tabs[(index + step + count) % count].id)
+  return true
+}
+
+// Shows the name of the active tab of `path` in a text field, with the text selected. Returns false when `path` has no active tab.
+function renameWorktreeTerminal(path) {
+  const tab = activeWorktreeTerminal(path)
+  if (tab === undefined) return false
+
+  renaming = { path, id: tab.id }
+  render()
+  const input = $('term-rename')
+  input.focus()
+  input.select()
+  return true
+}
+
+// Ends the edit of the tab name, renames the tab to the trimmed text when `save` is true and the text is not blank, and focuses its terminal.
+function endRename(save) {
+  if (renaming === null) return
+
+  const tab = worktreeTerms.get(renaming.path)?.tabs.find((t) => t.id === renaming.id)
+  const name = $('term-rename')?.value.trim() ?? ''
+  renaming = null
+  if (save && tab !== undefined && name !== '') tab.name = name
+
+  render()
+  tab?.term.focus()
 }
 
 // Runs the card action `action` on `session`.
@@ -3091,12 +3182,13 @@ function renderTabs(kind) {
   tabsHtml = html
 }
 
-// Shows the page of the route. While the editor is open, shows only the edited file. A new route ends lazygit. A route off the worktree pages parks the shown worktree terminal. A new session page records the worktree page it opens from.
+// Shows the page of the route. While the editor is open, shows only the edited file. A new route ends lazygit. A route off the worktree pages parks the shown worktree terminal. A route off the worktree page of the edited tab name drops the edit. A new session page records the worktree page it opens from.
 function render() {
   const route = parseRoute(location.hash)
   if (editing !== null && !routeShows(route, editing)) return
   if (terminal !== null && location.hash !== terminal.hash) closeTerminal()
   if (route.kind !== 'worktree') parkWorktreeTerminal()
+  if (renaming !== null && (route.kind !== 'worktree' || route.path !== renaming.path)) renaming = null
 
   if (route.kind === 'session') {
     const shown = parseRoute(shownHash)
@@ -3276,6 +3368,22 @@ function zoomKey(event) {
   return null
 }
 
+// Returns the terminal tab action of `event`: `previous` for Shift+Cmd+[, `next` for Shift+Cmd+], `rename` for Cmd+I, `new` for Cmd+T, and null for any other key.
+function tabKey(event) {
+  if (!event.metaKey || event.ctrlKey || event.altKey) return null
+
+  const key = event.key.toLowerCase()
+  if (event.shiftKey) {
+    if (key === '[' || key === '{') return 'previous'
+    if (key === ']' || key === '}') return 'next'
+    return null
+  }
+
+  if (key === 'i') return 'rename'
+  if (key === 't') return 'new'
+  return null
+}
+
 // Dispatches a shortcut key to the shown page.
 function onKey(event) {
   if (editorKey(event)) return
@@ -3287,6 +3395,12 @@ function onKey(event) {
   }
 
   if (zoom !== null && zoomWorktreeTerminal(zoom)) {
+    event.preventDefault()
+    return
+  }
+
+  const tabAction = tabKey(event)
+  if (tabAction !== null && !$('modal').open && worktreeTabAction(tabAction)) {
     event.preventDefault()
     return
   }
