@@ -20,6 +20,7 @@ pub mod dashboard;
 mod fake_store;
 pub mod http;
 pub mod open;
+pub mod prs;
 pub mod pty;
 pub mod repos;
 pub mod terminal;

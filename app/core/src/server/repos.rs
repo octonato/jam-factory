@@ -58,12 +58,13 @@ pub struct Worktree {
     pub head: Option<String>,
 }
 
-/// A main checkout with its linked worktrees, or with the reason they cannot be listed.
+/// A main checkout with its branch and its linked worktrees, or with the reason they cannot be listed.
 #[derive(Debug, PartialEq, Serialize)]
 pub struct Repo {
     pub org: String,
     pub repo: String,
     pub path: String,
+    pub branch: Option<String>,
     pub error: Option<String>,
     pub worktrees: Vec<Worktree>,
 }
@@ -71,6 +72,13 @@ pub struct Repo {
 /// The linked worktrees in the output of `git worktree list --porcelain`: every entry after the first.
 pub fn parse_porcelain(text: &str) -> Vec<Worktree> {
     text.split("\n\n").skip(1).filter_map(parse_entry).collect()
+}
+
+/// The branch of the first entry in the output of `git worktree list --porcelain`, without `refs/heads/`.
+pub fn parse_main_branch(text: &str) -> Option<String> {
+    let entry = text.split("\n\n").next()?;
+
+    parse_entry(entry)?.branch
 }
 
 /// The worktree of one porcelain entry, or `None` for a bare or empty entry.
@@ -112,15 +120,16 @@ pub fn list(paths: &[PathBuf]) -> Vec<Repo> {
 fn repo(path: &Path) -> Repo {
     let (org, repo) = names(path);
 
-    let (error, worktrees) = match worktrees(path) {
-        Ok(worktrees) => (None, worktrees),
-        Err(reason) => (Some(reason), Vec::new()),
+    let (error, branch, worktrees) = match worktrees(path) {
+        Ok((branch, worktrees)) => (None, branch, worktrees),
+        Err(reason) => (Some(reason), None, Vec::new()),
     };
 
     Repo {
         org,
         repo,
         path: path.display().to_string(),
+        branch,
         error,
         worktrees,
     }
@@ -140,8 +149,8 @@ fn names(path: &Path) -> (String, String) {
     (name(parent.and_then(Path::parent)), name(parent))
 }
 
-/// The linked worktrees that `git worktree list --porcelain` gives in the folder `path`.
-fn worktrees(path: &Path) -> Result<Vec<Worktree>, String> {
+/// The main branch and the linked worktrees that `git worktree list --porcelain` gives in the folder `path`.
+fn worktrees(path: &Path) -> Result<(Option<String>, Vec<Worktree>), String> {
     if !path.is_dir() {
         return Err(format!("{} is not a folder", path.display()));
     }
@@ -164,7 +173,9 @@ fn worktrees(path: &Path) -> Result<Vec<Worktree>, String> {
         });
     }
 
-    Ok(parse_porcelain(&String::from_utf8_lossy(&output.stdout)))
+    let text = String::from_utf8_lossy(&output.stdout);
+
+    Ok((parse_main_branch(&text), parse_porcelain(&text)))
 }
 
 /// Whether `path` is a linked worktree path of one of the main checkouts of `repos`.
@@ -177,6 +188,16 @@ pub fn is_worktree(repos: &dyn RepoList, path: &Path) -> bool {
         .iter()
         .flat_map(|repo| &repo.worktrees)
         .any(|worktree| Path::new(&worktree.path) == path)
+}
+
+/// The configured main checkout of `repos` at `path`, listed with its worktrees.
+pub fn find_main(repos: &dyn RepoList, path: &Path) -> Option<Repo> {
+    let paths = repos.paths().ok()?;
+
+    paths
+        .iter()
+        .find(|main| main.as_path() == path)
+        .map(|main| repo(main))
 }
 
 /// The main checkouts of `repos`, as `{"error": null | "<config error>", "repos": [...]}`.
@@ -290,6 +311,20 @@ mod tests {
     }
 
     #[test]
+    fn parses_the_main_branch() {
+        let main = "worktree /a\nHEAD 1234567890abcdef\nbranch refs/heads/main\n\n\
+                    worktree /b\nHEAD 1234567890abcdef\nbranch refs/heads/feature\n";
+        let detached = "worktree /a\nHEAD 1234567890abcdef\ndetached\n\n\
+                        worktree /b\nHEAD 1234567890abcdef\nbranch refs/heads/feature\n";
+        let bare = "worktree /bare\nbare\n\n\
+                    worktree /a\nHEAD 1234567890abcdef\nbranch refs/heads/main\n";
+
+        assert_eq!(parse_main_branch(main), Some("main".to_string()));
+        assert_eq!(parse_main_branch(detached), None);
+        assert_eq!(parse_main_branch(bare), None);
+    }
+
+    #[test]
     fn names_org_and_repo_from_the_path() {
         let (org, repo) = names(Path::new("/s/akka/sdk/main"));
 
@@ -313,6 +348,7 @@ mod tests {
                 org: "o".to_string(),
                 repo: "r".to_string(),
                 path: main.display().to_string(),
+                branch: Some("main".to_string()),
                 error: None,
                 worktrees: vec![worktree(
                     &linked.display().to_string(),
@@ -336,6 +372,7 @@ mod tests {
 
         for repo in repos {
             assert!(repo.error.is_some(), "{}", repo.path);
+            assert!(repo.branch.is_none(), "{}", repo.path);
             assert!(repo.worktrees.is_empty(), "{}", repo.path);
         }
     }
@@ -360,6 +397,25 @@ mod tests {
 
         for path in [main, parent, sibling, sub] {
             assert!(!is_worktree(&repos, &path), "{}", path.display());
+        }
+    }
+
+    #[test]
+    fn find_main_matches_only_configured_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let Some((main, linked)) = repo_with_worktree(dir.path()) else {
+            eprintln!("skipped: git is missing");
+            return;
+        };
+
+        let parent = main.parent().unwrap().to_path_buf();
+        let sibling = parent.join("sibling");
+        let repos = FixedRepos(vec![main.clone()]);
+
+        assert_eq!(find_main(&repos, &main), Some(repo(&main)));
+
+        for path in [linked, parent, sibling] {
+            assert_eq!(find_main(&repos, &path), None, "{}", path.display());
         }
     }
 

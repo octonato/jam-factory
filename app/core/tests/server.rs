@@ -478,6 +478,7 @@ fn get_repos_lists_worktrees() {
                 "org": "o",
                 "repo": "r",
                 "path": main,
+                "branch": "main",
                 "error": null,
                 "worktrees": [
                     { "path": linked, "branch": "feature", "head": null },

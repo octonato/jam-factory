@@ -22,6 +22,7 @@ use serde_json::{Value, json};
 
 use super::http::{Request, Response};
 use super::open;
+use super::prs;
 use super::repos::{RepoList, is_worktree, repos_json};
 use crate::store::Store;
 
@@ -36,6 +37,7 @@ pub fn get(store: &dyn Store, repos: &dyn RepoList, target: &str) -> Response {
     let result = match segments.as_slice() {
         ["", "api", "sessions"] => sessions(store),
         ["", "api", "repos"] => Ok(json_response(&repos_json(repos))),
+        ["", "api", "prs"] => return prs::get(repos, target),
         ["", "api", "files", org, repo, branch, id] => files(store, [org, repo, branch, id]),
         ["", "api", "file", org, repo, branch, id, path @ ..] if !path.is_empty() => {
             file(store, [org, repo, branch, id], path)
@@ -55,6 +57,7 @@ pub fn post(store: &dyn Store, repos: &dyn RepoList, request: &Request) -> Respo
             archive(store, request, [org, repo, branch, id])
         }
         ["", "api", "open", ..] => open::post(store, repos, request),
+        ["", "api", "prs", ..] => prs::post(repos, request),
         _ => Response::error(404),
     }
 }
@@ -246,7 +249,7 @@ pub(super) fn error_response(error: &StoreError) -> Response {
     }
 }
 
-fn json_response(value: &Value) -> Response {
+pub(super) fn json_response(value: &Value) -> Response {
     Response::new(200, JSON, value.to_string().into_bytes())
 }
 

@@ -127,6 +127,8 @@
   }
 
   .rows { display: grid; gap: 8px; }
+  .rows.nested { margin-top: 8px; margin-left: 24px; }
+  .rows.nested .empty { margin: 0; }
   .empty { color: var(--muted); }
   .config-error { color: var(--critical); }
 
@@ -182,10 +184,6 @@
     font-weight: 600;
   }
 
-  .org-group .org .path { color: var(--muted); font-weight: 400; }
-  .org-group .org.error { color: var(--muted); }
-  .org-group .org .reason { display: block; font-weight: 400; }
-
   .row {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
@@ -198,11 +196,18 @@
   .row.waiting { --tone: var(--warning); }
   .row.blocked { --tone: var(--critical); }
   .row.done { --tone: var(--good); }
+  .row.main.error { --tone: var(--muted); color: var(--muted); }
 
-  .row:has(> a.body:hover) { border-color: var(--accent); border-left-color: var(--tone, var(--accent)); }
+  .row:has(> a.body:hover),
+  .row.pr:has(> .body:hover) {
+    border-color: var(--accent);
+    border-left-color: var(--tone, var(--accent));
+  }
 
   .row.card.selected,
-  .row.worktree.selected {
+  .row.main.selected,
+  .row.worktree.selected,
+  .row.pr.selected {
     outline: 2px solid var(--ink-2);
     outline-offset: 3px;
   }
@@ -217,10 +222,15 @@
     text-decoration: none;
   }
 
+  .row.main .body,
   .row.worktree .body,
-  .row.session .body {
+  .row.session .body,
+  .row.pr .body {
     grid-template-columns: minmax(0, 1fr) auto;
   }
+
+  .row.pr .body { cursor: pointer; }
+  .row.pr.busy .actions { opacity: 0.4; }
 
   .row .actions {
     display: flex;
@@ -257,7 +267,13 @@
   .row .id { font-weight: 600; }
   .row .path { color: var(--muted); }
   .row .label { color: var(--ink-2); font-size: 0.857rem; }
+  .row .reason { font-size: 0.857rem; }
   .row .warn { color: var(--warning); }
+  .row .marker { color: var(--accent); }
+  .row .added { color: var(--good); }
+  .row .deleted { color: var(--critical); }
+
+  #pr-card { margin-bottom: 16px; }
 
   .steps { display: flex; align-items: center; }
 
@@ -981,6 +997,7 @@ const ACTION_ICONS = {
   lazygit: '<circle cx="5" cy="3.5" r="1.5"/><circle cx="5" cy="12.5" r="1.5"/><circle cx="11" cy="5.5" r="1.5"/><path d="M5 5v6M11 7c0 2.5-6 2-6 4"/>',
   github: '<path d="M9 2.5h4.5V7M13.5 2.5 7.5 8.5M11.5 9.5v4h-9v-9h4"/>',
   archive: '<rect x="2" y="2.5" width="12" height="3" rx=".5"/><path d="M3 5.5v8h10v-8M6.5 8h3"/>',
+  worktree: '<rect x="2" y="2.5" width="12" height="11" rx="1.5"/><path d="M6.5 2.5v11"/>',
 }
 const CARD_ACTIONS = [
   { action: 'intellij', title: 'Open in IntelliJ (i)', icon: ACTION_ICONS.intellij },
@@ -996,9 +1013,18 @@ const WORKTREE_ACTIONS = [
   { action: 'intellij', title: 'Open in IntelliJ (i)', icon: ACTION_ICONS.intellij },
   { action: 'github', title: 'Open on GitHub (o)', icon: ACTION_ICONS.github },
 ]
+const PR_ACTIONS = [
+  { action: 'worktree', title: 'Open worktree page (c)', icon: ACTION_ICONS.worktree },
+  { action: 'zed', title: 'Open in Zed (e)', icon: ACTION_ICONS.zed },
+  { action: 'intellij', title: 'Open in IntelliJ (i)', icon: ACTION_ICONS.intellij },
+  { action: 'github', title: 'Open on GitHub (o)', icon: ACTION_ICONS.github },
+]
+// The title of the worktree icon of a PR that no worktree holds.
+const PR_CHECKOUT_TITLE = 'Check out and open worktree page (c)'
 const TOOL_LABELS = { intellij: 'IntelliJ', zed: 'Zed', iterm: 'iTerm', github: 'GitHub' }
 const ACTION_KEYS = { a: 'archive', t: 'iterm', e: 'zed', i: 'intellij', o: 'github', g: 'lazygit' }
 const WORKTREE_KEYS = { o: 'github', i: 'intellij', e: 'zed', g: 'lazygit', t: 'shell' }
+const PR_KEYS = { c: 'worktree', Enter: 'worktree', r: 'claude', e: 'zed', i: 'intellij', o: 'github' }
 const BACK_KEYS = ['l', 'Escape', 'Meta+[']
 const TABS = [
   { kind: 'repos', label: 'Repos', href: '#/' },
@@ -1016,11 +1042,14 @@ const REPOS_HELP = `
 const $ = (id) => document.getElementById(id)
 const state = { sessions: [], problems: [], failedChecks: [] }
 let reposState = null
+// The PRs of the shown PRs page: `{ path, prs, error, loading }`, or null.
+let prsState = null
 let tabsHtml = ''
 let listView = { html: '', el: null }
 let reposView = { el: null, list: '' }
 let sessionView = { dir: null, el: null, card: '', metro: '', head: '', stops: [], selected: -1 }
 let worktreeView = { path: null, el: null, card: '', sessions: '', tabs: '' }
+let prsView = { path: null, el: null, card: '', list: '' }
 let lastView = { key: null, path: null, text: null, version: null }
 let editing = null
 let terminal = null
@@ -1039,6 +1068,10 @@ let sessionOrigin = '#/sessions'
 let selectedWorktree = null
 let orgFilter = null
 let repoFilter = ''
+let selectedPr = null
+let prFilter = ''
+// The `${path}#${number}` keys of the PRs whose checkout runs.
+const prBusy = new Set()
 let pendingDiffs = []
 
 function escape(text) {
@@ -1211,6 +1244,24 @@ async function loadRepos() {
   }
 }
 
+// Fetches the PRs of the main checkout at `path` into `prsState`, unless the shown page changed meanwhile, then renders.
+async function loadPrs(path) {
+  const loading = { path, prs: [], error: null, loading: true }
+  prsState = loading
+
+  let reply
+  try {
+    const { error, prs } = JSON.parse(await fetchText(`api/prs?path=${encodeURIComponent(path)}`))
+    reply = { path, prs: Array.isArray(prs) ? prs : [], error: stringOrNull(error), loading: false }
+  } catch (err) {
+    reply = { path, prs: [], error: err.message, loading: false }
+  }
+  if (prsState !== loading) return
+
+  prsState = reply
+  render()
+}
+
 function decode(segment) {
   try {
     return decodeURIComponent(segment)
@@ -1219,12 +1270,13 @@ function decode(segment) {
   }
 }
 
-// Returns the page of `hash`: the repos, the sessions, a worktree with its path, or a session with its file path.
+// Returns the page of `hash`: the repos, the sessions, a worktree with its path, the PRs of a main checkout with its path, or a session with its file path.
 function parseRoute(hash) {
   const segments = hash.replace(/^#\/?/, '').split('/').filter((s) => s !== '').map(decode)
   if (segments.length === 0) return { kind: 'repos' }
   if (segments.length === 1 && segments[0] === 'sessions') return { kind: 'sessions' }
   if (segments.length === 2 && segments[0] === 'worktree') return { kind: 'worktree', path: segments[1] }
+  if (segments.length === 2 && segments[0] === 'prs') return { kind: 'prs', path: segments[1] }
 
   const [org, repo = '', branch = '', id = '', ...rest] = segments
   return { kind: 'session', org, repo, branch, id, path: rest.length > 0 ? rest.join('/') : null }
@@ -1232,6 +1284,10 @@ function parseRoute(hash) {
 
 function worktreeHash(path) {
   return `#/worktree/${encodeURIComponent(path)}`
+}
+
+function prsHash(path) {
+  return `#/prs/${encodeURIComponent(path)}`
 }
 
 // Returns `{org}/{repo}/{branch}/{id}` of `session`, each segment percent-encoded.
@@ -1378,10 +1434,10 @@ function cardActions(session) {
   return actionButtons(CARD_ACTIONS)
 }
 
-// Returns one icon button per entry of `actions`.
-function actionButtons(actions) {
+// Returns one icon button per entry of `actions`, each with the extra attributes `attributes`.
+function actionButtons(actions, attributes = '') {
   return actions.map(({ action, title, icon }) => `
-    <button type="button" class="icon" data-action="${action}" title="${title}">
+    <button type="button" class="icon" data-action="${action}" title="${title}"${attributes}>
       <svg viewBox="0 0 16 16" aria-hidden="true">${icon}</svg>
     </button>`).join('')
 }
@@ -1496,23 +1552,39 @@ function worktreeRowHtml(worktree, selected) {
     </div>`
 }
 
-// Returns the checkout `repo` under a header with its name and short path, then the rows of `worktrees` or `No worktrees.`. A checkout with an error is greyed with its error and has no rows.
+// Returns the main row of `repo`, outlined when `selected`: a link to its PRs page with its name and branch.
+function mainRowHtml(repo, selected) {
+  return `
+    <div class="row main${selected ? ' selected' : ''}">
+      <a class="body" href="${escape(prsHash(repo.path))}">
+        <span class="name"><span class="id">${escape(`${repo.org}/${repo.repo}`)}</span> <span class="path">${escape(repo.branch ?? '')}</span></span>
+        <span class="label">PRs ›</span>
+      </a>
+    </div>`
+}
+
+// Returns the greyed main row of `repo`, which has an error: its name, its short path and the error.
+function mainErrorRowHtml(repo) {
+  return `
+    <div class="row main error">
+      <div class="body">
+        <span class="name"><span class="id">${escape(`${repo.org}/${repo.repo}`)}</span> <span class="path">${escape(shortPath(repo.path))}</span></span>
+        <span class="reason">${escape(repo.error)}</span>
+      </div>
+    </div>`
+}
+
+// Returns the checkout `repo` as its main row, then the indented rows of `worktrees` or `No worktrees.`. A checkout with an error has a greyed main row and no worktree rows.
 function repoGroupHtml(repo, worktrees) {
-  const name = `${escape(`${repo.org}/${repo.repo}`)} <span class="path">${escape(shortPath(repo.path))}</span>`
-  if (repo.error !== null) {
-    return `
-      <section class="org-group">
-        <h2 class="org error">${name} <span class="reason">${escape(repo.error)}</span></h2>
-      </section>`
-  }
+  if (repo.error !== null) return `<section class="org-group">${mainErrorRowHtml(repo)}</section>`
 
   const rows = worktrees.length > 0
-    ? `<div class="rows">${worktrees.map((worktree) => worktreeRowHtml(worktree, worktree.path === selectedWorktree)).join('')}</div>`
+    ? worktrees.map((worktree) => worktreeRowHtml(worktree, worktree.path === selectedWorktree)).join('')
     : '<p class="empty">No worktrees.</p>'
   return `
     <section class="org-group">
-      <h2 class="org">${name}</h2>
-      ${rows}
+      ${mainRowHtml(repo, repo.path === selectedWorktree)}
+      <div class="rows nested">${rows}</div>
     </section>`
 }
 
@@ -1538,9 +1610,30 @@ function shownRepos() {
   })
 }
 
-// Returns the shown worktree rows in display order, each with its checkout.
-function shownWorktrees() {
-  return shownRepos().flatMap(({ repo, worktrees }) => worktrees.map((worktree) => ({ repo, worktree })))
+// Returns the selectable rows of the repos page in display order as `{ repo, worktree, path }`, where a main row has a null `worktree`. A checkout with an error has no rows.
+function shownRows() {
+  return shownRepos().flatMap(({ repo, worktrees }) => {
+    if (repo.error !== null) return []
+
+    const main = { repo, worktree: null, path: repo.path }
+    return [main, ...worktrees.map((worktree) => ({ repo, worktree, path: worktree.path }))]
+  })
+}
+
+// Returns the shown row whose path is `selectedWorktree`, or undefined.
+function selectedRow() {
+  return shownRows().find((row) => row.path === selectedWorktree)
+}
+
+// Returns the row Enter in the repos filter opens with no selection: the first shown worktree row, else the first shown main row.
+function firstFilterRow() {
+  const rows = shownRows()
+  return rows.find((row) => row.worktree !== null) ?? rows[0]
+}
+
+// Returns the page a repos page row opens: the PRs page for a main row, the worktree page for a worktree row.
+function rowHash(row) {
+  return row.worktree === null ? prsHash(row.path) : worktreeHash(row.path)
 }
 
 // Returns the checkouts of the repos page: the config error, the help for an empty config, or one group per shown checkout.
@@ -1554,7 +1647,7 @@ function reposHtml() {
   return repos.map(({ repo, worktrees }) => repoGroupHtml(repo, worktrees)).join('')
 }
 
-// Renders the repos page: the filter field above the shown checkouts. A page already shown keeps its field. A worktree no longer shown loses the selection.
+// Renders the repos page: the filter field above the shown checkouts. A page already shown keeps its field. A row no longer shown loses the selection.
 function renderRepos() {
   if (reposView.el === null || reposView.el !== $('page').firstElementChild) {
     $('page').innerHTML = `
@@ -1567,7 +1660,7 @@ function renderRepos() {
     reposView = { el: $('page').firstElementChild, list: '' }
   }
 
-  if (!shownWorktrees().some(({ worktree }) => worktree.path === selectedWorktree)) selectedWorktree = null
+  if (selectedRow() === undefined) selectedWorktree = null
 
   const list = reposHtml()
   if (reposView.list === list) return
@@ -1582,9 +1675,9 @@ function onRepoFilter(event) {
   renderRepos()
 }
 
-// Moves the worktree selection by `step` rows in display order and stops at the first and last rows.
+// Moves the selection by `step` rows of the repos page in display order and stops at the first and last rows.
 function moveWorktreeSelection(step) {
-  const paths = shownWorktrees().map(({ worktree }) => worktree.path)
+  const paths = shownRows().map((row) => row.path)
   if (paths.length === 0) return
 
   const last = paths.length - 1
@@ -1747,6 +1840,162 @@ function onRenameKey(event) {
 // Saves the edited tab name when the text field loses the focus.
 function onRenameBlur(event) {
   if (event.target.id === 'term-rename') endRename(true)
+}
+
+// Returns the configured checkout whose main checkout is at `path`, or undefined.
+function findRepo(path) {
+  return reposState?.repos.find((repo) => repo.path === path)
+}
+
+// Returns the linked worktree of `repo` on the branch of `pr`, or undefined.
+function prWorktree(repo, pr) {
+  return repo.worktrees.find((worktree) => worktree.branch === pr.branch)
+}
+
+// Returns the PRs of the shown PRs page whose `#{number} {title} {author} {branch}` holds every filter word.
+function shownPrs() {
+  const words = filterWords(prFilter)
+  return (prsState?.prs ?? []).filter((pr) => holdsWords(`#${pr.number} ${pr.title} ${pr.author} ${pr.branch}`, words))
+}
+
+// Returns the icons of a PR row, with the checkout title on the worktree icon when the PR is not `checkedOut`.
+function prActions(checkedOut) {
+  return PR_ACTIONS.map((entry) => (entry.action === 'worktree' && !checkedOut ? { ...entry, title: PR_CHECKOUT_TITLE } : entry))
+}
+
+// Returns the key of `pr` of the main checkout at `path` in `prBusy`.
+function prBusyKey(path, pr) {
+  return `${path}#${pr.number}`
+}
+
+// Returns the row of `pr` in `repo`, outlined when `selected`: its number, title, draft pill, checkout state or worktree marker, author, line counts and icons.
+function prRowHtml(repo, pr, selected) {
+  const worktree = prWorktree(repo, pr)
+  const busy = prBusy.has(prBusyKey(repo.path, pr))
+  const number = escape(pr.number)
+  const draft = pr.draft ? ' <span class="pill">draft</span>' : ''
+  const marker = worktree !== undefined ? `<span class="marker">● ${escape(shortPath(worktree.path))}</span> · ` : ''
+  const status = busy ? '<span class="marker">checking out…</span> · ' : marker
+  const lines = `<span class="added">+${escape(pr.additions)}</span> <span class="deleted">−${escape(pr.deletions)}</span>`
+  return `
+    <div class="row pr${selected ? ' selected' : ''}${busy ? ' busy' : ''}" data-number="${number}">
+      <div class="body">
+        <span class="name"><span class="id">#${number}</span> ${escape(pr.title)}${draft}</span>
+        <span class="label">${status}${escape(pr.author)} · ${lines}</span>
+      </div>
+      <div class="actions">${actionButtons(prActions(worktree !== undefined), ` data-number="${number}"`)}</div>
+    </div>`
+}
+
+// Returns the card of the PRs page of `repo`: its name, its short path and, once loaded, its PR count.
+function prCardHtml(repo) {
+  const loaded = prsState !== null && !prsState.loading && prsState.error === null
+  const count = loaded ? prsState.prs.length : 0
+  const facts = loaded ? `<span class="pill">${count} ${count === 1 ? 'PR' : 'PRs'}</span>` : ''
+  return `
+    <div class="session-card">
+      <div class="name">
+        <div class="id">${escape(`${repo.org}/${repo.repo}`)}</div>
+        <div class="path">${escape(shortPath(repo.path))}</div>
+      </div>
+      <div class="facts">${facts}</div>
+    </div>`
+}
+
+// Returns the PR list of the PRs page of `repo`: loading, the error, no PRs, no match, or one row per shown PR.
+function prListHtml(repo) {
+  if (prsState === null || prsState.loading) return '<p class="empty">loading…</p>'
+  if (prsState.error !== null) return `<p class="config-error">${escape(prsState.error)}</p>`
+  if (prsState.prs.length === 0) return '<p class="empty">No open PRs.</p>'
+
+  const prs = shownPrs()
+  if (prs.length === 0) return '<p class="empty">No PR matches.</p>'
+  return `<div class="rows">${prs.map((pr) => prRowHtml(repo, pr, pr.number === selectedPr)).join('')}</div>`
+}
+
+// Returns why the repos list lacks the main checkout of a PRs page: still loading, the list's error, or not configured.
+function missingRepoHtml() {
+  if (reposState === null) return '<span class="empty">loading…</span>'
+  if (reposState.error !== null) return `<span class="config-error">${escape(reposState.error)}</span>`
+  return '<span class="empty">not a configured repo</span>'
+}
+
+// Writes `html` into the element `id` when it differs from the part `key` of the PRs page.
+function updatePrsPart(key, id, html) {
+  if (prsView[key] === html) return
+
+  $(id).innerHTML = html
+  prsView[key] = html
+}
+
+// Renders the PRs page of the main checkout at `path`: its card, the filter field and the shown PRs. A page already shown keeps its field. A page without PRs for `path` fetches them. A PR no longer shown loses the selection.
+function renderPrsPage(path) {
+  const repo = findRepo(path)
+  if (repo === undefined) {
+    $('page').innerHTML = `<div class="column"><p>${missingRepoHtml()}</p></div>`
+    return
+  }
+
+  if (prsView.el === null || prsView.el !== $('page').firstElementChild || prsView.path !== path) {
+    $('page').innerHTML = `
+      <div class="column">
+        <div id="pr-card"></div>
+        <input type="search" class="repo-filter" id="pr-filter" placeholder="Filter by number, title, author or branch" autocomplete="off" spellcheck="false">
+        <div id="pr-list"></div>
+      </div>`
+    $('pr-filter').value = prFilter
+    $('pr-filter').addEventListener('input', onPrFilter)
+    $('pr-list').addEventListener('click', onPrListClick)
+    prsView = { path, el: $('page').firstElementChild, card: '', list: '' }
+  }
+
+  if (prsState?.path !== path) loadPrs(path)
+  if (!shownPrs().some((pr) => pr.number === selectedPr)) selectedPr = null
+
+  updatePrsPart('card', 'pr-card', prCardHtml(repo))
+  updatePrsPart('list', 'pr-list', prListHtml(repo))
+}
+
+// Shows the PRs that match the typed filter.
+function onPrFilter(event) {
+  prFilter = event.currentTarget.value
+  renderPrsPage(prsView.path)
+}
+
+// Returns the shown PR of `number`, or undefined.
+function shownPr(number) {
+  return shownPrs().find((pr) => pr.number === number)
+}
+
+// Runs the action of the clicked PR icon, or selects the PR whose row body was clicked.
+function onPrListClick(event) {
+  const button = event.target.closest('button[data-action]')
+  if (button) {
+    const pr = shownPr(Number(button.dataset.number))
+    if (pr !== undefined) runPrAction(prsView.path, pr, button.dataset.action)
+    return
+  }
+
+  const body = event.target.closest('.row.pr > .body')
+  if (!body) return
+
+  selectedPr = Number(body.parentElement.dataset.number)
+  renderPrsPage(prsView.path)
+}
+
+// Moves the selection by `step` shown PRs and stops at the first and last PRs.
+function movePrSelection(step) {
+  const numbers = shownPrs().map((pr) => pr.number)
+  if (numbers.length === 0) return
+
+  const last = numbers.length - 1
+  const first = step > 0 ? 0 : last
+  const current = numbers.indexOf(selectedPr)
+  const next = current < 0 ? first : Math.min(last, Math.max(0, current + step))
+
+  selectedPr = numbers[next]
+  renderPrsPage(prsView.path)
+  $('pr-list').querySelector('.row.selected')?.scrollIntoView({ block: 'nearest' })
 }
 
 function missingScripts() {
@@ -3015,6 +3264,62 @@ function worktreeAction(path, key) {
   return true
 }
 
+// Posts the checkout of `pr` of the main checkout at `path` and returns the worktree path of the reply.
+async function postCheckout(path, pr) {
+  const res = await fetch(`api/prs/checkout?path=${encodeURIComponent(path)}&number=${pr.number}`, { method: 'POST' })
+  const text = await res.text()
+  if (!res.ok) throw new Error(text.trim() || `${res.status} ${res.statusText}`)
+
+  const folder = stringOrNull(JSON.parse(text)?.path)
+  if (folder === null) throw new Error('the reply has no worktree path')
+  return folder
+}
+
+// Resolves to the path of the worktree that holds `pr` of the main checkout at `path`, after a checkout and a repos reload when none holds it. Resolves to null after it tells the user the error.
+async function prCheckout(path, pr) {
+  const repo = findRepo(path)
+  const worktree = repo === undefined ? undefined : prWorktree(repo, pr)
+  if (worktree !== undefined) return worktree.path
+
+  const key = prBusyKey(path, pr)
+  prBusy.add(key)
+  render()
+
+  let folder = null
+  let problem = null
+  try {
+    folder = await postCheckout(path, pr)
+    await loadRepos()
+  } catch (err) {
+    problem = err.message
+  }
+
+  prBusy.delete(key)
+  render()
+  if (problem !== null) await tell(`Could not check out PR #${pr.number}: ${problem}`)
+  return folder
+}
+
+// Runs the PR action `action` on `pr` of the main checkout at `path`, after its checkout for every action but `github`. Does nothing while its checkout runs. The page actions run only while this PRs page shows.
+async function runPrAction(path, pr, action) {
+  if (prBusy.has(prBusyKey(path, pr))) return
+
+  if (action === 'github') {
+    return postOpen(`api/prs/open?path=${encodeURIComponent(path)}&number=${pr.number}`, `PR #${pr.number}`, 'github')
+  }
+
+  const folder = await prCheckout(path, pr)
+  if (folder === null) return
+
+  if (action === 'zed' || action === 'intellij') return openWorktreeTool(folder, action)
+
+  const route = parseRoute(location.hash)
+  if (route.kind !== 'prs' || route.path !== path) return
+
+  if (action === 'worktree') location.hash = worktreeHash(folder)
+  else if (action === 'claude') openWorktree(folder, 'claude')
+}
+
 // Scrolls the metro pane to show the card of stop `index`.
 function revealStop(index) {
   const card = $('metro').querySelector(`.stop[data-index="${index}"] > .card`)
@@ -3182,13 +3487,19 @@ function renderTabs(kind) {
   tabsHtml = html
 }
 
-// Shows the page of the route. While the editor is open, shows only the edited file. A new route ends lazygit. A route off the worktree pages parks the shown worktree terminal. A route off the worktree page of the edited tab name drops the edit. A new session page records the worktree page it opens from.
+// Shows the page of the route. While the editor is open, shows only the edited file. A new route ends lazygit. A route off the worktree pages parks the shown worktree terminal. A route off the worktree page of the edited tab name drops the edit. A route off the PRs page drops its PRs, selection and filter. A new session page records the worktree page it opens from.
 function render() {
   const route = parseRoute(location.hash)
   if (editing !== null && !routeShows(route, editing)) return
   if (terminal !== null && location.hash !== terminal.hash) closeTerminal()
   if (route.kind !== 'worktree') parkWorktreeTerminal()
   if (renaming !== null && (route.kind !== 'worktree' || route.path !== renaming.path)) renaming = null
+
+  if (route.kind !== 'prs') {
+    prsState = null
+    selectedPr = null
+    prFilter = ''
+  }
 
   if (route.kind === 'session') {
     const shown = parseRoute(shownHash)
@@ -3203,6 +3514,7 @@ function render() {
   if (route.kind === 'repos') return renderRepos()
   if (route.kind === 'sessions') return renderList()
   if (route.kind === 'worktree') return renderWorktreePage(route.path)
+  if (route.kind === 'prs') return renderPrsPage(route.path)
 
   const session = state.sessions.find((s) => sessionHref(s) === sessionHref(route))
   if (!session) return renderNotFound()
@@ -3273,32 +3585,48 @@ function reposKey(key) {
     return true
   }
 
-  if (selectedWorktree === null) return false
+  const row = selectedRow()
+  if (row === undefined) return false
 
   if (key === 'Enter') {
-    location.hash = worktreeHash(selectedWorktree)
+    location.hash = rowHash(row)
     return true
   }
-  return worktreeAction(selectedWorktree, key)
+
+  if (row.worktree === null) return false
+  return worktreeAction(row.path, key)
 }
 
-// Runs the filter field shortcut for `key` and returns true when it acted.
-function filterKey(key) {
+// Runs the shortcut for `key` in the focused filter field `field`, the repos page's or the PRs page's, and returns true when it acted.
+function filterKey(key, field) {
+  const prs = field.id === 'pr-filter'
+
   if (key === 'ArrowDown' || key === 'ArrowUp') {
-    $('repo-filter').blur()
-    moveWorktreeSelection(key === 'ArrowDown' ? 1 : -1)
+    const step = key === 'ArrowDown' ? 1 : -1
+    field.blur()
+    if (prs) movePrSelection(step)
+    else moveWorktreeSelection(step)
+    return true
+  }
+
+  if (key === 'Enter' && prs) {
+    field.blur()
+    if (selectedPr === null) movePrSelection(1)
+    prsKey('Enter', prsView.path)
     return true
   }
 
   if (key === 'Enter') {
-    $('repo-filter').blur()
-    if (selectedWorktree === null) moveWorktreeSelection(1)
-    if (selectedWorktree !== null) location.hash = worktreeHash(selectedWorktree)
+    field.blur()
+    if (selectedWorktree === null) selectedWorktree = firstFilterRow()?.path ?? null
+
+    const row = selectedRow()
+    if (row !== undefined) location.hash = rowHash(row)
     return true
   }
 
   if (key === 'Escape') {
-    $('repo-filter').blur()
+    field.blur()
     return true
   }
   return false
@@ -3334,6 +3662,31 @@ function worktreeKey(key, path) {
 
   if (findWorktree(path) === null) return false
   return worktreeAction(path, key)
+}
+
+// Runs the PRs page shortcut for `key` on the PRs page of the main checkout at `path` and returns true when it acted.
+function prsKey(key, path) {
+  if (BACK_KEYS.includes(key)) {
+    selectedWorktree = path
+    location.hash = '#/'
+    return true
+  }
+
+  if (key === 'ArrowDown' || key === 'ArrowUp') {
+    movePrSelection(key === 'ArrowDown' ? 1 : -1)
+    return true
+  }
+
+  if (key === '/') {
+    $('pr-filter')?.focus()
+    return true
+  }
+
+  const pr = shownPr(selectedPr)
+  if (pr === undefined || !Object.hasOwn(PR_KEYS, key)) return false
+
+  runPrAction(path, pr, PR_KEYS[key])
+  return true
 }
 
 // Returns the shortcut name of `event`, or null when its modifiers make it no shortcut.
@@ -3412,8 +3765,9 @@ function onKey(event) {
   if (key === null) return
   if ($('modal').open) return
 
-  if (event.target.closest('#repo-filter')) {
-    if (filterKey(key)) event.preventDefault()
+  const filter = event.target.closest('#repo-filter, #pr-filter')
+  if (filter) {
+    if (filterKey(key, filter)) event.preventDefault()
     return
   }
 
@@ -3433,6 +3787,11 @@ function onKey(event) {
 
   if (route.kind === 'worktree') {
     if (worktreeKey(key, route.path)) event.preventDefault()
+    return
+  }
+
+  if (route.kind === 'prs') {
+    if (prsKey(key, route.path)) event.preventDefault()
     return
   }
 

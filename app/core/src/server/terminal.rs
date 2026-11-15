@@ -38,7 +38,7 @@ use crate::store::Store;
 const DEFAULT_COLS: u16 = 80;
 const DEFAULT_ROWS: u16 = 24;
 
-/// The shell that `shell` runs when `SHELL` is unset or empty.
+/// The login shell when `SHELL` is unset or empty.
 const DEFAULT_SHELL: &str = "/bin/zsh";
 
 /// The close reason for a path that is not a folder of a configured worktree.
@@ -110,24 +110,29 @@ pub fn serve_worktree_with(
     bridge(request, stream, target);
 }
 
-/// The program named `name`: the login shell `shell` for `shell`, or lazygit for `lazygit`.
+/// The program named `name`: the login shell `shell` for `shell`, Claude in that interactive login shell for `claude`, or lazygit for `lazygit`.
 fn program_for(name: &str, shell: Option<&OsStr>) -> Option<Program> {
     match name {
-        "shell" => {
-            let shell = shell
-                .filter(|shell| !shell.is_empty())
-                .map_or(DEFAULT_SHELL.to_string(), |shell| {
-                    shell.to_string_lossy().into_owned()
-                });
-
-            Some(Program {
-                name: shell,
-                args: vec!["-l".to_string()],
-            })
-        }
+        "shell" => Some(Program {
+            name: login_shell(shell),
+            args: vec!["-l".to_string()],
+        }),
+        "claude" => Some(Program {
+            name: login_shell(shell),
+            args: ["-l", "-i", "-c", "claude"].map(str::to_string).to_vec(),
+        }),
         "lazygit" => Some(lazygit()),
         _ => None,
     }
+}
+
+/// The shell `shell`, or `/bin/zsh` when it is unset or empty.
+fn login_shell(shell: Option<&OsStr>) -> String {
+    shell
+        .filter(|shell| !shell.is_empty())
+        .map_or(DEFAULT_SHELL.to_string(), |shell| {
+            shell.to_string_lossy().into_owned()
+        })
 }
 
 /// The program `lazygit`.
@@ -576,11 +581,17 @@ mod tests {
             program_for(name, shell.map(OsStr::new)).map(|program| (program.name, program.args))
         };
         let login = |name: &str| Some((name.to_string(), vec!["-l".to_string()]));
+        let claude = |name: &str| {
+            let args = ["-l", "-i", "-c", "claude"].map(str::to_string).to_vec();
+            Some((name.to_string(), args))
+        };
         let lazygit = Some(("lazygit".to_string(), Vec::new()));
 
         assert_eq!(program("shell", Some("/bin/bash")), login("/bin/bash"));
         assert_eq!(program("shell", None), login("/bin/zsh"));
         assert_eq!(program("shell", Some("")), login("/bin/zsh"));
+        assert_eq!(program("claude", Some("/bin/fish")), claude("/bin/fish"));
+        assert_eq!(program("claude", None), claude("/bin/zsh"));
         assert_eq!(program("lazygit", None), lazygit);
         assert_eq!(program("lazygit", Some("/bin/bash")), lazygit);
         assert_eq!(program("vim", None), None);
