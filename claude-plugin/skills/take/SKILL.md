@@ -1,8 +1,8 @@
 ---
 name: take
 disable-model-invocation: true
-description: Run one session through the Jam Factory — spec, plan, implement, verify and triage — tracked in files that the jam-factory MCP server keeps. Run it on a feature branch, in the main checkout or in a worktree. Pass a description or a GitHub issue to start the branch's session. Pass nothing to start it from the conversation. Add -r/--resume to resume the session, or -v/--verify to run another verify round on a done session. Add -f/--feedback to import new GitHub PR feedback into a done build session. It runs on its own and asks only when the request is unclear. Add -a/--autonomously to never ask, or -i/--interactive to approve every step. Never merges or pushes.
-argument-hint: "[-a|--autonomously | -i|--interactive] [-r|--resume | -v|--verify | -f|--feedback] [description | issue number or URL]"
+description: Run one session through the Jam Factory — spec, plan, implement, verify and triage — tracked in files that the jam-factory MCP server keeps. Run it on a feature branch, in the main checkout or in a worktree. Pass a description or a GitHub issue to start the branch's session. Pass nothing to start it from the conversation. Add -r/--resume to resume the session, or -v/--verify to run another verify round on a done session. It runs on its own and asks only when the request is unclear. Add -a/--autonomously to never ask, or -i/--interactive to approve every step. Never merges or pushes.
+argument-hint: "[-a|--autonomously | -i|--interactive] [-r|--resume | -v|--verify] [description | issue number or URL]"
 allowed-tools: Bash(echo *), Bash(git rev-parse *), Bash(git branch --show-current), Bash(date *), mcp__plugin_jam_jam-factory
 effort: xhigh
 ---
@@ -57,19 +57,17 @@ Take the flags out of what I gave you:
 - `-i` or `--interactive`: the mode is `interactive`.
 - `-r` or `--resume`: resume the session.
 - `-v` or `--verify`: run another verify round on a done session.
-- `-f` or `--feedback`: import new GitHub PR feedback into a done build session.
 
-If I passed both mode flags, tell me they conflict and stop. The rest is the argument. If I passed `-f` with `-r`, `-v`, any positional argument or an unknown flag, tell me they conflict and stop. Only one mode flag may accompany `-f`. Reject these combinations before changing any file or mode.
+If I passed both mode flags, tell me they conflict and stop. The rest is the argument. If I passed `-f` or `--feedback` as a flag, tell me that `/jam:feedback` imports PR feedback now, and stop. A flag is a whole word, not part of a description: "fix the -f flag" is a description. Reject these before changing any file or mode.
 
 Find the session. Call `list_sessions` with `org`, `repo`, `branch` and `category: session`. When it lists a session, use its `session` value as the session id. The session holds `session.json`. List its files with `list_files`. When it lists none, the session holds no `session.json`.
 
 - **The session holds `session.json` with `archived: true`**: tell me the session is archived and stop.
 - **The session holds `session.json` and a pending feedback checkpoint** (`feedbackImport` is not null, or `list_files` lists `feedback-pending.md` or `round-{round + 1}/reviews/github-feedback.md`): if I passed `-r`, read `${CLAUDE_PLUGIN_ROOT}/skills/take/feedback.md` and follow **Resume import**. Otherwise tell me to run `/jam:take -r` and stop. This check runs before `-v` and the existing-session refusal.
-- **The session holds `session.json`, and I passed `-f`**: read `${CLAUDE_PLUGIN_ROOT}/skills/take/feedback.md` and follow **New import**. Do not change mode or any session file before its preflight and fetch succeed.
 - **The session holds `session.json`, and I passed `-v`**: if its `flow` is `vibe`, tell me a vibe session has no verify round, and that `/jam:verify` reviews the branch. Stop. If its `stage` is `done`, set `lastRound: false` and `stage: verify`, then go to **Resume**. Otherwise tell me the session is not done and stop.
 - **The session holds `session.json`, and I passed `-r`**: go to **Resume**.
 - **The session holds `session.json`**: tell me the branch already has the live session `{session id}`. Tell me to pass `-r` to resume it, or to archive it on Jam Board to start a new one. Stop.
-- **I passed `-r`, `-v` or `-f`**: tell me the branch has no live session. Stop.
+- **I passed `-r` or `-v`**: tell me the branch has no live session. Stop.
 - **Anything else**: go to **New session**.
 
 When you go to **Resume** and the argument is not empty, tell me the session already exists and ignore the argument.
@@ -82,7 +80,6 @@ Show this list when a step says to show the usage:
 - `/jam:take`: start the branch's session from what we discussed in this conversation.
 - `/jam:take -r`: resume the branch's session.
 - `/jam:take -v`: run another verify round on the branch's done session.
-- `/jam:take -f` or `/jam:take --feedback`: import new feedback from the branch's open PR into a done build session; add `-i` to decide every remaining finding, including nits. Resume an interrupted import with `-r`.
 - `-a` or `-i` on any call: set the session's mode to `autonomous` or `interactive`.
 
 ## New session

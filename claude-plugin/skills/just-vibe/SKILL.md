@@ -4,7 +4,7 @@ disable-model-invocation: true
 description: Run a quick task through the Jam Factory as a vibe session — no spec, no plan, no review — tracked in files that the jam-factory MCP server keeps. Run it on a feature branch, in the main checkout or in a worktree. Pass a description or a GitHub issue. Pass nothing to start from the conversation. It asks for clarification only when the request is unclear. Add -a/--autonomously to never ask, or -i/--interactive to confirm the request first. Add -r/--resume to resume the session. It commits the work and never merges or pushes.
 argument-hint: [-a|--autonomously | -i|--interactive] [-r|--resume] [description | issue number or URL]
 allowed-tools: Bash(echo *), Bash(git rev-parse *), Bash(git branch --show-current), Bash(date *), mcp__plugin_jam_jam-factory
-effort: xhigh
+effort: high
 ---
 
 Run a quick task through the factory, as a vibe session.
