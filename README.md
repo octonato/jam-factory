@@ -158,7 +158,7 @@ Each session lives in `<root>/<org>/<repo>/sessions/<branch>/<session id>/`. `<r
 A branch holds one folder per session. The session id is `<category>-<YYYYMMDD-HHMM>-<short sha>`. It uses the UTC minute and HEAD at the start, such as `review-20261104-0905-3f00486`. The category tells the sessions of a branch apart, and Jam Board shows it:
 
 - `session`: a build or vibe session of `/jam:take` or `/jam:just-vibe`.
-- `review`: a review session of `/jam:take -p`.
+- `review`: a review session of `/jam:review`.
 - `walk`: a walk of `/jam:walk-through`.
 
 A branch holds at most one live `session` and one live `review`, and any number of walks. So a review and a walk can run on the same branch at once, from two agent sessions. Archive a session on Jam Board to start a new one of its category.
@@ -200,11 +200,11 @@ spec ─► plan ─► implement ─► verify(N) ─► triage(N) ─┬─►
 | `/jam:take <description>` | Starts the branch's session from a description. |
 | `/jam:take <issue>` | Starts the branch's session from a GitHub issue number or URL. |
 | `/jam:take` | Starts the branch's session from what you discussed in the conversation. |
-| `/jam:take <PR URL>` | Starts a review session for that PR. Run it on the PR's branch. |
-| `/jam:take -p [number]`, `/jam:take --pr [number]` | Starts a review session for the PR with that number, or for the current branch's PR. |
-| `/jam:take -r`, `/jam:take --resume` | Resumes the branch's session at the stage it reached. Add `-p` to resume the branch's review session. |
+| `/jam:take -r`, `/jam:take --resume` | Resumes the branch's session at the stage it reached. |
 | `/jam:take -v`, `/jam:take --verify` | Runs another verify round on a done session. |
 | `/jam:take -f`, `/jam:take --feedback` | Imports new feedback from the branch's open GitHub PR into a done build session. |
+
+Codex and Gemini still start a review session with `$jam:take -p` or `/take -p`, and run its next round with `-v`.
 
 Without `-r`, `-v` or `-f`, `/jam:take` refuses to run on a branch that already has a live session. Archive it on Jam Board to start a new one. To track a deferred finding, open an issue with `/jam:gh-issue-create`. Then set the entry's `issue` to its URL.
 
@@ -232,7 +232,7 @@ Actionable feedback becomes a report with source links, then follows the existin
 
 ### Review sessions
 
-A review session reviews a coworker's PR. It runs one verify round over the whole PR diff, then writes the PR comment. It changes no code and makes no commits. The factory never posts the comment: you open it on GitHub and submit it yourself.
+`/jam:review` reviews a coworker's open PR as a review session. Each run is a round: it reviews the PR, then writes the PR comment. It changes no code and makes no commits. The factory never posts the comment: you open it on GitHub and submit it yourself.
 
 Check out the PR first:
 
@@ -240,15 +240,17 @@ Check out the PR first:
 gh pr checkout <pr>
 ```
 
-Then run `/jam:take <PR URL>`, or `/jam:take -p` for the current branch's PR. Add a number to name the PR: `/jam:take -p 42`. The factory stops when the PR is not open, or when the current branch is not the PR's head branch. It never checks out a branch. A PR URL always starts a review session. An issue number or URL still starts a build session.
+Then run `/jam:review`. It reviews the current branch's PR. The factory stops when the branch has no PR, when the PR is not open, or when the current branch does not hold the PR you named. It never checks out a branch. The session id holds the PR number, such as `review-pr42-20261115-1152-e5a2575`.
 
 ```
 verify(N) ─► submit(N) ─► done
 ```
 
-- **verify**: pulls the PR's new commits, then runs one `/jam:verify` round over the PR.
-- **submit**: writes the PR comment, drops the findings already on the PR, then offers to open the comment.
+- **verify**: pulls the PR's new commits, then runs one `/jam:verify` round over the round's scope.
+- **submit**: writes the PR comment to `round-N/submit.md`, drops the findings already on the PR, then offers to open the comment.
 - **done**: shows the PR URL, the comment's path and its number of findings.
+
+Jam Board shows the session. Its Comment stop opens `round-N/submit.md`.
 
 The session's `mode` sets when a review session asks you something:
 
@@ -258,7 +260,16 @@ The session's `mode` sets when a review session asks you something:
 | `autonomous` | `-a`, `--autonomously` | never | never |
 | `interactive` | `-i`, `--interactive` | always | ask |
 
-After the coworker pushes new commits, run `/jam:take -v`. The factory pulls the commits and reviews the whole PR diff again in a new round. The new comment leaves out the findings that PR comments already report. If the PR is closed or merged, the session blocks. `-p` does not combine with `-r` or `-v`.
+The first round reviews the whole PR. After the coworker pushes new commits, run `/jam:review` again. The factory pulls the commits and reviews only the commits since the last round. After a rebase, or after a merge such as GitHub's **Update branch**, it reviews the whole PR again and tells you why. Each comment leaves out the findings that PR comments already report. If the PR is closed or merged, the session blocks.
+
+| Call | What it does |
+|---|---|
+| `/jam:review` | Starts a review session for the current branch's PR, or runs its next round. |
+| `/jam:review <PR number or URL>` | Same, after it checks that the current branch holds that PR. |
+| `/jam:review <commit hash>` | Runs a round over `<hash>^..HEAD`. The hash is inclusive and must be a commit of the PR. |
+| `-a` or `-i` on any call | Sets the session's mode to `autonomous` or `interactive`. |
+
+When a round stopped before `done`, `/jam:review` resumes it. A commit hash then stops the command: finish the round first. A commit hash still works when the last run stopped before its round started, such as on a dirty worktree. A hash outside the PR stops the command before it changes the session. `/jam:review` takes no range or description. Run `/jam:verify` to review your own changes.
 
 ### Vibe sessions
 
@@ -382,13 +393,15 @@ The examples below use Claude Code syntax: `/jam:take`, `/jam:verify`, and so on
 
 | Skill | Description |
 |---|---|
-| `/jam:take` | Runs one session through the factory: spec, plan, implement, verify and triage. The `jam-factory` MCP server keeps its session files. Run it on a feature branch, in the main checkout or in a worktree. Pass a description or a GitHub issue to start the branch's session. Pass nothing to start it from the conversation. Pass a PR URL, or `-p`, to review a coworker's PR as a session. Add `-r` to resume the session, or `-v` to run another verify round on a done session. Add `-f` to import new PR feedback into a done build session. It runs on its own and asks only when the request is unclear. Add `-a` to never ask, or `-i` to approve every step. It never merges or pushes. |
+| `/jam:take` | Runs one session through the factory: spec, plan, implement, verify and triage. The `jam-factory` MCP server keeps its session files. Run it on a feature branch, in the main checkout or in a worktree. Pass a description or a GitHub issue to start the branch's session. Pass nothing to start it from the conversation. Add `-r` to resume the session, or `-v` to run another verify round on a done session. Add `-f` to import new PR feedback into a done build session. It runs on its own and asks only when the request is unclear. Add `-a` to never ask, or `-i` to approve every step. It never merges or pushes. |
 | `/jam:just-vibe` | Runs a quick task through the factory as a vibe session: no spec, no plan, no review. The `jam-factory` MCP server keeps its session files. Run it on a feature branch, in the main checkout or in a worktree. Pass a description or a GitHub issue. Pass nothing to start from the conversation. It asks for clarification only when the request is unclear. Add `-a` to never ask, or `-i` to confirm the request first. Add `-r` to resume the session. It commits the work and never merges or pushes. |
-| `/jam:verify` | Read-only review of a PR, a commit range or the current branch. Under 300 changed lines, it runs jam:independent-reviewer or superpowers:requesting-code-review, picked at random. From 300 lines, it runs both. Then it offers extra reviewers suited to the diff (from `pr-review-toolkit` in Claude Code). It checks each finding against the code. It writes one report to .nogit/verify-{timestamp}/, or to the directory --out names. Use /jam:submit-review to turn the report into a PR comment. |
-| `/jam:submit-review` | Turns a /jam:verify report into a PR comment. The comment holds only the findings and their severity. Pass verify-{timestamp} to use a run on disk. Pass a target to run /jam:verify first. Pass nothing to pick a run from a list. It drops the findings that comments on the PR already report, then offers to open the comment on GitHub. It never posts the comment. |
+| `/jam:verify` | Read-only review of a PR, a commit range or the current branch. Under 300 changed lines, it runs jam:independent-reviewer or superpowers:requesting-code-review, picked at random. From 300 lines, it runs both. Then it offers extra reviewers suited to the diff (from `pr-review-toolkit` in Claude Code). It checks each finding against the code. It writes one report to .nogit/verify-{timestamp}/, or to the directory --out names. |
+| `/jam:review` | Reviews a coworker's open PR as a factory review session that Jam Board shows. Each run is a round. The first round reviews the whole PR. A later round reviews the commits since the last round, or the whole PR after a rebase. Pass a commit hash to review from that commit. Each round writes the PR comment to round-N/submit.md, drops the findings already on the PR and offers to open the comment on GitHub. It never posts the comment. Add `-a` to never ask, or `-i` to pick extra reviewers. |
 | `/jam:independent-reviewer` | Independent, read-only code review of a PR, a commit range or the current branch. A fresh subagent reviews the change and never learns how it was built. It writes the report to .nogit/verify-{timestamp}/independent-review.md. Add --report-in-chat to get the report in chat instead. |
 | `/jam:verify-fix` | Fix the findings of a /jam:verify run, each in its own commit. Runs on its own by default; add -i to fix one at a time. Pass --resume verify-{timestamp} to use a run on disk. Otherwise pick a run from a list, or run a new review. Never pushes. |
 | `/jam:walk-through` | Walk-through of a code path or a set of changes, broken into logical steps. By default it saves the walk as a factory session. Jam Board shows each step as soon as it is written. Replay the walk in the terminal with `/jam:walk-replay`. Add `-i` to walk through it one step at a time in the terminal instead. `-i` writes no files. |
+
+Codex and Gemini have no `review` skill. They still start a review session with `$jam:take -p` or `/take -p`, and still use `submit-review` to turn a verify report into a PR comment.
 
 ## Agents
 
@@ -407,18 +420,18 @@ The examples below use Claude Code syntax: `/jam:take`, `/jam:verify`, and so on
 
 Extra reviewers are optional. Claude Code uses the `pr-review-toolkit` plugin; Codex and Gemini can use general-purpose agents with the same review focus. Verify lists the ones the diff calls for in `extras.md`. For example, a diff that changes tests lists `pr-test-analyzer`. After the report, it asks which extras to run, records your choice in `extras.md`, and rebuilds the report with their reviews.
 
-`/jam:verify-fix` and `/jam:submit-review` (when it runs a new verify) run the base reviewers only.
+`/jam:verify-fix` runs the base reviewers only.
 
 | Call | What it does |
 |---|---|
 | `/jam:verify [target]` | Reviews and writes a report. Changes no code. |
 | `/jam:verify --out <dir> [target]` | Same, with the run directory set to `<dir>`. |
-| `/jam:submit-review verify-{timestamp}` | Writes the findings of that run as a comment for the PR author. It drops the findings already on the PR, then offers to open the comment on GitHub. |
-| `/jam:submit-review <target>` | Runs `/jam:verify` first, then writes the comment. |
-| `/jam:submit-review` | Lists the three newest runs on disk. Pick one, or run a new verify on the current branch. |
+| `/jam:review [PR number, URL or commit hash]` | Reviews a coworker's open PR as a review session, and writes the PR comment to `round-N/submit.md`. See [Review sessions](#review-sessions). |
 | `/jam:verify-fix [target]` | Lists the three newest runs on disk. Pick one, or run a new review of the target. Then fixes and commits each finding without stopping. It asks its questions at the end. It never pushes. |
 | `/jam:verify-fix -i [target]` | Goes through the findings one at a time. For each one, it gives its assessment and waits for your decision. Then it shows the fix with its commit message, and commits it when you approve. |
 | `/jam:verify-fix --resume verify-{timestamp}` | Fixes the findings of that run. Continues its fixes if the run already has them. |
+
+Codex and Gemini still turn a verify report into a PR comment with `$jam:submit-review` or `/submit-review`.
 
 The target is a PR number or URL, a commit hash, a range `a..b`, or nothing for the current branch. A commit hash is inclusive.
 

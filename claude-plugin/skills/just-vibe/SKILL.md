@@ -63,7 +63,7 @@ Find the session: call `list_sessions` with `org`, `repo`, `branch` and `categor
 - **The session holds `session.json`, and I passed `-r`**: if its `flow` is not `vibe`, tell me to resume it with `/jam:take -r` and stop. Otherwise go to **Resume**.
 - **The session holds `session.json`**: tell me the branch already has the live session `{session id}`. Tell me to pass `-r` to resume it, or to archive it on Jam Board to start a new one. Stop.
 - **I passed `-r`**: tell me the branch has no live session. Stop.
-- **The argument is a PR URL**: tell me that `/jam:take` reviews PRs. Stop. A PR URL holds `/pull/`.
+- **The argument is a PR URL**: tell me that `/jam:review` reviews PRs. It takes a PR number or URL, or reviews the current branch's PR when I pass no argument. Stop. A PR URL holds `/pull/`.
 - **Anything else**: read `${CLAUDE_PLUGIN_ROOT}/skills/take/vibe.md` and go to its **New vibe session** section.
 
 When you go to **Resume** and the argument is not empty, tell me the session already exists and ignore the argument.

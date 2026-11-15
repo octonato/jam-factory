@@ -83,6 +83,10 @@ pub struct StartSessionArgs {
     /// The short sha of HEAD.
     head: String,
 
+    /// The PR number of a review session. Only a review takes it.
+    #[serde(default)]
+    pr: Option<u64>,
+
     /// The first fields of `session.json`.
     fields: Map<String, Value>,
 }
@@ -288,7 +292,7 @@ impl FactoryServer {
     }
 
     #[tool(
-        description = "Creates a session folder `{category}-{YYYYMMDD-HHMM}-{head}` on the branch, with `fields` in its `session.json`. Returns `org`, `repo`, `branch`, `session` and the version. Fails with `exists` when the branch already holds a live `session` or `review`."
+        description = "Creates a session folder `{category}-{YYYYMMDD-HHMM}-{head}` on the branch, or `review-pr{pr}-{YYYYMMDD-HHMM}-{head}` for a review with `pr`, with `fields` in its `session.json`. Returns `org`, `repo`, `branch`, `session` and the version. Fails with `exists` when the branch already holds a live `session` or `review`."
     )]
     async fn start_session(
         &self,
@@ -303,6 +307,7 @@ impl FactoryServer {
                 &args.branch,
                 category,
                 &args.head,
+                args.pr,
                 &args.fields,
             )?;
 

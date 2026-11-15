@@ -13,7 +13,7 @@ Read nothing under `.nogit/` outside the run directory. For a `factory:` run dir
 
 The target is one of:
 
-- **A PR number or URL.** Run `gh pr view <pr> --json number,title,headRefName,baseRefName`. The diff is `gh pr diff <pr>`. Check that the current branch is the PR's head branch. If it is not, ask me whether to run `gh pr checkout <pr>`. Run it only if I approve and `git status` shows a clean tree. Otherwise stop.
+- **A PR number or URL.** Run `gh pr view <pr> --json number,title,headRefName,baseRefName`. The diff is `gh pr diff <pr>`. Then check the PR checkout, unless the caller says it already checked it. The PR checkout is right when the current branch is the PR's head branch. If it is not, ask me whether to run `gh pr checkout <pr>`. Run it only if I approve and `git status` shows a clean tree. Otherwise stop.
 - **A commit hash.** The hash is inclusive: review `<hash>^..HEAD`. If the current repository lacks the hash, check the sibling repositories. Run `git -C <dir> cat-file -e <hash>^{commit}` in each. Use the repository that owns it. If none owns it, tell me and stop.
 - **A range `a..b`.** Review it as given.
 - **Nothing.** Review the current branch against its base. The remote is `upstream` when `git remote` lists it, otherwise `origin`. Take the base from `gh pr view --json baseRefName` when the branch has a PR. Otherwise use the remote's default branch. Run `git fetch <remote> <base>`. The diff is `git diff <remote>/<base>...HEAD`.

@@ -1,7 +1,7 @@
 ---
 name: verify
 disable-model-invocation: true
-description: Read-only review of a PR, a commit range or the current branch. Under 300 changed lines, it runs jam:independent-reviewer or superpowers:requesting-code-review, picked at random. From 300 lines, it runs both. Then it offers the pr-review-toolkit reviewers the diff calls for as extras. It checks each finding against the code, and writes one report to .nogit/verify-{timestamp}/, or to the directory --out names. Use /jam:submit-review to turn the report into a PR comment. Changes no code.
+description: Read-only review of a PR, a commit range or the current branch. Under 300 changed lines, it runs jam:independent-reviewer or superpowers:requesting-code-review, picked at random. From 300 lines, it runs both. Then it offers the pr-review-toolkit reviewers the diff calls for as extras. It checks each finding against the code, and writes one report to .nogit/verify-{timestamp}/, or to the directory --out names. Changes no code.
 argument-hint: [--out <dir>] [PR number or URL | commit hash (inclusive) | range a..b | empty for the current branch]
 allowed-tools: Bash(date *)
 effort: xhigh

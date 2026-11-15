@@ -10,7 +10,7 @@ Each tool names the session with `org`, `repo`, `branch` and `session`. `branch`
 
 | Tool | What it does |
 |---|---|
-| `start_session` | Creates the session folder and its `session.json`, and returns the new `session` id. See **Start a session**. |
+| `start_session` | Creates the session folder and its `session.json`, and returns the new `session` id. Takes an optional `pr`, the PR number, only with `category: review`. See **Start a session**. |
 | `list_sessions` | Lists sessions, each with `org`, `repo`, `branch`, `session`, `category` and its parsed `session.json` as `data`. Filters by `org`, `repo`, `branch` and `category`. Pass `include_archived: true` to list archived sessions too. |
 | `read_file` | Returns the file's `content` and its `version`. |
 | `list_files` | Returns the session's `files`, as relative paths. |
@@ -35,12 +35,15 @@ Re-read a file before you change it. I may have edited it by hand.
 A branch holds one folder per session. The folder name is `{category}-{YYYYMMDD-HHMM}-{short sha}`, such as `review-20261104-0905-3f00486`. The prefix is the category:
 
 - `session`: a build or vibe session of `/jam:take` or `/jam:just-vibe`.
-- `review`: a review session of `/jam:take -p`.
+- `review`: a review session of `/jam:review`.
 - `walk`: a walk of `/jam:walk-through`.
 
-Call `start_session` with `org`, `repo`, `branch`, `category`, `head` and `fields`:
+A review with a PR number gets the folder name `review-pr{n}-{YYYYMMDD-HHMM}-{short sha}`, such as `review-pr42-20261104-0905-3f00486`.
+
+Call `start_session` with `org`, `repo`, `branch`, `category`, `head` and `fields`, plus `pr` for a review of a PR:
 
 - `head`: the short sha of HEAD, from `git rev-parse --short HEAD`.
+- `pr`: the PR number, a positive integer. Only `category: review` takes it. Any other category with `pr` fails with `bad_name`.
 - `fields`: the first fields of `session.json`. The tool adds `id`, `category`, `archived: false` and `updated`.
 
 It returns `org`, `repo`, `branch`, the new `session` id and the `version` of `session.json`. Use that `session` id for every later call.
@@ -79,7 +82,7 @@ A file of a session is written `factory:{org}/{repo}/{branch}/{session}/{path}`.
 
 `round-N/extras.md` lists the extra reviewer candidates and my decision on them. `skills/verify/review.md` defines its format.
 
-A review session writes only `session.json`, `request.md`, `runs.jsonl` and the round folders. Its round folders add `submit.md`, the PR comment, and hold no `triage.md`. `skills/submit-review/submit.md` defines its format.
+A review session writes only `session.json`, `request.md`, `runs.jsonl` and the round folders. Its round folders add `submit.md`, the PR comment, and hold no `triage.md`. `skills/review/submit.md` defines its format.
 
 A vibe session writes only `session.json`, `request.md`, `tasks.md` and `runs.jsonl`.
 
@@ -123,6 +126,7 @@ Create it once with `start_session`, as **Start a session** says. After that, ch
 - `mode`: `default`, `autonomous` or `interactive`. The skill's **Modes** section says when each one asks me something. A missing field means `default`.
 - `flow`: `build`, `review`, `vibe` or `walk`. A missing field means `build`. `skills/walk-through/state.md` defines a walk session.
 - `pr`: the PR number. Only review sessions set it.
+- `reviewedHead`: the full sha of HEAD when the last round's report was written. Only review sessions set it.
 - `stage`: `spec`, `plan`, `implement`, `verify`, `triage`, `done` or `blocked`. A review session uses `verify`, `submit`, `done` and `blocked`. A vibe session uses `implement`, `done` and `blocked`. A walk session uses `walk`, `done` and `blocked`.
 - `round`: the last verify or feedback round, `0` before the first.
 - `lastRound`: `true` when triage picked `last round`. A new verify or feedback round resets it to `false`; an import resume preserves the recorded outcome.

@@ -119,10 +119,13 @@ impl Store {
     }
 
     /// Creates a session of `category` on `branch`.
-    /// The name comes from the current UTC minute and `head`.
+    /// The name comes from the current UTC minute and `head`, such as `walk-20261104-0912-3f00486`.
+    /// A review with `pr` gets the name `review-pr{pr}-{YYYYMMDD-HHMM}-{head}`.
     /// `fields` go in its `session.json`.
     ///
     /// Returns `exists` when the branch already holds a live `session` or `review` run.
+    /// Returns `bad_name` when `pr` is 0 or comes with a category other than `review`.
+    #[allow(clippy::too_many_arguments)]
     pub fn start_session(
         &self,
         org: &str,
@@ -130,9 +133,10 @@ impl Store {
         branch: &str,
         category: Category,
         head: &str,
+        pr: Option<u64>,
         fields: &Map<String, Value>,
     ) -> Result<Started, StoreError> {
-        self.start_session_at(org, repo, branch, category, head, fields, Utc::now())
+        self.start_session_at(org, repo, branch, category, head, pr, fields, Utc::now())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -143,6 +147,7 @@ impl Store {
         branch: &str,
         category: Category,
         head: &str,
+        pr: Option<u64>,
         fields: &Map<String, Value>,
         now: DateTime<Utc>,
     ) -> Result<Started, StoreError> {
@@ -151,6 +156,7 @@ impl Store {
         }
 
         check_head(head)?;
+        check_pr(category, pr)?;
 
         let branch_dir = self.branch_dir(org, repo, branch);
         fs::create_dir_all(&branch_dir).map_err(|e| files::io_error(&branch_dir, e))?;
@@ -161,7 +167,13 @@ impl Store {
             self.refuse_live(org, repo, branch, category)?;
         }
 
-        let base = format!("{category}-{}-{head}", now.format(STARTED_FORMAT));
+        let stamp = now.format(STARTED_FORMAT);
+
+        let base = match pr {
+            Some(pr) => format!("{category}-pr{pr}-{stamp}-{head}"),
+            None => format!("{category}-{stamp}-{head}"),
+        };
+
         let session = free_name(&branch_dir, &base);
         let s = SessionRef::new(org, repo, branch, &session)?;
 
@@ -255,6 +267,20 @@ fn check_head(head: &str) -> Result<(), StoreError> {
         Ok(())
     } else {
         Err(StoreError::BadName(format!("{head:?} is not a commit sha")))
+    }
+}
+
+/// Returns `bad_name` when `pr` is 0 or comes with a category other than `review`.
+fn check_pr(category: Category, pr: Option<u64>) -> Result<(), StoreError> {
+    match pr {
+        None => Ok(()),
+        Some(0) => Err(StoreError::BadName("0 is not a PR number".to_string())),
+
+        Some(pr) if category != Category::Review => Err(StoreError::BadName(format!(
+            "A {category} takes no PR number, got {pr}"
+        ))),
+
+        Some(_) => Ok(()),
     }
 }
 
@@ -611,8 +637,17 @@ mod tests {
     }
 
     fn start(store: &Store, category: Category, now: DateTime<Utc>) -> Result<Started, StoreError> {
+        start_pr(store, category, None, now)
+    }
+
+    fn start_pr(
+        store: &Store,
+        category: Category,
+        pr: Option<u64>,
+        now: DateTime<Utc>,
+    ) -> Result<Started, StoreError> {
         let fields = fields(json!({ "flow": "walk", "branch": "octonato/fix" }));
-        store.start_session_at("o", "r", "fix", category, "3f00486", &fields, now)
+        store.start_session_at("o", "r", "fix", category, "3f00486", pr, &fields, now)
     }
 
     #[test]
@@ -686,13 +721,74 @@ mod tests {
 
         for head in ["", "xyz1234", "3f0", "3f00486/.."] {
             let result =
-                store.start_session_at("o", "r", "fix", Category::Walk, head, &fields, now);
+                store.start_session_at("o", "r", "fix", Category::Walk, head, None, &fields, now);
             assert_eq!(result.unwrap_err().code(), "bad_name", "{head:?}");
         }
 
-        let result =
-            store.start_session_at("o", "r", "a/b", Category::Walk, "3f00486", &fields, now);
+        let result = store.start_session_at(
+            "o",
+            "r",
+            "a/b",
+            Category::Walk,
+            "3f00486",
+            None,
+            &fields,
+            now,
+        );
         assert_eq!(result.unwrap_err().code(), "bad_name");
+    }
+
+    #[test]
+    fn start_session_puts_the_pr_in_a_review_id() {
+        let (_root, store) = store();
+
+        let first = start_pr(&store, Category::Review, Some(42), at("09:12")).unwrap();
+
+        assert_eq!(first.session.session(), "review-pr42-20261104-0912-3f00486");
+        assert_eq!(
+            read_session(&store, &first.session)["id"],
+            "review-pr42-20261104-0912-3f00486"
+        );
+
+        store.archive_session(&first.session).unwrap();
+
+        let second = start_pr(&store, Category::Review, Some(42), at("09:12")).unwrap();
+
+        assert_eq!(
+            second.session.session(),
+            "review-pr42-20261104-0912-3f00486-2"
+        );
+    }
+
+    #[test]
+    fn start_session_refuses_a_pr_outside_a_review() {
+        let (_root, store) = store();
+
+        for category in [Category::Session, Category::Walk] {
+            let result = start_pr(&store, category, Some(42), at("09:12"));
+            assert_eq!(result.unwrap_err().code(), "bad_name", "{category}");
+        }
+
+        let result = start_pr(&store, Category::Review, Some(0), at("09:12"));
+        assert_eq!(result.unwrap_err().code(), "bad_name");
+
+        let listed = store.list_sessions(&SessionFilter::default()).unwrap();
+        assert!(listed.is_empty());
+    }
+
+    #[test]
+    fn start_session_refuses_a_second_review_with_a_pr() {
+        let (_root, store) = store();
+
+        let first = start_pr(&store, Category::Review, Some(42), at("09:12")).unwrap();
+        let second = start_pr(&store, Category::Review, Some(7), at("09:13"));
+
+        let error = second.unwrap_err();
+        assert_eq!(error.code(), "exists");
+        assert!(
+            error.to_string().contains(first.session.session()),
+            "{error}"
+        );
     }
 
     #[test]

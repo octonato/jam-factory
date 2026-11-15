@@ -635,6 +635,44 @@ fn start_session_creates_a_session_and_refuses_a_second_live_one() {
 }
 
 #[test]
+fn start_session_names_a_review_by_its_pr() {
+    let mut server = Server::start();
+
+    let start = json!({
+        "org": "o",
+        "repo": "r",
+        "branch": "fix",
+        "category": "review",
+        "head": "3f00486",
+        "pr": 42,
+        "fields": { "flow": "review", "stage": "verify", "pr": 42 },
+    });
+
+    let started = server.ok("start_session", start.clone());
+    let id = started["session"].as_str().unwrap();
+
+    assert!(
+        id.starts_with("review-pr42-") && id.ends_with("-3f00486"),
+        "{started}"
+    );
+
+    let mut other = start.clone();
+    other["pr"] = json!(7);
+
+    let second = server.fail("start_session", other);
+    assert_eq!(second["code"], "exists");
+    assert!(second["message"].as_str().unwrap().contains(id), "{second}");
+
+    let mut session = start.clone();
+    session["category"] = json!("session");
+    assert_eq!(server.fail("start_session", session)["code"], "bad_name");
+
+    let mut zero = start;
+    zero["pr"] = json!(0);
+    assert_eq!(server.fail("start_session", zero)["code"], "bad_name");
+}
+
+#[test]
 fn startup_moves_old_sessions_into_their_branch() {
     let home = Arc::new(tempfile::tempdir().unwrap());
     let old = home

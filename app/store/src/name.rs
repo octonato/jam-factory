@@ -164,6 +164,7 @@ mod tests {
         let cases = [
             ("session-20261104-0912-3f00486", Some(Category::Session)),
             ("review-20261104-0912-3f00486", Some(Category::Review)),
+            ("review-pr42-20261104-0912-3f00486", Some(Category::Review)),
             ("walk-20261104-0912-3f00486-2", Some(Category::Walk)),
             ("walk-", None),
             ("walk", None),

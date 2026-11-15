@@ -1845,6 +1845,28 @@ test('a walk opens its overview by default', async () => {
   assert.match(app.elements.get('view').innerHTML, /# Overview/)
 })
 
+test('a done review opens its comment by default', async () => {
+  const api = fileApi({
+    'session.json': '{}',
+    'request.md': '# Request\n',
+    'round-1/report.md': '# Verify\n',
+    'round-1/reviews/independent-review.md': '# R\n',
+    'round-1/submit.md': '**[should-fix]**\nA title\n',
+  })
+  const app = await openSession(api, { ...editSession, flow: 'review', category: 'review', stage: 'done', round: 1, pr: 42 })
+
+  app.context.files = Object.keys(api.files)
+  assert.equal(app.run('defaultFile(session, files, sessionRound(session))'), 'round-1/submit.md')
+
+  const selected = plain(app.run('sessionView.stops[sessionView.selected]'))
+  assert.equal(selected.kind, 'comment')
+  assert.equal(selected.file, 'round-1/submit.md')
+
+  assert.match(app.elements.get('viewer-head').innerHTML, /<span class="path">round-1\/submit\.md<\/span><span class="by">Comment<\/span>/)
+  assert.match(app.elements.get('view').innerHTML, /A title/)
+  assert.match(app.elements.get('metro').innerHTML, /<div class="card selected" data-path="round-1\/submit\.md">\s*<div class="card-head">\s*<span class="title">Comment<\/span>/)
+})
+
 test('moving between walk stops skips unwritten steps', async () => {
   const steps = [1, 2, 3].map((n) => ({ n, title: `S${n}` }))
   const api = fileApi({ 'walk.json': JSON.stringify({ steps }), 'overview.md': '# Overview\n', 'steps/01.md': '## 1\n', 'steps/03.md': '## 3\n' })

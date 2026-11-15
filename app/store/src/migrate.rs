@@ -310,7 +310,7 @@ mod tests {
         let fields = json!({ "flow": "walk" });
         let fields = fields.as_object().unwrap();
         store
-            .start_session("o", "r", "main", Category::Walk, "3f00486", fields)
+            .start_session("o", "r", "main", Category::Walk, "3f00486", None, fields)
             .unwrap();
 
         assert!(store.migrate_at(now()).unwrap().is_empty());
