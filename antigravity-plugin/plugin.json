@@ -1,0 +1,8 @@
+{
+  "name": "jam",
+  "description": "Antigravity plugin for coding jam sessions: the orchestrator keeps the tempo, the engineer leads.",
+  "version": "1.1.2",
+  "author": {
+    "name": "octonato"
+  }
+}

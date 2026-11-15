@@ -24,9 +24,9 @@ For example:
 
 ## Requirements
 
-- One supported assistant installed and working: Claude Code, Codex, or Gemini CLI.
+- One supported assistant installed and working: Claude Code, Codex, Gemini CLI, or Antigravity (agy).
 - [Superpowers](https://github.com/obra/superpowers), installed for your chosen assistant. The factory uses it for specs and plans; the review workflows use it for code review. Follow its installation instructions for your assistant.
-- **Claude Code only:** Claude Code v2.1.292 or later for the review skills, and the `pr-review-toolkit` plugin for the extra reviewers offered by `/jam:verify`. Codex and Gemini do not require Claude Code or its `pr-review-toolkit` plugin.
+- **Claude Code only:** Claude Code v2.1.292 or later for the review skills, and the `pr-review-toolkit` plugin for the extra reviewers offered by `/jam:verify`. Codex, Gemini and Antigravity do not require Claude Code or its `pr-review-toolkit` plugin.
 - Git for branch and commit operations. GitHub workflows also need the [GitHub CLI](https://cli.github.com/) (`gh`), authenticated with `gh auth login`.
 
 ## Install
@@ -104,6 +104,19 @@ Replace the example path with your checkout's absolute path, then start a new Ge
 
 The current extension stores commands directly under `commands/`, so Gemini exposes `/take`, `/verify`, and so on. Check `/help` for the loaded commands. Gemini derives command names from their [paths within the extension](https://geminicli.com/docs/extensions/reference/#custom-commands).
 
+### Antigravity (agy)
+
+Clone the repository and install its Antigravity plugin:
+
+```sh
+git clone https://github.com/octonato/jam-factory
+agy plugin install /absolute/path/to/jam-factory/antigravity-plugin
+```
+
+Replace the example path with your checkout's absolute path. You can manage installed plugins with `agy plugin list` or remove with `agy plugin uninstall jam`.
+
+Antigravity invokes these skills with `/jam:take`, `/jam:verify`, and so on. The agents read your rules from `~/.gemini/GEMINI.md`, and from the project's `GEMINI.md` and `AGENTS.md`.
+
 ### Factory setup
 
 The factory keeps session state in files outside your Git repositories. The `jam-factory-mcp` server owns those files. Each plugin starts it as the `jam-factory` MCP server. The skills read and write session files only through that server.
@@ -171,11 +184,11 @@ The factory shares this folder across orgs, repositories and worktrees. Create a
 git switch -c my-feature
 ```
 
-Then invoke the factory with a description: `/jam:take Add rate limiting` in Claude Code, `$jam:take Add rate limiting` in Codex, or `/take Add rate limiting` in Gemini.
+Then invoke the factory with a description: `/jam:take Add rate limiting` in Claude Code or Antigravity, `$jam:take Add rate limiting` in Codex, or `/take Add rate limiting` in Gemini.
 
 ## Factory workflow: `/jam:take`
 
-`/jam:take` is the main command in Jam Factory. The examples here use Claude Code syntax; use `$jam:take` in Codex or `/take` in Gemini. Complete the [factory setup](#factory-setup) before starting.
+`/jam:take` is the main command in Jam Factory. The examples here use Claude Code and Antigravity syntax (`/jam:take`); use `$jam:take` in Codex or `/take` in Gemini. Complete the [factory setup](#factory-setup) before starting.
 
 `/jam:take` takes one change from spec to a branch ready for review. Each session belongs to one feature branch, in the main checkout or in a worktree. A branch holds one live session at a time. You create the branch; the factory never does. It refuses to run on the base branch.
 
@@ -374,7 +387,7 @@ Export after the last verify or `-f` round. Files exported earlier would sit in 
 
 ## Commands
 
-The examples below use Claude Code syntax: `/jam:take`, `/jam:verify`, and so on. In Codex, use `$jam:take` and `$jam:verify`; in Gemini, use `/take` and `/verify`. The same arguments and flags apply.
+The examples below use Claude Code and Antigravity syntax: `/jam:take`, `/jam:verify`, and so on. In Codex, use `$jam:take` and `$jam:verify`; in Gemini, use `/take` and `/verify`. The same arguments and flags apply.
 
 | Command | Description |
 |---|---|
@@ -420,7 +433,7 @@ Codex and Gemini have no `review` skill. They still start a review session with 
 
 `/jam:verify` runs its base reviewers at xhigh effort. Under 300 changed lines, it runs one, picked at random: `jam:independent-reviewer` or `superpowers:requesting-code-review`. From 300 lines, it runs both. The report lists each reviewer and why it ran, so you can compare the two over time.
 
-Extra reviewers are optional. Claude Code uses the `pr-review-toolkit` plugin; Codex and Gemini can use general-purpose agents with the same review focus. Verify lists the ones the diff calls for in `extras.md`. For example, a diff that changes tests lists `pr-test-analyzer`. After the report, it asks which extras to run, records your choice in `extras.md`, and rebuilds the report with their reviews.
+Extra reviewers are optional. Claude Code uses the `pr-review-toolkit` plugin. Codex, Gemini and Antigravity can use general-purpose agents with the same review focus. Verify lists the ones the diff calls for in `extras.md`. For example, a diff that changes tests lists `pr-test-analyzer`. After the report, it asks which extras to run, records your choice in `extras.md`, and rebuilds the report with their reviews.
 
 `/jam:verify-fix` runs the base reviewers only.
 
