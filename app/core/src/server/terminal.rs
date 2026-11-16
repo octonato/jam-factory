@@ -23,7 +23,7 @@ use std::sync::mpsc::TryRecvError;
 use std::time::{Duration, Instant};
 
 use jam_factory_store::sessions::SESSION_FILE;
-use serde_json::Value;
+use serde_json::{Value, json};
 use tungstenite::handshake::derive_accept_key;
 use tungstenite::protocol::frame::coding::CloseCode;
 use tungstenite::protocol::{CloseFrame, Role};
@@ -31,8 +31,9 @@ use tungstenite::{Error, Message, WebSocket};
 
 use super::api::{configured_worktree, query_field, segments, session_ref, worktree};
 use super::http::{Request, Response};
-use super::pty::{Program, Pty};
+use super::pty::Program;
 use super::repos::RepoList;
+use super::terminals::{Event, Terminal, Terminals, Viewer};
 use crate::store::Store;
 
 const DEFAULT_COLS: u16 = 80;
@@ -44,6 +45,15 @@ const DEFAULT_SHELL: &str = "/bin/zsh";
 /// The close reason for a path that is not a folder of a configured worktree.
 const NOT_A_WORKTREE: &str = "not a configured worktree";
 
+/// The close reason for an id that names no running terminal.
+const NO_TERMINAL: &str = "the terminal no longer runs";
+
+/// The close code for a socket whose terminal another page took.
+const TAKEN_CODE: u16 = 4001;
+
+/// The close reason for a socket whose terminal another page took.
+const TAKEN: &str = "attached in another window";
+
 /// The read timeout of the socket while it relays.
 const POLL: Duration = Duration::from_millis(10);
 
@@ -52,6 +62,13 @@ const CLOSE_WAIT: Duration = Duration::from_secs(1);
 
 /// The longest close reason, in bytes.
 const MAX_REASON: usize = 123;
+
+/// A viewer of a terminal, the text to send before its output, and whether the socket close kills the terminal.
+struct Link {
+    viewer: Viewer,
+    hello: Option<String>,
+    kill: bool,
+}
 
 /// Whether `request` is a `GET` on `/api/lazygit/` or `/api/terminal` that asks for a WebSocket.
 pub fn is_upgrade(request: &Request) -> bool {
@@ -73,41 +90,91 @@ fn terminal_route(request: &Request) -> bool {
 }
 
 /// Upgrades `request` on `stream` and runs its program in the worktree that its path names.
-pub fn serve(store: &dyn Store, repos: &dyn RepoList, request: &Request, stream: TcpStream) {
+pub fn serve(
+    store: &dyn Store,
+    repos: &dyn RepoList,
+    terminals: &Terminals,
+    request: &Request,
+    stream: TcpStream,
+) {
     if terminal_route(request) {
         let shell = env::var_os("SHELL");
-        serve_worktree_with(repos, request, stream, shell.as_deref());
+        serve_worktree_with(repos, terminals, request, stream, shell.as_deref());
     } else {
         serve_with(store, request, stream, &lazygit());
     }
 }
 
-/// Upgrades `request` on `stream` and runs `program` in the worktree of its session.
+/// Upgrades `request` on `stream` and runs `program` in the worktree of its session until the socket closes.
 pub fn serve_with(store: &dyn Store, request: &Request, stream: TcpStream, program: &Program) {
-    let target = session_worktree(store, &request.target).map(|dir| (dir, program.clone()));
+    let dir = session_worktree(store, &request.target);
 
-    bridge(request, stream, target);
+    bridge(request, stream, |cols, rows| {
+        let terminal = Terminal::start(program, &dir?, cols, rows)?;
+
+        Ok(Link {
+            viewer: terminal.view(),
+            hello: None,
+            kill: true,
+        })
+    });
 }
 
-/// Upgrades `request` on `stream` and runs the `program` of its query in the configured worktree at its `path`.
+/// Upgrades `request` on `stream` and shows the terminal `id` of its query, or opens a terminal that runs its `program` in the configured worktree at its `path`.
 pub fn serve_worktree_with(
     repos: &dyn RepoList,
+    terminals: &Terminals,
     request: &Request,
     mut stream: TcpStream,
     shell: Option<&OsStr>,
 ) {
-    let name = query_field(&request.target, "program").unwrap_or_default();
+    if let Some(id) = query_field(&request.target, "id") {
+        return attach(terminals, &id, request, stream);
+    }
 
-    let Some(program) = program_for(&name, shell) else {
+    let kind = query_field(&request.target, "program").unwrap_or_default();
+
+    let Some(program) = program_for(&kind, shell) else {
         let _ = Response::error(400).write_to(&mut stream);
         return;
     };
 
-    let target = configured_worktree(repos, &request.target)
-        .map(|dir| (dir, program))
-        .ok_or_else(|| NOT_A_WORKTREE.to_string());
+    let name = query_field(&request.target, "name")
+        .map(|name| name.trim().to_string())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| kind.clone());
 
-    bridge(request, stream, target);
+    let dir = configured_worktree(repos, &request.target).ok_or_else(|| NOT_A_WORKTREE.to_string());
+
+    bridge(request, stream, |cols, rows| {
+        let (id, terminal) = terminals.open(&dir?, &kind, &program, &name, cols, rows)?;
+
+        Ok(Link {
+            viewer: terminal.view(),
+            hello: Some(json!({ "id": id }).to_string()),
+            kill: false,
+        })
+    });
+}
+
+/// Upgrades `request` on `stream` and shows the running terminal `id` at the size of its query.
+fn attach(terminals: &Terminals, id: &str, request: &Request, stream: TcpStream) {
+    let terminal = id
+        .parse()
+        .ok()
+        .and_then(|id| terminals.get(id))
+        .ok_or_else(|| NO_TERMINAL.to_string());
+
+    bridge(request, stream, |cols, rows| {
+        let terminal = terminal?;
+        let _ = terminal.resize(cols, rows);
+
+        Ok(Link {
+            viewer: terminal.view(),
+            hello: None,
+            kill: false,
+        })
+    });
 }
 
 /// The program named `name`: the login shell `shell` for `shell`, Claude in that interactive login shell for `claude`, or lazygit for `lazygit`.
@@ -143,8 +210,12 @@ fn lazygit() -> Program {
     }
 }
 
-/// Upgrades `request` on `stream` and runs the program of `target` in its folder, or closes with 1011 and the reason.
-fn bridge(request: &Request, mut stream: TcpStream, target: Result<(PathBuf, Program), String>) {
+/// Upgrades `request` on `stream` and relays the terminal that `link` gives for the size of its query, or closes with 1011 and the reason.
+fn bridge(
+    request: &Request,
+    mut stream: TcpStream,
+    link: impl FnOnce(u16, u16) -> Result<Link, String>,
+) {
     let key = match handshake_key(request) {
         Ok(key) => key,
         Err(status) => {
@@ -158,15 +229,14 @@ fn bridge(request: &Request, mut stream: TcpStream, target: Result<(PathBuf, Pro
     }
 
     let mut socket = WebSocket::from_raw_socket(stream, Role::Server, None);
+    let (cols, rows) = size(&request.target);
 
-    let pty = target.and_then(|(dir, program)| {
-        let (cols, rows) = size(&request.target);
-        Pty::spawn(&program, &dir, cols, rows)
-    });
-
-    match pty {
-        Ok(mut pty) => {
-            relay(&mut socket, &mut pty);
+    match link(cols, rows) {
+        Ok(link) => {
+            relay(&mut socket, &link);
+            if link.kill {
+                link.viewer.terminal().kill();
+            }
             finish(&mut socket);
         }
         Err(reason) => {
@@ -259,31 +329,43 @@ fn close_reason(text: &str) -> &str {
     &text[..text.floor_char_boundary(MAX_REASON)]
 }
 
-/// Relays between `socket` and `pty` until the program ends, or the socket closes or fails.
-fn relay(socket: &mut WebSocket<TcpStream>, pty: &mut Pty) {
+/// Relays between `socket` and the terminal of `link` until the program ends, another page takes the terminal, or the socket closes or fails.
+fn relay(socket: &mut WebSocket<TcpStream>, link: &Link) {
+    if let Some(hello) = &link.hello
+        && socket.send(Message::text(hello.as_str())).is_err()
+    {
+        return;
+    }
+
+    let terminal = link.viewer.terminal();
+
     loop {
         loop {
-            match pty.output().try_recv() {
-                Ok(chunk) => {
+            match link.viewer.events().try_recv() {
+                Ok(Event::Output(chunk)) => {
                     if socket.send(Message::Binary(chunk.into())).is_err() {
                         return;
                     }
                 }
-                Err(TryRecvError::Empty) => break,
-                Err(TryRecvError::Disconnected) => {
+                Ok(Event::Taken) => {
+                    close(socket, CloseCode::Library(TAKEN_CODE), TAKEN);
+                    return;
+                }
+                Ok(Event::Ended) | Err(TryRecvError::Disconnected) => {
                     close(socket, CloseCode::Normal, "");
                     return;
                 }
+                Err(TryRecvError::Empty) => break,
             }
         }
 
         match socket.read() {
             Ok(Message::Binary(bytes)) => {
-                let _ = pty.write(&bytes);
+                let _ = terminal.write(&bytes);
             }
             Ok(Message::Text(text)) => {
                 if let Some((cols, rows)) = resize(text.as_str()) {
-                    let _ = pty.resize(cols, rows);
+                    let _ = terminal.resize(cols, rows);
                 }
             }
             Ok(Message::Close(_)) => return,
@@ -331,6 +413,7 @@ mod tests {
     use std::net::TcpListener;
     use std::path::Path;
     use std::process::{Command, Stdio};
+    use std::sync::Arc;
     use std::thread;
 
     use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
@@ -400,6 +483,16 @@ mod tests {
         target: &str,
         shell: &Path,
     ) -> Result<WebSocket<TcpStream>, u16> {
+        connect_terminals(Arc::new(Terminals::default()), repos, target, shell)
+    }
+
+    /// A client socket on `target`, which `serve_worktree_with` answers with `terminals`, `repos` and `shell` on another thread, or the status that refuses it.
+    fn connect_terminals(
+        terminals: Arc<Terminals>,
+        repos: FixedRepos,
+        target: &str,
+        shell: &Path,
+    ) -> Result<WebSocket<TcpStream>, u16> {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         let shell = shell.as_os_str().to_owned();
@@ -407,7 +500,7 @@ mod tests {
         thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
             let request = read_request(&mut stream).unwrap();
-            serve_worktree_with(&repos, &request, stream, Some(&shell));
+            serve_worktree_with(&repos, &terminals, &request, stream, Some(&shell));
         });
 
         let stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
@@ -796,6 +889,107 @@ mod tests {
 
         assert_eq!(code, 1011);
         assert_eq!(reason, "not a configured worktree");
+        assert!(!dir.path().join("ran").exists());
+    }
+
+    /// The id in the first text frame of `socket`.
+    fn hello_of(socket: &mut WebSocket<TcpStream>) -> u64 {
+        loop {
+            match socket.read() {
+                Ok(Message::Text(text)) => {
+                    let hello: Value = serde_json::from_str(text.as_str()).unwrap();
+                    return hello["id"].as_u64().unwrap();
+                }
+                Ok(_) => {}
+                Err(error) => panic!("no hello: {error}"),
+            }
+        }
+    }
+
+    /// The `/api/terminal` target that shows the terminal `id`.
+    fn attach_target(id: u64) -> String {
+        format!("/api/terminal?id={id}&cols=90&rows=20")
+    }
+
+    #[test]
+    fn a_worktree_terminal_outlives_its_socket_and_replays_on_attach() {
+        let dir = tempfile::tempdir().unwrap();
+        let Some((main, linked)) = repo_with_worktree(dir.path()) else {
+            eprintln!("skipped: git is missing");
+            return;
+        };
+        let shell = dir.path().join("shell");
+        write_program(&shell, "echo $$; exec sleep 60");
+        let terminals = Arc::new(Terminals::default());
+
+        let repos = FixedRepos(vec![main.clone()]);
+        let target = format!("{}&name=build", terminal_target(&linked, "shell"));
+        let mut socket = connect_terminals(Arc::clone(&terminals), repos, &target, &shell).unwrap();
+        let id = hello_of(&mut socket);
+        let pid = pid_of(&mut socket);
+
+        drop(socket);
+        thread::sleep(Duration::from_millis(200));
+        assert!(alive(pid));
+
+        let listed = terminals.to_json();
+        assert_eq!(listed["terminals"][0]["id"], id);
+        assert_eq!(listed["terminals"][0]["program"], "shell");
+        assert_eq!(listed["terminals"][0]["name"], "build");
+
+        let repos = FixedRepos(vec![main]);
+        let mut again =
+            connect_terminals(Arc::clone(&terminals), repos, &attach_target(id), &shell).unwrap();
+        read_until(&mut again, &format!("{pid}\r\n"));
+
+        terminals.kill_all();
+        assert_ends(pid);
+        assert_eq!(close_of(&mut again).0, 1000);
+    }
+
+    #[test]
+    fn a_second_socket_takes_the_terminal_from_the_first() {
+        let dir = tempfile::tempdir().unwrap();
+        let Some((main, linked)) = repo_with_worktree(dir.path()) else {
+            eprintln!("skipped: git is missing");
+            return;
+        };
+        let shell = dir.path().join("shell");
+        write_program(&shell, "echo $$; exec sleep 60");
+        let terminals = Arc::new(Terminals::default());
+
+        let repos = FixedRepos(vec![main.clone()]);
+        let target = terminal_target(&linked, "shell");
+        let mut first = connect_terminals(Arc::clone(&terminals), repos, &target, &shell).unwrap();
+        let id = hello_of(&mut first);
+        let pid = pid_of(&mut first);
+
+        let repos = FixedRepos(vec![main]);
+        let mut second =
+            connect_terminals(Arc::clone(&terminals), repos, &attach_target(id), &shell).unwrap();
+        read_until(&mut second, &pid.to_string());
+
+        assert_eq!(
+            close_of(&mut first),
+            (4001, "attached in another window".to_string())
+        );
+        assert!(alive(pid));
+
+        terminals.kill_all();
+        assert_ends(pid);
+    }
+
+    #[test]
+    fn an_unknown_terminal_id_closes_with_1011() {
+        let dir = tempfile::tempdir().unwrap();
+        let shell = stub_shell(dir.path());
+
+        let repos = FixedRepos(vec![]);
+        let mut socket = connect_worktree(repos, &attach_target(9), &shell).unwrap();
+        let (code, reason) = close_of(&mut socket);
+
+        assert_eq!(code, 1011);
+        assert_eq!(reason, "the terminal no longer runs");
         assert!(!dir.path().join("ran").exists());
     }
 

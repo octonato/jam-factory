@@ -17,6 +17,7 @@
 use std::env;
 use std::ffi::{OsStr, OsString};
 use std::io::{self, Read, Write};
+use std::mem;
 use std::path::Path;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
@@ -110,6 +111,11 @@ impl Pty {
     /// The chunks the program writes to the terminal, until it closes.
     pub fn output(&self) -> &Receiver<Vec<u8>> {
         &self.output
+    }
+
+    /// Takes the output channel and leaves a closed one in its place.
+    pub fn take_output(&mut self) -> Receiver<Vec<u8>> {
+        mem::replace(&mut self.output, mpsc::channel().1)
     }
 
     /// Writes `bytes` to the program's terminal input.

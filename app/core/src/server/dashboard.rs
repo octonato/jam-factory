@@ -93,7 +93,7 @@ mod tests {
     }
 
     #[test]
-    fn dashboard_header_has_repos_and_sessions_tabs() {
+    fn dashboard_header_has_repos_sessions_and_terminals_tabs() {
         let html = std::str::from_utf8(embedded("/dashboard.html").unwrap().bytes).unwrap();
         let start = html.find("<header>").unwrap();
         let end = html.find("</header>").unwrap();
@@ -103,7 +103,7 @@ mod tests {
         let tabs = header.find("<nav class=\"tabs\" id=\"tabs\">").unwrap();
         assert!(tabs > title);
         assert!(header.contains(
-            "<a class=\"tab\" href=\"#/\" aria-current=\"page\">Repos</a><a class=\"tab\" href=\"#/sessions\">Sessions</a>"
+            "<a class=\"tab\" href=\"#/\" aria-current=\"page\">Repos</a><a class=\"tab\" href=\"#/sessions\">Sessions</a><a class=\"tab\" href=\"#/terminals\">Terminals</a>"
         ));
     }
 

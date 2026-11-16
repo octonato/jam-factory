@@ -24,19 +24,26 @@ use super::http::{Request, Response};
 use super::open;
 use super::prs;
 use super::repos::{RepoList, is_worktree, repos_json};
+use super::terminals::{self, Terminals};
 use crate::store::Store;
 
 const HTML: &str = "text/html; charset=utf-8";
 const JSON: &str = "application/json";
 const TEXT: &str = "text/plain; charset=utf-8";
 
-/// Answers `GET target` with `store` and `repos`.
-pub fn get(store: &dyn Store, repos: &dyn RepoList, target: &str) -> Response {
+/// Answers `GET target` with `store`, `repos` and `terminals`.
+pub fn get(
+    store: &dyn Store,
+    repos: &dyn RepoList,
+    terminals: &Terminals,
+    target: &str,
+) -> Response {
     let segments = segments(target);
 
     let result = match segments.as_slice() {
         ["", "api", "sessions"] => sessions(store),
         ["", "api", "repos"] => Ok(json_response(&repos_json(repos))),
+        ["", "api", "terminals"] => Ok(terminals::get(terminals)),
         ["", "api", "prs", ..] => return prs::get(repos, target),
         ["", "api", "files", org, repo, branch, id] => files(store, [org, repo, branch, id]),
         ["", "api", "file", org, repo, branch, id, path @ ..] if !path.is_empty() => {
@@ -48,8 +55,13 @@ pub fn get(store: &dyn Store, repos: &dyn RepoList, target: &str) -> Response {
     result.unwrap_or_else(|error| error_response(&error))
 }
 
-/// Answers `POST` with `store` and `repos`.
-pub fn post(store: &dyn Store, repos: &dyn RepoList, request: &Request) -> Response {
+/// Answers `POST` with `store`, `repos` and `terminals`.
+pub fn post(
+    store: &dyn Store,
+    repos: &dyn RepoList,
+    terminals: &Terminals,
+    request: &Request,
+) -> Response {
     let segments = segments(&request.target);
 
     match segments.as_slice() {
@@ -58,6 +70,7 @@ pub fn post(store: &dyn Store, repos: &dyn RepoList, request: &Request) -> Respo
         }
         ["", "api", "open", ..] => open::post(store, repos, request),
         ["", "api", "prs", ..] => prs::post(repos, request),
+        ["", "api", "terminals", ..] => terminals::post(terminals, request),
         _ => Response::error(404),
     }
 }

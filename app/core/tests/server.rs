@@ -1115,6 +1115,36 @@ fn a_session_page_cannot_open_a_terminal() {
 }
 
 #[test]
+fn terminals_route_lists_no_terminals_at_start() {
+    let f = fixture();
+
+    let reply = get(f.port(), "/api/terminals");
+
+    assert_eq!(reply.status, 200);
+    assert_eq!(reply.json(), json!({ "terminals": [] }));
+}
+
+#[test]
+fn terminal_posts_check_origin_id_action_and_name() {
+    let f = fixture();
+    let port = f.port();
+    let foreign = [("Origin", "http://evil")];
+
+    assert_eq!(post(port, "/api/terminals/1/kill").status, 404);
+    assert_eq!(post(port, "/api/terminals/x/kill").status, 404);
+    assert_eq!(post(port, "/api/terminals/1/stop").status, 404);
+    assert_eq!(post(port, "/api/terminals/1/name").status, 400);
+    assert_eq!(
+        request_body(port, "POST", "/api/terminals/1/name", &[], "build").status,
+        404
+    );
+    assert_eq!(
+        request(port, "POST", "/api/terminals/1/kill", &foreign).status,
+        403
+    );
+}
+
+#[test]
 fn taken_port_is_an_error() {
     let taken = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = taken.local_addr().unwrap().port();

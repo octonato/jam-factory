@@ -895,13 +895,14 @@ test('the tab strip marks the shown page', async () => {
     .map((match) => `${match[3]} ${match[1]}${match[2] ? '*' : ''}`)
 
   const app = await reposApp({ error: null, repos: [] }, [session])
-  assert.deepEqual(tabs(app), ['Repos #/*', 'Sessions #/sessions'])
+  assert.deepEqual(tabs(app), ['Repos #/*', 'Sessions #/sessions', 'Terminals #/terminals'])
 
   const shown = [
-    ['#/sessions', ['Repos #/', 'Sessions #/sessions*']],
-    [app.run('sessionHref(state.sessions[0])'), ['Repos #/', 'Sessions #/sessions']],
-    ['#/worktree/%2Fa', ['Repos #/', 'Sessions #/sessions']],
-    ['', ['Repos #/*', 'Sessions #/sessions']],
+    ['#/sessions', ['Repos #/', 'Sessions #/sessions*', 'Terminals #/terminals']],
+    ['#/terminals', ['Repos #/', 'Sessions #/sessions', 'Terminals #/terminals*']],
+    [app.run('sessionHref(state.sessions[0])'), ['Repos #/', 'Sessions #/sessions', 'Terminals #/terminals']],
+    ['#/worktree/%2Fa', ['Repos #/', 'Sessions #/sessions', 'Terminals #/terminals']],
+    ['', ['Repos #/*', 'Sessions #/sessions', 'Terminals #/terminals']],
   ]
   for (const [hash, expected] of shown) {
     app.context.location.hash = hash
@@ -1970,6 +1971,7 @@ function terminalStubs(app) {
     }
 
     write(data) { this.written.push(data) }
+    reset() { this.written = [] }
     focus() { this.focused = true }
     blur() { this.focused = false }
     dispose() { this.disposed = true }
@@ -2381,16 +2383,22 @@ const worktreeRepos = {
 // Returns the hash of the worktree page of `path`.
 const worktreeHashOf = (path) => `#/worktree/${encodeURIComponent(path)}`
 
-// Returns a dashboard on the worktree page of `path` after one poll of an api that lists `sessions` and answers `api/repos` with `reposReply()`, with fake terminal classes, the instances they create and the URLs it posts.
-async function worktreeApp(path = worktreePath, sessions = [], reposReply = () => response(JSON.stringify(worktreeRepos))) {
+// Returns a dashboard on the worktree page of `path` after one poll of an api that lists `sessions`, answers `api/repos` with `reposReply()` and `api/terminals` with `terminalsReply()`, with fake terminal classes, the instances they create and the URLs it posts.
+async function worktreeApp(
+  path = worktreePath,
+  sessions = [],
+  reposReply = () => response(JSON.stringify(worktreeRepos)),
+  terminalsReply = () => response('', false, { status: 404 }),
+) {
   const posts = []
   const app = dashboard({
     fetcher: (url, options) => {
       if (options?.method === 'POST') {
-        posts.push(url)
+        posts.push(options.body === undefined ? url : `${url} ${options.body}`)
         return response('', true, { status: 204 })
       }
       if (url === 'api/repos') return reposReply()
+      if (url === 'api/terminals') return terminalsReply()
       if (url === 'api/sessions') return sessionsReply(sessions.map(sessionEntry))
       return response('', false, { status: 404 })
     },
@@ -2475,7 +2483,7 @@ test('plus opens a shell tab on the terminal route', async () => {
   clickTab(app, 'add')
   const [first] = tabsOf(app)
   assert.equal(sockets.length, 1)
-  assert.equal(sockets[0].url, `ws://127.0.0.1:8731/api/terminal?path=${encodedWorktree}&program=shell&cols=100&rows=30`)
+  assert.equal(sockets[0].url, `ws://127.0.0.1:8731/api/terminal?path=${encodedWorktree}&program=shell&name=shell%201&cols=100&rows=30`)
   assert.equal(sockets[0].binaryType, 'arraybuffer')
   assert.deepEqual(tabNames(app), ['shell 1*'])
   assert.deepEqual(shownTerms(app), [first.el])
@@ -2485,7 +2493,7 @@ test('plus opens a shell tab on the terminal route', async () => {
 
   clickTab(app, 'add')
   const [, second] = tabsOf(app)
-  assert.equal(sockets[1].url, `ws://127.0.0.1:8731/api/terminal?path=${encodedWorktree}&program=shell&cols=100&rows=30`)
+  assert.equal(sockets[1].url, `ws://127.0.0.1:8731/api/terminal?path=${encodedWorktree}&program=shell&name=shell%202&cols=100&rows=30`)
   assert.deepEqual(tabNames(app), ['shell 1', 'shell 2*'])
   assert.deepEqual(shownTerms(app), [second.el])
   assert.equal(first.el.parentElement, app.elements.get('term-store'))
@@ -2501,7 +2509,7 @@ test('the lazygit button opens a lazygit tab', async () => {
 
   clickCard(app, 'lazygit')
   assert.equal(sockets.length, 1)
-  assert.equal(sockets[0].url, `ws://127.0.0.1:8731/api/terminal?path=${encodedWorktree}&program=lazygit&cols=100&rows=30`)
+  assert.equal(sockets[0].url, `ws://127.0.0.1:8731/api/terminal?path=${encodedWorktree}&program=lazygit&name=lazygit&cols=100&rows=30`)
   assert.deepEqual(tabNames(app), ['lazygit*'])
 
   clickTab(app, 'add')
@@ -2605,7 +2613,7 @@ test('each worktree keeps its own tabs', async () => {
 
   clickTab(app, 'add')
   const [other] = tabsOf(app, mainPath)
-  assert.equal(sockets[2].url, 'ws://127.0.0.1:8731/api/terminal?path=%2Fs%2Fo%2Fr%2Fmain&program=shell&cols=100&rows=30')
+  assert.equal(sockets[2].url, 'ws://127.0.0.1:8731/api/terminal?path=%2Fs%2Fo%2Fr%2Fmain&program=shell&name=shell%201&cols=100&rows=30')
   assert.deepEqual(tabNames(app), ['shell 1*'])
   assert.deepEqual(shownTerms(app), [other.el])
 
@@ -2629,6 +2637,175 @@ test('the repos page counts open terminals', async () => {
 
   sockets[0].onclose({ code: 1000, reason: '' })
   assert.equal(worktreeRows(app)[1].text, "feature o/r/work tree's 0 sessions · ▣ 1")
+})
+
+// Returns a reply to `api/terminals` that lists `terminals`.
+const terminalsReply = (terminals) => response(JSON.stringify({ terminals }))
+
+// Returns `worktreeApp()` whose server runs the terminals the array `running` holds at each poll.
+const runningApp = (running) => worktreeApp(worktreePath, [], undefined, () => terminalsReply(running))
+
+const shellOnServer = { id: 7, path: worktreePath, program: 'shell', name: 'shell 4' }
+const claudeOnServer = { id: 8, path: worktreePath, program: 'claude', name: 'claude' }
+const mainOnServer = { id: 9, path: mainPath, program: 'lazygit', name: 'lazygit' }
+
+test('the hello frame gives a tab its server id, and closing the tab kills its terminal', async () => {
+  const { app, posts, sockets } = await worktreeApp()
+  clickTab(app, 'add')
+  const [tab] = tabsOf(app)
+
+  sockets[0].onmessage({ data: '{"id":7}' })
+  assert.equal(tab.serverId, 7)
+
+  clickTab(app, 'close', tab.id)
+  await settle()
+  assert.deepEqual(posts, ['api/terminals/7/kill'])
+})
+
+test('program exit or a tab without a server id posts no kill', async () => {
+  const { app, posts, sockets } = await worktreeApp()
+  clickTab(app, 'add')
+  clickTab(app, 'add')
+  sockets[1].onmessage({ data: '{"id":7}' })
+
+  sockets[1].onclose({ code: 1000, reason: '' })
+  clickTab(app, 'close', tabsOf(app)[0].id)
+  await settle()
+  assert.deepEqual(posts, [])
+})
+
+test('a poll adds a tab for each running terminal and connects only the shown one', async () => {
+  const { app, sockets } = await runningApp([shellOnServer, claudeOnServer, mainOnServer])
+
+  assert.deepEqual(tabNames(app), ['shell 4*', 'claude'])
+  assert.deepEqual(sockets.map((socket) => socket.url), ['ws://127.0.0.1:8731/api/terminal?id=7&cols=100&rows=30'])
+
+  const [, claude] = tabsOf(app)
+  clickTab(app, 'select', claude.id)
+  assert.equal(sockets[1].url, 'ws://127.0.0.1:8731/api/terminal?id=8&cols=100&rows=30')
+  assert.equal(sockets[0].closed, false)
+
+  clickTab(app, 'add')
+  assert.deepEqual(tabNames(app), ['shell 4', 'claude', 'shell 5*'])
+
+  navigate(app, worktreeHashOf(mainPath))
+  assert.deepEqual(tabNames(app), ['lazygit*'])
+  assert.equal(sockets.at(-1).url, 'ws://127.0.0.1:8731/api/terminal?id=9&cols=100&rows=30')
+})
+
+test('a terminal that ended elsewhere leaves its tab without a kill', async () => {
+  let running = [shellOnServer, claudeOnServer]
+  const { app, posts } = await worktreeApp(worktreePath, [], undefined, () => terminalsReply(running))
+  const [, claude] = tabsOf(app)
+
+  running = [shellOnServer]
+  await app.run('poll()')
+  assert.deepEqual(tabNames(app), ['shell 4*'])
+  assert.equal(claude.term.disposed, true)
+  assert.deepEqual(posts, [])
+})
+
+test('a poll takes the names the server holds', async () => {
+  let running = [shellOnServer]
+  const { app } = await worktreeApp(worktreePath, [], undefined, () => terminalsReply(running))
+
+  running = [{ ...shellOnServer, name: 'build' }]
+  await app.run('poll()')
+  assert.deepEqual(tabNames(app), ['build*'])
+})
+
+test('a poll adds no tab to a worktree whose new tab waits for its server id', async () => {
+  let running = []
+  const { app, sockets } = await worktreeApp(worktreePath, [], undefined, () => terminalsReply(running))
+  clickTab(app, 'add')
+
+  running = [shellOnServer]
+  await app.run('poll()')
+  assert.deepEqual(tabNames(app), ['shell 1*'])
+
+  sockets[0].onmessage({ data: JSON.stringify({ id: shellOnServer.id }) })
+  await app.run('poll()')
+  assert.deepEqual(tabNames(app), ['shell 4*'])
+})
+
+test('a take-over leaves the tab to the other window until the tab is selected again', async () => {
+  const { app, sockets, terminals } = await runningApp([shellOnServer])
+  const [tab] = tabsOf(app)
+  terminals[0].write('old output')
+
+  sockets[0].onclose({ code: 4001, reason: 'attached in another window' })
+  assert.equal(tab.away, true)
+  assert.ok(terminals[0].written.some((data) => String(data).includes('Attached in another window')), terminals[0].written.join())
+  assert.equal(tab.failed, null)
+
+  await app.run('poll()')
+  assert.equal(sockets.length, 1, 'a poll leaves the terminal to the other window')
+
+  clickTab(app, 'select', tab.id)
+  assert.equal(sockets.length, 2)
+  assert.equal(sockets[1].url, 'ws://127.0.0.1:8731/api/terminal?id=7&cols=100&rows=30')
+  assert.deepEqual(terminals[0].written, [], 'the replay starts on a clean terminal')
+})
+
+test('the replay and the live output reach the terminal of an attached tab', async () => {
+  const { sockets, terminals } = await runningApp([shellOnServer])
+
+  sockets[0].onmessage({ data: new TextEncoder().encode('kept').buffer })
+  assert.deepEqual(terminals[0].written.map((data) => Buffer.from(data).toString()), ['kept'])
+})
+
+test('a rename posts the new name for a tab with a server id', async () => {
+  const { app, posts } = await runningApp([shellOnServer])
+
+  press(app, 'i', cmd)
+  app.elements.get('term-rename').value = 'build'
+  pressInRename(app, 'Enter')
+  await settle()
+  assert.deepEqual(posts, ['api/terminals/7/name build'])
+})
+
+test('the terminals page lists the tabs of every worktree', async () => {
+  const { app } = await runningApp([shellOnServer, claudeOnServer, mainOnServer])
+  const away = tabsOf(app)[1]
+  away.away = true
+
+  navigate(app, '#/terminals')
+  const page = app.elements.get('page').innerHTML
+  assert.deepEqual([...page.matchAll(/<h2 class="org">([^<]*)<\/h2>/g)].map((match) => unescapeHtml(match[1])), [
+    "feature o/r/work tree's",
+    'main o/r/main',
+  ])
+  assert.deepEqual([...page.matchAll(/<a class="body" href="([^"]*)"[\s\S]*?<\/a>/g)].map((match) => `${unescapeHtml(match[1])} ${textOf(match[0])}`), [
+    `${worktreeHashOf(worktreePath)} shell 4 shell`,
+    `${worktreeHashOf(worktreePath)} claude claude · in another window`,
+    `${worktreeHashOf(mainPath)} lazygit lazygit`,
+  ])
+})
+
+test('arrow keys and Enter open a tab of the terminals page on its worktree page', async () => {
+  const { app, sockets } = await runningApp([shellOnServer, claudeOnServer, mainOnServer])
+  const [, claude] = tabsOf(app)
+  claude.away = true
+  navigate(app, '#/terminals')
+
+  assert.ok(press(app, 'ArrowDown'))
+  assert.ok(press(app, 'ArrowDown'))
+  assert.match(app.elements.get('page').innerHTML, /class="row worktree selected">\s*<a class="body"[^>]*data-tab="2"/)
+
+  assert.ok(press(app, 'Enter'))
+  app.window.dispatch('hashchange')
+  assert.equal(app.context.location.hash, worktreeHashOf(worktreePath))
+  assert.deepEqual(tabNames(app), ['shell 4', 'claude*'])
+  assert.equal(claude.away, false)
+  assert.equal(sockets.at(-1).url, 'ws://127.0.0.1:8731/api/terminal?id=8&cols=100&rows=30')
+})
+
+test('the terminals page says when no terminal runs', async () => {
+  const { app } = await worktreeApp()
+
+  navigate(app, '#/terminals')
+  assert.equal(pageText(app), 'No terminals run.')
+  assert.equal(press(app, 'Enter'), false)
 })
 
 test('card buttons post to the worktree open route', async () => {
@@ -2863,7 +3040,7 @@ test('Cmd+T opens a shell tab', async () => {
   const { app, sockets, terminals } = await worktreeApp()
 
   assert.ok(press(app, 't', cmd))
-  assert.equal(sockets[0].url, `ws://127.0.0.1:8731/api/terminal?path=${encodedWorktree}&program=shell&cols=100&rows=30`)
+  assert.equal(sockets[0].url, `ws://127.0.0.1:8731/api/terminal?path=${encodedWorktree}&program=shell&name=shell%201&cols=100&rows=30`)
   assert.deepEqual(tabNames(app), ['shell 1*'])
 
   assert.ok(press(app, 't', cmd, terminals[0].element))
@@ -3001,7 +3178,7 @@ test('t opens the worktree page with one shell', async () => {
   assert.ok(press(app, 't'))
   assert.equal(app.context.location.hash, worktreeHashOf(worktreePath))
   assert.equal(sockets.length, 1)
-  assert.equal(sockets[0].url, `ws://127.0.0.1:8731/api/terminal?path=${encodedWorktree}&program=shell&cols=100&rows=30`)
+  assert.equal(sockets[0].url, `ws://127.0.0.1:8731/api/terminal?path=${encodedWorktree}&program=shell&name=shell%201&cols=100&rows=30`)
   assert.deepEqual(tabNames(app), ['shell 1*'])
   assert.equal(terminals[0].focused, true)
 
@@ -3040,7 +3217,7 @@ test('g opens lazygit once', async () => {
   assert.ok(press(app, 'g'))
   assert.ok(press(app, 'g'))
   assert.equal(sockets.length, 1)
-  assert.equal(sockets[0].url, `ws://127.0.0.1:8731/api/terminal?path=${encodedWorktree}&program=lazygit&cols=100&rows=30`)
+  assert.equal(sockets[0].url, `ws://127.0.0.1:8731/api/terminal?path=${encodedWorktree}&program=lazygit&name=lazygit&cols=100&rows=30`)
   assert.deepEqual(tabNames(app), ['lazygit*'])
 })
 
@@ -3631,7 +3808,7 @@ test('r opens a claude tab on the worktree page', async () => {
   await finishCheckout(stubs)
   assert.equal(app.context.location.hash, worktreeHashOf(fixLogin.path))
   assert.equal(sockets.length, 1)
-  assert.equal(sockets[0].url, `ws://127.0.0.1:8731/api/terminal?path=${encodedFixLogin}&program=claude&cols=100&rows=30`)
+  assert.equal(sockets[0].url, `ws://127.0.0.1:8731/api/terminal?path=${encodedFixLogin}&program=claude&name=claude&cols=100&rows=30`)
   assert.deepEqual(tabNames(app), ['claude*'])
 
   clickTab(app, 'add')

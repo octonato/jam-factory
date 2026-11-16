@@ -895,7 +895,7 @@
 <body>
 <header>
   <h1>Jam Board</h1>
-  <nav class="tabs" id="tabs"><a class="tab" href="#/" aria-current="page">Repos</a><a class="tab" href="#/sessions">Sessions</a></nav>
+  <nav class="tabs" id="tabs"><a class="tab" href="#/" aria-current="page">Repos</a><a class="tab" href="#/sessions">Sessions</a><a class="tab" href="#/terminals">Terminals</a></nav>
   <span id="status">loading…</span>
   <div class="font-size">
     <button type="button" id="font-down" title="Smaller text">A−</button>
@@ -1073,7 +1073,10 @@ const BACK_KEYS = ['l', 'Escape', 'Meta+[']
 const TABS = [
   { kind: 'repos', label: 'Repos', href: '#/' },
   { kind: 'sessions', label: 'Sessions', href: '#/sessions' },
+  { kind: 'terminals', label: 'Terminals', href: '#/terminals' },
 ]
+// The close code of a terminal socket whose terminal another window took.
+const TAKEN_CODE = 4001
 const REPOS_HELP = `
   <p class="empty">Add <code>repos</code>, a list of paths to main checkouts, to <code>~/.jam-factory/config.json</code>:</p>
   <pre class="config-example">{
@@ -1098,10 +1101,13 @@ let prsView = { path: null, el: null, card: '', list: '' }
 let lastView = { key: null, path: null, text: null, version: null }
 let editing = null
 let terminal = null
-// The terminal tabs of each worktree path: `{ tabs, active, shells }`, where `shells` counts the shell tabs ever opened.
+// The terminal tabs of each worktree path: `{ tabs, active, shells }`, where `shells` is the highest shell number used.
 const worktreeTerms = new Map()
 // The tab whose name the tab strip edits: `{ path, id }`, or null.
 let renaming = null
+// The selected row of the terminals page: `{ path, id }`, or null.
+let selectedTerm = null
+let terminalsView = { el: null, list: '' }
 let lastTabId = 0
 let shownHash = ''
 let renderSeq = 0
@@ -1339,11 +1345,22 @@ function decode(segment) {
   }
 }
 
-// Returns the page of `hash`: the repos, the sessions, a worktree with its path, the PRs of a main checkout with its path, or a session with its file path.
+// Returns the running worktree terminals from `api/terminals`, or null when the fetch fails.
+async function loadTerminals() {
+  try {
+    const { terminals } = JSON.parse(await fetchText('api/terminals'))
+    return Array.isArray(terminals) ? terminals : null
+  } catch {
+    return null
+  }
+}
+
+// Returns the page of `hash`: the repos, the sessions, the terminals, a worktree with its path, the PRs of a main checkout with its path, or a session with its file path.
 function parseRoute(hash) {
   const segments = hash.replace(/^#\/?/, '').split('/').filter((s) => s !== '').map(decode)
   if (segments.length === 0) return { kind: 'repos' }
   if (segments.length === 1 && segments[0] === 'sessions') return { kind: 'sessions' }
+  if (segments.length === 1 && segments[0] === 'terminals') return { kind: 'terminals' }
   if (segments.length === 2 && segments[0] === 'worktree') return { kind: 'worktree', path: segments[1] }
   if (segments.length === 2 && segments[0] === 'prs') return { kind: 'prs', path: segments[1] }
 
@@ -1776,6 +1793,105 @@ function moveWorktreeSelection(step) {
   selectedWorktree = paths[next]
   renderRepos()
   $('repo-list').querySelector('.row.selected')?.scrollIntoView({ block: 'nearest' })
+}
+
+// Returns the tabs of every worktree in page order, each as `{ path, tab }`.
+function terminalRows() {
+  return [...worktreeTerms].flatMap(([path, terms]) => terms.tabs.map((tab) => ({ path, tab })))
+}
+
+// Returns true when `selectedTerm` is tab `tab` of `path`.
+function isSelectedTerm(path, tab) {
+  return selectedTerm?.path === path && selectedTerm.id === tab.id
+}
+
+// Returns what the terminals page says about `tab`: its failure, its program in another window, or its program.
+function terminalLabel(tab) {
+  if (tab.failed !== null) return tab.failed
+  if (tab.away) return `${tab.program} · in another window`
+  return tab.program
+}
+
+// Returns the terminals page list: one group per worktree with tabs, under its branch and short path, with one link per tab to its worktree page.
+function terminalsHtml() {
+  const groups = [...worktreeTerms].filter(([, terms]) => terms.tabs.length > 0)
+  if (groups.length === 0) return '<p class="empty">No terminals run.</p>'
+
+  return groups.map(([path, terms]) => {
+    const worktree = findWorktree(path)?.worktree
+    const title = worktree === undefined ? path : `${worktree.branch ?? worktree.head ?? ''} ${shortPath(path)}`
+
+    const rows = terms.tabs.map((tab) => `
+      <div class="row worktree${isSelectedTerm(path, tab) ? ' selected' : ''}">
+        <a class="body" href="${escape(worktreeHash(path))}" data-path="${escape(path)}" data-tab="${tab.id}">
+          <span class="name"><span class="id">${escape(tab.name)}</span></span>
+          <span class="label">${escape(terminalLabel(tab))}</span>
+        </a>
+      </div>`).join('')
+
+    return `
+      <section class="org-group">
+        <h2 class="org">${escape(title)}</h2>
+        <div class="rows">${rows}</div>
+      </section>`
+  }).join('')
+}
+
+// Renders the terminals page. A row no longer shown loses the selection.
+function renderTerminals() {
+  if (!terminalRows().some(({ path, tab }) => isSelectedTerm(path, tab))) selectedTerm = null
+
+  const list = `<div class="column">${terminalsHtml()}</div>`
+  if (terminalsView.el === $('page').firstElementChild && terminalsView.list === list) return
+
+  $('page').innerHTML = list
+  terminalsView = { el: $('page').firstElementChild, list }
+  terminalsView.el.addEventListener('click', onTerminalRowClick)
+}
+
+// Makes the clicked tab the active tab of its worktree before its link opens the worktree page.
+function onTerminalRowClick(event) {
+  const link = event.target.closest('a[data-tab]')
+  if (link) pickTerminalTab(link.dataset.path, Number(link.dataset.tab))
+}
+
+// Makes tab `id` the active tab of `path`. A tab attached in another window takes its terminal back when shown.
+function pickTerminalTab(path, id) {
+  const terms = worktreeTerms.get(path)
+  const tab = terms?.tabs.find((t) => t.id === id)
+  if (tab === undefined) return
+
+  terms.active = id
+  tab.away = false
+}
+
+// Moves the selection of the terminals page by `step` rows and stops at the first and last rows.
+function moveTermSelection(step) {
+  const rows = terminalRows()
+  if (rows.length === 0) return
+
+  const last = rows.length - 1
+  const first = step > 0 ? 0 : last
+  const current = rows.findIndex(({ path, tab }) => isSelectedTerm(path, tab))
+  const next = current < 0 ? first : Math.min(last, Math.max(0, current + step))
+
+  selectedTerm = { path: rows[next].path, id: rows[next].tab.id }
+  renderTerminals()
+  terminalsView.el.querySelector('.row.selected')?.scrollIntoView({ block: 'nearest' })
+}
+
+// Runs the terminals page shortcut for `key` and returns true when it acted.
+function terminalsKey(key) {
+  if (key === 'ArrowDown' || key === 'ArrowUp') {
+    moveTermSelection(key === 'ArrowDown' ? 1 : -1)
+    return true
+  }
+
+  if (key !== 'Enter' || selectedTerm === null) return false
+
+  pickTerminalTab(selectedTerm.path, selectedTerm.id)
+  location.hash = worktreeHash(selectedTerm.path)
+  return true
 }
 
 // Returns the configured checkout and worktree at `path`, or null when no checkout lists it.
@@ -3127,21 +3243,36 @@ function createXterm(container) {
 
 // Returns a socket to `url` that carries the bytes and the size changes of `xterm`.
 function connectXterm(xterm, url) {
+  const socket = openXtermSocket(xterm, url)
+  sendXterm(xterm, () => socket)
+  return socket
+}
+
+// Returns a socket to `url` that writes its bytes to `xterm`, sends the size of `xterm` when it opens, and passes each text frame to `onText`.
+function openXtermSocket(xterm, url, onText = () => {}) {
   const socket = new WebSocket(url)
   socket.binaryType = 'arraybuffer'
 
-  const send = (data) => {
-    if (socket.readyState === WebSocket.OPEN) socket.send(data)
+  socket.onopen = () => {
+    if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ cols: xterm.cols, rows: xterm.rows }))
   }
-  const sendSize = ({ cols, rows }) => send(JSON.stringify({ cols, rows }))
+  socket.onmessage = (event) => {
+    if (typeof event.data === 'string') onText(event.data)
+    else xterm.write(new Uint8Array(event.data))
+  }
+  return socket
+}
 
-  socket.onopen = () => sendSize(xterm)
-  socket.onmessage = (event) => xterm.write(new Uint8Array(event.data))
+// Sends the keys and the size changes of `xterm` to the socket `socketOf` returns, while that socket is open.
+function sendXterm(xterm, socketOf) {
+  const send = (data) => {
+    const socket = socketOf()
+    if (socket?.readyState === WebSocket.OPEN) socket.send(data)
+  }
 
   xterm.onData((data) => send(new TextEncoder().encode(data)))
   xterm.onBinary((data) => send(Uint8Array.from(data, (c) => c.charCodeAt(0))))
-  xterm.onResize(sendSize)
-  return socket
+  xterm.onResize(({ cols, rows }) => send(JSON.stringify({ cols, rows })))
 }
 
 // Mounts xterm in the pane and connects it to lazygit on the worktree of `session`.
@@ -3203,12 +3334,14 @@ function activeWorktreeTerminal(path) {
   return terms?.tabs.find((tab) => tab.id === terms.active)
 }
 
-// Opens a tab running `program` in the worktree at `path`, and selects it.
-function openWorktreeTerminal(path, program) {
+// Returns the terminal tabs of the worktree at `path`, created empty when missing.
+function worktreeTermsOf(path) {
   if (!worktreeTerms.has(path)) worktreeTerms.set(path, { tabs: [], active: null, shells: 0 })
-  const terms = worktreeTerms.get(path)
-  if (program === 'shell') terms.shells += 1
+  return worktreeTerms.get(path)
+}
 
+// Adds a tab named `name` that shows `program` to the worktree at `path`, kept in `#term-store`, and returns it. `serverId` is the id of its terminal on the server, or null until the server gives one.
+function addWorktreeTab(path, { name, program, serverId }) {
   const el = document.createElement('div')
   el.className = 'term'
   $('term-store').append(el)
@@ -3219,29 +3352,121 @@ function openWorktreeTerminal(path, program) {
   observer.observe(el)
 
   lastTabId += 1
+  const tab = { id: lastTabId, serverId, name, program, term, fit, socket: null, el, observer, failed: null, away: false }
+  sendXterm(term, () => tab.socket)
+
+  worktreeTermsOf(path).tabs.push(tab)
+  return tab
+}
+
+// Opens a tab running `program` in the worktree at `path`, and selects it.
+function openWorktreeTerminal(path, program) {
+  const terms = worktreeTermsOf(path)
+  if (program === 'shell') terms.shells += 1
+
   const name = program === 'shell' ? `shell ${terms.shells}` : program
-  const tab = { id: lastTabId, name, program, term, fit, socket: null, el, observer, failed: null }
-  terms.tabs.push(tab)
+  const tab = addWorktreeTab(path, { name, program, serverId: null })
   selectWorktreeTerminal(path, tab.id)
 
-  const query = `path=${encodeURIComponent(path)}&program=${program}&cols=${term.cols}&rows=${term.rows}`
-  tab.socket = connectXterm(term, `ws://${location.host}/api/terminal?${query}`)
-  tab.socket.onclose = (event) => {
-    if (event.code === 1000) return closeWorktreeTerminal(path, tab.id)
+  const query = `path=${encodeURIComponent(path)}&program=${program}&name=${encodeURIComponent(name)}&cols=${tab.term.cols}&rows=${tab.term.rows}`
+  connectWorktreeTab(path, tab, `ws://${location.host}/api/terminal?${query}`)
+}
+
+// Connects `tab` of `path` to its running terminal on the server, which first replays the output it kept.
+function attachWorktreeTerminal(path, tab) {
+  tab.term.reset()
+
+  const query = `id=${tab.serverId}&cols=${tab.term.cols}&rows=${tab.term.rows}`
+  connectWorktreeTab(path, tab, `ws://${location.host}/api/terminal?${query}`)
+}
+
+// Connects `tab` of `path` to `url`. A text frame gives the tab its server id.
+// A normal close ends the tab. A take-over leaves the terminal to the other window. Any other close keeps the tab with the reason.
+function connectWorktreeTab(path, tab, url) {
+  const socket = openXtermSocket(tab.term, url, (text) => {
+    const id = jsonOrNull(text)?.id
+    if (Number.isInteger(id)) tab.serverId = id
+  })
+  tab.socket = socket
+
+  socket.onclose = (event) => {
+    if (tab.socket !== socket) return
+    tab.socket = null
+
+    if (event.code === 1000) return closeWorktreeTerminal(path, tab.id, false)
+
+    if (event.code === TAKEN_CODE) {
+      tab.away = true
+      tab.term.write(`\r\n\x1b[2mAttached in another window. Select this tab to take it back.\x1b[0m\r\n`)
+      return render()
+    }
 
     tab.failed = event.reason || 'the connection closed'
-    term.write(`\r\n\x1b[31m${tab.failed}\x1b[0m\r\n`)
+    tab.term.write(`\r\n\x1b[31m${tab.failed}\x1b[0m\r\n`)
     render()
   }
 }
 
-// Makes tab `id` the active terminal of `path`, then shows and focuses it.
+// Returns the value of the JSON `text`, or null when it is not JSON.
+function jsonOrNull(text) {
+  try {
+    return JSON.parse(text)
+  } catch {
+    return null
+  }
+}
+
+// Posts `action` with `body` for the server terminal of `tab`. Tells the user when it fails, unless the terminal no longer runs.
+async function postTerminal(tab, action, body) {
+  try {
+    const res = await fetch(`api/terminals/${tab.serverId}/${action}`, { method: 'POST', body })
+    if (!res.ok && res.status !== 404) throw new Error((await res.text()).trim() || `${res.status} ${res.statusText}`)
+  } catch (err) {
+    await tell(`Could not ${action === 'kill' ? 'close' : 'rename'} ${tab.name}: ${err.message}`)
+  }
+}
+
+// Matches the worktree tabs to the running terminals of the server, `list`.
+// Drops each tab whose terminal ended, takes the names the server holds, and adds a tab for each terminal no tab shows.
+// A worktree with a tab that waits for its server id gets no new tab.
+function syncTerminals(list) {
+  const running = new Map(list.map((entry) => [entry.id, entry]))
+
+  for (const [path, terms] of worktreeTerms) {
+    for (const tab of [...terms.tabs]) {
+      if (tab.serverId === null) continue
+
+      const entry = running.get(tab.serverId)
+      if (entry === undefined) closeWorktreeTerminal(path, tab.id, false)
+      else if (renaming?.id !== tab.id) tab.name = entry.name
+    }
+  }
+
+  const known = new Set([...worktreeTerms.values()].flatMap(({ tabs }) => tabs.map((tab) => tab.serverId)))
+  for (const entry of list) {
+    if (known.has(entry.id) || waitsForServerId(entry.path)) continue
+
+    const tab = addWorktreeTab(entry.path, { name: entry.name, program: entry.program, serverId: entry.id })
+    const terms = worktreeTerms.get(entry.path)
+    const shell = /^shell (\d+)$/.exec(entry.name)
+    if (shell !== null) terms.shells = Math.max(terms.shells, Number(shell[1]))
+    if (terms.active === null) terms.active = tab.id
+  }
+}
+
+// Returns true when a tab of the worktree at `path` waits for its server id.
+function waitsForServerId(path) {
+  return worktreeTerms.get(path)?.tabs.some((tab) => tab.serverId === null && tab.socket !== null) ?? false
+}
+
+// Makes tab `id` the active terminal of `path`, then shows and focuses it. A tab attached in another window takes its terminal back.
 function selectWorktreeTerminal(path, id) {
   const terms = worktreeTerms.get(path)
   const tab = terms?.tabs.find((t) => t.id === id)
   if (tab === undefined) return
 
   terms.active = id
+  tab.away = false
   render()
   tab.term.focus()
 }
@@ -3265,15 +3490,18 @@ function openWorktree(path, program) {
   showWorktreeProgram(path, program)
 }
 
-// Closes tab `id` of `path`: ends its program, disposes its terminal, and selects the next tab when it was the active one.
-function closeWorktreeTerminal(path, id) {
+// Closes tab `id` of `path`: ends its program when `kill` is true, disposes its terminal, and selects the next tab when it was the active one.
+function closeWorktreeTerminal(path, id, kill = true) {
   const terms = worktreeTerms.get(path)
   const index = terms?.tabs.findIndex((tab) => tab.id === id) ?? -1
   if (index < 0) return
 
   const [tab] = terms.tabs.splice(index, 1)
-  tab.socket.onclose = null
-  tab.socket.close()
+  if (kill && tab.serverId !== null) postTerminal(tab, 'kill')
+  if (tab.socket !== null) {
+    tab.socket.onclose = null
+    tab.socket.close()
+  }
   tab.observer.disconnect()
   tab.term.dispose()
   tab.el.remove()
@@ -3289,16 +3517,19 @@ function parkWorktreeTerminal() {
 }
 
 // Shows the active terminal of `path` in the pane of the worktree page, and fits it.
+// Connects it to its server terminal when it has none, unless it failed or another window holds it.
 function showWorktreeTerminal(path) {
   const view = $('term-view')
   const tab = activeWorktreeTerminal(path)
-  if (tab !== undefined && tab.el.parentElement === view) return
+  if (tab === undefined || tab.el.parentElement !== view) {
+    parkWorktreeTerminal()
+    if (tab === undefined) return
 
-  parkWorktreeTerminal()
-  if (tab === undefined) return
+    view.append(tab.el)
+    tab.fit.fit()
+  }
 
-  view.append(tab.el)
-  tab.fit.fit()
+  if (tab.socket === null && tab.serverId !== null && tab.failed === null && !tab.away) attachWorktreeTerminal(path, tab)
 }
 
 // Shows the active terminal alone on the shown worktree page when `on` is true, and the whole page when false. Returns false when that page has no active tab.
@@ -3358,7 +3589,10 @@ function endRename(save) {
   const tab = worktreeTerms.get(renaming.path)?.tabs.find((t) => t.id === renaming.id)
   const name = $('term-rename')?.value.trim() ?? ''
   renaming = null
-  if (save && tab !== undefined && name !== '') tab.name = name
+  if (save && tab !== undefined && name !== '') {
+    tab.name = name
+    if (tab.serverId !== null) postTerminal(tab, 'name', name)
+  }
 
   render()
   tab?.term.focus()
@@ -3671,6 +3905,7 @@ function render() {
   renderTabs(route.kind)
   if (route.kind === 'repos') return renderRepos()
   if (route.kind === 'sessions') return renderList()
+  if (route.kind === 'terminals') return renderTerminals()
   if (route.kind === 'worktree') return renderWorktreePage(route.path)
   if (route.kind === 'prs') return renderPrsPage(route.path)
 
@@ -3963,6 +4198,11 @@ function onKey(event) {
     return
   }
 
+  if (route.kind === 'terminals') {
+    if (terminalsKey(key)) event.preventDefault()
+    return
+  }
+
   if (route.kind === 'worktree') {
     if (worktreeKey(key, route.path)) event.preventDefault()
     return
@@ -4036,7 +4276,8 @@ function writeOrgFilter(org) {
 
 async function poll() {
   try {
-    const [{ sessions, problems }] = await Promise.all([loadSessions(), loadRepos()])
+    const [{ sessions, problems }, , terminals] = await Promise.all([loadSessions(), loadRepos(), loadTerminals()])
+    if (terminals !== null) syncTerminals(terminals)
     for (const session of sessions) {
       const problem = sessionProblem(session)
       if (problem !== null) problems.push(`${sessionName(session)}: ${problem}`)

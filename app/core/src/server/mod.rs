@@ -24,6 +24,7 @@ pub mod prs;
 pub mod pty;
 pub mod repos;
 pub mod terminal;
+pub mod terminals;
 
 use std::io;
 use std::net::{SocketAddr, TcpListener, TcpStream};
@@ -35,17 +36,27 @@ use std::time::Duration;
 use dashboard::embedded;
 use http::{ReadError, Request, Response, read_request};
 use repos::RepoList;
+use terminals::Terminals;
 
 use crate::store::Store;
 
 const READ_TIMEOUT: Duration = Duration::from_secs(5);
 const ACCEPT_BACKOFF: Duration = Duration::from_millis(10);
 
-/// A server on `127.0.0.1` that runs until dropped.
+/// A server on `127.0.0.1` that runs until dropped. Dropping it kills its terminals.
 pub struct Server {
     address: SocketAddr,
     stop: Arc<AtomicBool>,
     accept: Option<JoinHandle<()>>,
+    terminals: Arc<Terminals>,
+}
+
+/// What a request can use: the store, the configured repos and the running terminals.
+#[derive(Clone)]
+struct Shared {
+    store: Arc<dyn Store>,
+    repos: Arc<dyn RepoList>,
+    terminals: Arc<Terminals>,
 }
 
 impl Server {
@@ -54,19 +65,27 @@ impl Server {
         let listener = TcpListener::bind(("127.0.0.1", port))?;
         let address = listener.local_addr()?;
         let stop = Arc::new(AtomicBool::new(false));
+        let terminals = Arc::new(Terminals::default());
+
+        let shared = Shared {
+            store,
+            repos,
+            terminals: Arc::clone(&terminals),
+        };
 
         let accept = {
             let stop = Arc::clone(&stop);
             let port = address.port();
             thread::Builder::new()
                 .name(format!("jam-board-server-{port}"))
-                .spawn(move || accept_loop(listener, store, repos, port, &stop))?
+                .spawn(move || accept_loop(listener, &shared, port, &stop))?
         };
 
         Ok(Server {
             address,
             stop,
             accept: Some(accept),
+            terminals,
         })
     }
 
@@ -85,19 +104,29 @@ impl Drop for Server {
         {
             let _ = accept.join();
         }
+
+        self.terminals.kill_all();
     }
 }
 
-/// Answers one request with `store` and `repos`, served on `port`.
-pub fn handle(store: &dyn Store, repos: &dyn RepoList, port: u16, request: &Request) -> Response {
+/// Answers one request with `store`, `repos` and `terminals`, served on `port`.
+pub fn handle(
+    store: &dyn Store,
+    repos: &dyn RepoList,
+    terminals: &Terminals,
+    port: u16,
+    request: &Request,
+) -> Response {
     if !local_host(request, port) {
         return Response::error(403);
     }
 
     match request.method.as_str() {
-        "GET" if request.target.starts_with("/api/") => api::get(store, repos, &request.target),
+        "GET" if request.target.starts_with("/api/") => {
+            api::get(store, repos, terminals, &request.target)
+        }
         "GET" => dashboard_file(&request.target),
-        "POST" => api::post(store, repos, request),
+        "POST" => api::post(store, repos, terminals, request),
         "PUT" => api::put(store, request),
         _ => Response::error(405),
     }
@@ -120,13 +149,7 @@ fn dashboard_file(target: &str) -> Response {
     }
 }
 
-fn accept_loop(
-    listener: TcpListener,
-    store: Arc<dyn Store>,
-    repos: Arc<dyn RepoList>,
-    port: u16,
-    stop: &AtomicBool,
-) {
+fn accept_loop(listener: TcpListener, shared: &Shared, port: u16, stop: &AtomicBool) {
     for stream in listener.incoming() {
         if stop.load(Ordering::SeqCst) {
             break;
@@ -137,14 +160,16 @@ fn accept_loop(
             continue;
         };
 
-        let store = Arc::clone(&store);
-        let repos = Arc::clone(&repos);
-        let _ = thread::Builder::new()
-            .spawn(move || serve(store.as_ref(), repos.as_ref(), port, stream));
+        let shared = shared.clone();
+        let _ = thread::Builder::new().spawn(move || serve(&shared, port, stream));
     }
 }
 
-fn serve(store: &dyn Store, repos: &dyn RepoList, port: u16, mut stream: TcpStream) {
+fn serve(shared: &Shared, port: u16, mut stream: TcpStream) {
+    let store = shared.store.as_ref();
+    let repos = shared.repos.as_ref();
+    let terminals = shared.terminals.as_ref();
+
     if stream.set_read_timeout(Some(READ_TIMEOUT)).is_err() {
         return;
     }
@@ -152,11 +177,11 @@ fn serve(store: &dyn Store, repos: &dyn RepoList, port: u16, mut stream: TcpStre
     let response = match read_request(&mut stream) {
         Ok(request) if local_host(&request, port) && terminal::is_upgrade(&request) => {
             if stream.set_read_timeout(None).is_ok() {
-                terminal::serve(store, repos, &request, stream);
+                terminal::serve(store, repos, terminals, &request, stream);
             }
             return;
         }
-        Ok(request) => handle(store, repos, port, &request),
+        Ok(request) => handle(store, repos, terminals, port, &request),
         Err(ReadError::Status(status)) => Response::error(status),
         Err(ReadError::Closed) => return,
     };
