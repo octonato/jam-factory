@@ -13,5 +13,7 @@
 // limitations under the License.
 
 fn main() {
-    tauri_build::build()
+    let app = tauri_build::AppManifest::new().commands(&["open_window"]);
+    tauri_build::try_build(tauri_build::Attributes::new().app_manifest(app))
+        .expect("failed to run the Tauri build script");
 }

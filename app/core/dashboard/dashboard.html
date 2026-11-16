@@ -1699,6 +1699,7 @@ function renderRepos() {
       </div>`
     $('repo-filter').value = repoFilter
     $('repo-filter').addEventListener('input', onRepoFilter)
+    $('repo-list').addEventListener('click', onRepoRowClick)
     reposView = { el: $('page').firstElementChild, list: '' }
   }
 
@@ -1715,6 +1716,24 @@ function renderRepos() {
 function onRepoFilter(event) {
   repoFilter = event.currentTarget.value
   renderRepos()
+}
+
+// Opens a clicked main or worktree row in a new app window on Cmd+click. Does nothing in a browser.
+function onRepoRowClick(event) {
+  if (!event.metaKey || window.__TAURI__ === undefined) return
+
+  const link = event.target.closest('.row.main > a.body, .row.worktree > a.body')
+  if (!link) return
+
+  event.preventDefault()
+  openWindow(link.getAttribute('href'))
+}
+
+// Asks the app to open the page at `hash` in a new window.
+function openWindow(hash) {
+  window.__TAURI__.core
+    .invoke('open_window', { hash })
+    .catch((err) => tell(`Could not open a window: ${err}`))
 }
 
 // Moves the selection by `step` rows of the repos page in display order and stops at the first and last rows.

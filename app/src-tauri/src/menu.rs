@@ -21,7 +21,7 @@ use crate::windows;
 
 const QUIT: &str = "quit";
 
-/// Returns the default menu with a Quit item that closes the board window.
+/// Returns the default menu with a Quit item that closes the board windows.
 pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     let menu = Menu::default(app)?;
     let Some(MenuItemKind::Submenu(app_menu)) = menu.items()?.into_iter().next() else {
@@ -41,9 +41,9 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     Ok(menu)
 }
 
-/// Closes the board window on Quit.
+/// Closes the board windows on Quit.
 pub fn on_event(app: &AppHandle, event: MenuEvent) {
     if event.id() == QUIT {
-        windows::close_board_window(app);
+        windows::close_board_windows(app);
     }
 }

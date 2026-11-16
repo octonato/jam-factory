@@ -12,8 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! The board window on the Jam Factory server.
+//! The board windows on the Jam Factory server.
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use tauri::{
@@ -27,6 +28,10 @@ use crate::navigation::{self, Navigation};
 use crate::probe;
 
 const MAIN: &str = "main";
+
+const EXTRA_PREFIX: &str = "board-";
+
+static NEXT_EXTRA: AtomicUsize = AtomicUsize::new(1);
 
 const SERVER_DEADLINE: Duration = Duration::from_secs(3);
 
@@ -57,7 +62,28 @@ fn try_open_board_window(app: &AppHandle) -> Result<(), String> {
     let url = Url::parse(&format!("http://127.0.0.1:{port}/dashboard.html"))
         .map_err(|e| e.to_string())?;
 
-    let window = WebviewWindowBuilder::new(app, MAIN, WebviewUrl::External(url))
+    build_board_window(app, MAIN, url, port)
+}
+
+/// Opens a new board window on the page at `hash` of the dashboard that `window` shows.
+#[tauri::command]
+pub async fn open_window(window: WebviewWindow, hash: String) -> Result<(), String> {
+    let mut url = window.url().map_err(|e| e.to_string())?;
+    let port = url
+        .port_or_known_default()
+        .ok_or("The board window has no port")?;
+    url.set_fragment(Some(hash.trim_start_matches('#')));
+
+    let label = format!(
+        "{EXTRA_PREFIX}{}",
+        NEXT_EXTRA.fetch_add(1, Ordering::Relaxed)
+    );
+    build_board_window(window.app_handle(), &label, url, port)
+}
+
+/// Opens a window labelled `label` on `url`. It keeps the dashboard served on `port` and sends other links to the browser.
+fn build_board_window(app: &AppHandle, label: &str, url: Url, port: u16) -> Result<(), String> {
+    let window = WebviewWindowBuilder::new(app, label, WebviewUrl::External(url))
         .title("Jam Board")
         .inner_size(1200.0, 800.0)
         .on_navigation(move |url| match navigation::decide(url, port) {
@@ -75,11 +101,13 @@ fn try_open_board_window(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// Closes the board window after the page agrees, or exits when the window is not open.
-pub fn close_board_window(app: &AppHandle) {
-    let closing = app
-        .get_webview_window(MAIN)
-        .is_some_and(|window| window.close().is_ok());
+/// Closes each board window after its page agrees, or exits when no window is open.
+pub fn close_board_windows(app: &AppHandle) {
+    let mut closing = false;
+    for window in app.webview_windows().values() {
+        closing |= window.close().is_ok();
+    }
+
     if !closing {
         app.exit(0);
     }
@@ -133,6 +161,13 @@ mod tests {
     }
 
     #[test]
+    fn the_dashboard_invokes_the_open_window_command() {
+        let dashboard = include_str!("../../core/dashboard/dashboard.html");
+
+        assert!(dashboard.contains(".invoke('open_window', { hash })"));
+    }
+
+    #[test]
     fn the_dashboard_answers_close_requests() {
         let dashboard = include_str!("../../core/dashboard/dashboard.html");
 
@@ -145,7 +180,16 @@ mod tests {
         let CapabilityFile::Capability(capability) = file else {
             panic!("expected one capability");
         };
-        assert_eq!(capability.windows, vec![MAIN]);
+        assert_eq!(
+            capability.windows,
+            vec![MAIN.to_string(), format!("{EXTRA_PREFIX}*")]
+        );
+        assert!(
+            capability
+                .permissions
+                .iter()
+                .any(|p| p.identifier().get() == "allow-open-window")
+        );
 
         let patterns: Vec<RemoteUrlPattern> = capability
             .remote

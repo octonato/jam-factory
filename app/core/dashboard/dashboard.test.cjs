@@ -1132,6 +1132,56 @@ test('Enter opens the selected worktree', async () => {
   assert.equal(app.context.location.hash, worktreeHashOf(pathA))
 })
 
+// Gives `app` a fake app API and returns the arguments of each `open_window` call.
+function appOpener(app) {
+  const opened = []
+  app.window.__TAURI__ = {
+    core: {
+      invoke: async (command, args) => {
+        assert.equal(command, 'open_window')
+        opened.push(args.hash)
+      },
+    },
+  }
+  return opened
+}
+
+// Clicks the link `href` of a `kind` row of the repos page with `modifiers`, and returns true when the page prevented the default.
+function clickRow(app, kind, href, modifiers = {}) {
+  let prevented = false
+  const link = { getAttribute: (name) => (name === 'href' ? href : null) }
+  const target = { closest: (selector) => (selector.includes(`.row.${kind} > a.body`) ? link : null) }
+
+  app.elements.get('repo-list').dispatch('click', { target, ...modifiers, preventDefault: () => { prevented = true } })
+  return prevented
+}
+
+test('Cmd+click on a main or worktree row opens its page in a new app window', async () => {
+  const app = await reposApp(selectRepos)
+  const opened = appOpener(app)
+
+  assert.ok(clickRow(app, 'main', prsHashOf(sdkMain), { metaKey: true }))
+  assert.ok(clickRow(app, 'worktree', worktreeHashOf(pathA), { metaKey: true }))
+  await settle()
+
+  assert.deepEqual(opened, [prsHashOf(sdkMain), worktreeHashOf(pathA)])
+  assert.equal(app.context.location.hash, '#/')
+})
+
+test('a plain click on a row follows its link in the same window', async () => {
+  const app = await reposApp(selectRepos)
+  const opened = appOpener(app)
+
+  assert.equal(clickRow(app, 'worktree', worktreeHashOf(pathA)), false)
+  assert.deepEqual(opened, [])
+})
+
+test('Cmd+click on a row in a browser keeps the browser behaviour', async () => {
+  const app = await reposApp(selectRepos)
+
+  assert.equal(clickRow(app, 'worktree', worktreeHashOf(pathA), { metaKey: true }), false)
+})
+
 test('Enter on a main row opens its PRs page', async () => {
   const app = await reposApp(selectRepos)
 
