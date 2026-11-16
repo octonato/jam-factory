@@ -22,8 +22,8 @@ The prompt gives you:
 The run directory takes one of two forms:
 
 - A disk path, such as `.nogit/verify-20261022-101500/`. Read and write its files on disk.
-- `factory:{org}/{repo}/{session}/round-{N}/`, a round of a factory session. Read and write its files with the tools of the `jam-factory` server:
-  - Pass the session's `org`, `repo` and `session`, and paths that start with `round-{N}/`, such as `round-{N}/reviews/independent-review.md`.
+- `factory:{org}/{repo}/{branch}/{session}/round-{N}/`, a round of a factory session. Read and write its files with the tools of the `jam-factory` server:
+  - Pass the session's `org`, `repo`, `branch` and `session`, and paths that start with `round-{N}/`, such as `round-{N}/reviews/independent-review.md`.
   - `list_files` lists the whole session. Use only the paths under `round-{N}/reviews/`.
   - If `write_file` fails with `exists`, read `report.md` with `read_file`. Write again with its version as `expected_version`.
 

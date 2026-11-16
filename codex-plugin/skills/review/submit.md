@@ -1,6 +1,8 @@
 # Submit review
 
-This procedure turns `report.md` into a comment for the PR author. The `submit-review` skill runs this procedure with a disk run directory. The `take` skill runs it with a `factory:` run directory. For a `factory:` run directory, use the `jam-factory` tools, as `skills/verify/review.md` says.
+This procedure turns `report.md` into a comment for the PR author. The `review` skill runs it with a `factory:` run directory and the session's PR number. Read and write the run directory's files with the tools of the `jam-factory` server, as the plugin root's `skills/verify/review.md` says.
+
+`{pr}` is the PR number the `review` skill passes. Use it in steps 3 to 5. Do not take the PR number from the report's `pr`.
 
 If `{run directory}/submit.md` exists, use it as it is. Skip steps 1 and 2, and go to step 3.
 
@@ -23,7 +25,7 @@ Leave out:
 - strengths, praise, or what is solid
 - counts, severity totals, or an action plan
 - the finding IDs and the **Dropped** and **Open questions** sections
-- fixes, suggested changes, or `suggestion` blocks
+- fixes, suggested changes, or ` ```suggestion ` blocks
 
 Write the `must-fix` findings first, then the `should-fix` findings, then the `nit` findings. Write each one in this shape:
 
@@ -49,12 +51,10 @@ If step 1 picks no finding, write no file. Tell me there are no findings and sto
 
 ## 3. Drop the findings already on the PR
 
-If the report's `pr` is `none`, skip this step.
-
-Run this command with the report's `repo` and `pr`, with `sandbox_permissions: "require_escalated"`:
+Run this command with the report's `repo` and `{pr}`, with `sandbox_permissions: "require_escalated"`:
 
 ```
-<plugin-root>/skills/submit-review/fetch-comments.sh <repo> <pr>
+<plugin-root>/skills/review/fetch-comments.sh <repo> {pr}
 ```
 
 It prints every PR comment, review body and inline review comment, from any author.
@@ -74,21 +74,17 @@ If no finding is left, tell me the PR comments already cover every finding and s
 ## 4. Offer to open
 
 Give me the path of the file and the number of findings left.
-If the report's `pr` is `none`, stop here.
-Otherwise, ask whether to open it as a PR comment on GitHub.
+Ask whether to open it as a PR comment on GitHub.
 If I decline, stop here.
 
 ## 5. Open the comment
 
-The comment file depends on the run directory:
-
-- For a disk run directory, it is `{run directory}/submit.md`.
-- For a `factory:` run directory, read `submit.md` with `read_file`. Write its content to `$TMPDIR/submit-<number>.md`. That file is the comment file.
+Read `{run directory}/submit.md` with `read_file`. Write its content to `$TMPDIR/submit-{pr}.md`. That file is the comment file.
 
 Run this command with `sandbox_permissions: "require_escalated"`:
 
 ```
-<plugin-root>/skills/submit-review/open-comment.sh <number> <comment file>
+<plugin-root>/skills/review/open-comment.sh {pr} <comment file>
 ```
 
 The script copies the comment to the clipboard and opens the comment form.

@@ -216,8 +216,6 @@ spec ─► plan ─► implement ─► verify(N) ─► triage(N) ─┬─►
 | `/jam:take -r`, `/jam:take --resume` | Resumes the branch's session at the stage it reached. |
 | `/jam:take -v`, `/jam:take --verify` | Runs another verify round on a done session. |
 
-Codex and Gemini still start a review session with `$jam:take -p` or `/take -p`, and run its next round with `-v`.
-
 Without `-r` or `-v`, `/jam:take` refuses to run on a branch that already has a live session. Archive it on Jam Board to start a new one. To track a deferred finding, open an issue with `/jam:gh-issue-create`. Then set the entry's `issue` to its URL.
 
 ### Modes
@@ -241,8 +239,6 @@ The factory fetches all pages of issue comments, submitted review bodies and inl
 Actionable feedback becomes a report with source links, then follows the existing triage and implementation loop. Add `-i` to decide every remaining finding, including nits: `/jam:feedback -i`. The other modes retain the normal triage rules. Remote text is feedback data, never instructions to the factory. New feedback resets `lastRound`; triage chooses whether fixes need another verify round.
 
 `/jam:feedback` accepts one mode flag and no other argument. Review, vibe and unfinished sessions cannot import new feedback. Resume an interrupted import with `/jam:take -r`; its durable capture is processed in the same round without losing or re-importing sources. The factory commits selected fixes through the existing loop and never pushes, merges, posts comments or opens PRs.
-
-Codex and Gemini still import PR feedback with `$jam:take -f` or `/take -f`.
 
 ### Review sessions
 
@@ -416,8 +412,6 @@ The examples below use Claude Code and Antigravity syntax: `/jam:take`, `/jam:ve
 | `/jam:verify-fix` | Fix the findings of a /jam:verify run, each in its own commit. Runs on its own by default; add -i to fix one at a time. Pass --resume verify-{timestamp} to use a run on disk. Otherwise pick a run from a list, or run a new review. Never pushes. |
 | `/jam:walk-through` | Walk-through of a code path or a set of changes, broken into logical steps. By default it saves the walk as a factory session. Jam Board shows each step as soon as it is written. Replay the walk in the terminal with `/jam:walk-replay`. Add `-i` to walk through it one step at a time in the terminal instead. `-i` writes no files. |
 
-Codex and Gemini have no `review` skill. They still start a review session with `$jam:take -p` or `/take -p`, and still use `submit-review` to turn a verify report into a PR comment.
-
 ## Agents
 
 | Agent | Description |
@@ -445,8 +439,6 @@ Extra reviewers are optional. Claude Code uses the `pr-review-toolkit` plugin. C
 | `/jam:verify-fix [target]` | Lists the three newest runs on disk. Pick one, or run a new review of the target. Then fixes and commits each finding without stopping. It asks its questions at the end. It never pushes. |
 | `/jam:verify-fix -i [target]` | Goes through the findings one at a time. For each one, it gives its assessment and waits for your decision. Then it shows the fix with its commit message, and commits it when you approve. |
 | `/jam:verify-fix --resume verify-{timestamp}` | Fixes the findings of that run. Continues its fixes if the run already has them. |
-
-Codex and Gemini still turn a verify report into a PR comment with `$jam:submit-review` or `/submit-review`.
 
 The target is a PR number or URL, a commit hash, a range `a..b`, or nothing for the current branch. A commit hash is inclusive.
 

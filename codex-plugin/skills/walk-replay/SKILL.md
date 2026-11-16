@@ -1,42 +1,64 @@
 ---
 name: walk-replay
-description: Replay a walk-through saved by $jam:walk-through — present each step verbatim in the terminal, one at a time, advancing when the user says "go ahead". Presents the steps as written; it does not summarize them.
+description: Replay a walk-through session from the factory in the terminal. Prints the overview, then prints one step, verbatim, each time the user says "go ahead". It does not summarize the steps.
+allowed-tools: Bash(echo *), Bash(git rev-parse *), mcp__jam-factory
 ---
 
-I want you to **replay a walk-through** that `$jam:walk-through` saved. Present the pre-written steps to me **one at a time**, exactly as they were written. Do **not** summarize, condense, or rephrase a step — I wrote these on purpose and I want to read them **as-is**. You are the pager here, not the author.
+I want you to **replay a walk-through** that `$jam:walk-through` saved to the factory. Present the pre-written steps to me **one at a time**, exactly as they were written. Do **not** summarize, condense, or rephrase a step — I wrote these on purpose and I want to read them **as-is**. You are the pager here, not the author.
 
 What I gave you: the arguments supplied when invoking this skill
 
+Run `git rev-parse --show-toplevel 2>/dev/null || echo none` to get the worktree.
+
 ## Find the walk
 
-A walk is one file, `.nogit/walk-through/{slug}.md`. Resolve `the arguments supplied when invoking this skill` to one:
+A walk is a factory session with `flow: walk`. Read it only with the `jam-factory` tools `list_sessions`, `list_files` and `read_file`. Never write to it.
 
-- **A slug** (e.g. `pr-247`, `commit-a1b2c3d`, `login-auth-flow`) → read `.nogit/walk-through/{slug}.md`.
-- **A file path** (anything with a `/`) → read that file.
-- **Empty** → list the files in `.nogit/walk-through/`. If there's exactly one, use it. If there are several, show them and ask which; stop until I pick. If there are none, tell me there's nothing to replay and stop.
+If the `jam-factory` tools are missing, tell me to run `just install` in the `app/` folder of the jam-factory repository. Then stop.
 
-If nothing resolves, or the file has no `## Step` sections, say so and stop — don't invent steps.
+Resolve `the arguments supplied when invoking this skill` to one walk session, with its org, repo and branch. Every `list_sessions` call below passes `category: walk`.
+
+- **A session id** (it starts with `walk-`, such as `walk-20261104-0912-3f00486`): call `list_sessions` with `include_archived: true` and no `org`, `repo` or `branch`. Use the entry whose `session` is the id, and take its `org`, `repo` and `branch`. If several entries match, list them as `{org}/{repo}/{branch}` and ask me to pick. Stop until I pick.
+- **A slug** (such as `pr-247`, `commit-a1b2c3d` or `login-auth-flow`): call `list_sessions` with the worktree's org and repo. Use the walk with the newest `updated` whose `slug` in `data` is the slug.
+- **Empty**: call `list_sessions` with the worktree's org and repo. Sort the walks by newest `updated` first. If there is one, use it. If there are several, list them and ask me to pick. Stop until I pick.
+
+Only a slug and an empty argument use the worktree. Its folder names give the org and repo:
+
+- **Repo**: the name of the worktree's parent folder.
+- **Org**: the name of the folder above the repo folder. For the worktree `~/Sources/octonato/jam-factory/main`, the org is `octonato` and the repo is `jam-factory`.
+
+If the worktree is `none`, this folder is not in a git repository. For a slug or an empty argument, say so, ask me for a full session id, and stop.
+
+If nothing resolves, say so and stop. Don't invent steps.
 
 ## Know the running order
 
-The body after the frontmatter is the script. Split it on its `## ` headings:
+The plugin root's `skills/walk-through/state.md` gives the format of each file of a walk.
 
-- Everything **before the first `## Step`** heading is the overview.
-- Each **`## Step NN — <title>`** section is one step, in numeric `NN` order (`Step 01`, `Step 02`, … `Step 10`) — sort by the number, not lexically.
+- The overview is `overview.md`.
+- The steps are the entries of `steps` in `walk.json`, in `n` order.
+- Step `n` lives in `steps/NN.md`, with `n` zero-padded to two digits: step 3 is `steps/03.md`.
+
+Read `walk.json` and `overview.md` with `read_file`. If either is missing, the walk has no route yet: say so and stop.
 
 That ordered list is the walk. Note how many steps there are so you can mark progress.
 
 ## Present the overview, then stop
 
-Print the **overview verbatim** — the mode/target line, the summary, the itinerary, and any review roll-up. Don't add commentary before it and don't rewrite it; just show me what's there.
+Print `overview.md` **verbatim**. Don't add commentary before it and don't rewrite it.
 
-Then, under it, add one short line: how many steps there are and that I should say **"go ahead"** / **"next"** to see Step 1. Stop.
+Then print the itinerary from `walk.json`: one line per step, as `Step {n}: {title} — {summary}`.
+
+Then add one short line: how many steps there are, and that I should say **"go ahead"** / **"next"** to see Step 1. Stop.
 
 ## Present each step, then stop
 
-When I say **"go ahead"** / **"next"** (or similar), print the **next step section in full, verbatim** — title, pointers, explanation, and its `⚠ Review notes` block if it has one — exactly as written. No summary, no paraphrase, no "in short". If you want to help me open a pointer, that's fine, but the step's own text must appear unaltered.
+When I say **"go ahead"** / **"next"** (or similar), list the session's files with `list_files` and re-read `walk.json`. Then:
 
-**One exception: the file paths in the code pointers.** The steps were written with paths relative to the folder they were captured in, and I sometimes run the replay from a **parent folder** (or another spot) where those relative paths no longer resolve. So you **may rewrite the path in a `path:line` pointer** to whatever is valid from my current working directory — keep the line number and everything else identical. This is the only thing you may change; the prose, titles, and explanations stay verbatim. If a path already resolves as-is, leave it untouched.
+- **The step's file is listed**: read `steps/NN.md` with `read_file`. Print it **in full, verbatim**: its title, pointers, explanation, diff blocks and code blocks, exactly as written. No summary, no paraphrase, no "in short". You may help me open a pointer, but the step's own text must appear unaltered.
+- **The step's file is not listed yet**: read `session.json`. If its `stage` is `blocked`, tell me its `blocked.reason` and stop. Otherwise, say the step is still being written and offer to wait. Check again when I say "go ahead".
+
+**One exception: the file paths in the code pointers.** The steps were written with paths relative to the walk's worktree, and I sometimes run the replay from a **parent folder** (or another spot) where those relative paths no longer resolve. So you **may rewrite the path in a `path:line` pointer** to whatever is valid from my current working directory — keep the line number and everything else identical. This is the only thing you may change; the prose, titles, explanations, diff blocks and code blocks stay verbatim. If a path already resolves as-is, leave it untouched.
 
 Close each step with a single navigational line — e.g. `Step 2 of 5 — 3 to go` — and stop. That marker is the only thing you add; it is not a summary of the step.
 

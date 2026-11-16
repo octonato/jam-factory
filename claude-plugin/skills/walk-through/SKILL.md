@@ -81,7 +81,8 @@ If the `jam-factory` tools are missing, tell me to run `just install` in the `ap
 Read `${CLAUDE_PLUGIN_ROOT}/skills/walk-through/state.md` before you write any file. It holds the tools and the format of every file of a walk.
 
 - **Worktree**: the value above.
-- **Branch**: the last segment of the current branch above. For `octonato/rate-limit`, it is `rate-limit`. The walk runs on any branch, the base branch included.- **Repo**: the name of the worktree's parent folder.
+- **Branch**: the last segment of the current branch above. For `octonato/rate-limit`, it is `rate-limit`. The walk runs on any branch, the base branch included.
+- **Repo**: the name of the worktree's parent folder.
 - **Org**: the name of the folder above the repo folder. For the worktree `~/Sources/octonato/jam-factory/main`, the org is `octonato` and the repo is `jam-factory`.
 - **Slug**: `pr-{n}` for a PR, `commit-{short sha}` for a commit hash or ref, or a short kebab-case slug of the topic for a code path, such as `login-auth-flow`. It names the walk in `overview.md` and in `session.json`.
 - **Session id**: the id `start_session` returns, such as `walk-20261104-0912-3f00486`.

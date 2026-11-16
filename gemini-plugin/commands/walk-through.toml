@@ -1,4 +1,4 @@
-description = "Walk-through of a code path or a set of changes, broken into logical steps. By default it saves the whole walk to .nogit/walk-through/ to read later; add -i/--interactive to walk through it one step at a time instead. Add -r/--review to run /jam:verify and the comment and plain-English checks, and fold their findings into each step."
+description = "Walk-through of a code path or a set of changes, broken into logical steps. By default it saves the walk as a factory session, and Jam Board shows each step as soon as it is written; add -i/--interactive to walk through it one step at a time in the terminal instead."
 prompt = '''
 Activate and follow the `walk-through` skill. Treat the following text as the arguments supplied with the invocation:
 

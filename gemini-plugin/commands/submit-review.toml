@@ -1,6 +1,0 @@
-description = "Turns a /jam:verify report into a PR comment. The comment holds only the findings and their severity. It drops findings that comments on the PR already report. Pass verify-{timestamp} to use a run on disk. Pass a target to run /jam:verify first. Pass nothing to pick a run from a list. It offers to open the comment on GitHub. It never posts the comment."
-prompt = '''
-Activate and follow the `submit-review` skill. Treat the following text as the arguments supplied with the invocation:
-
-{{args}}
-'''

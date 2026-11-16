@@ -35,7 +35,7 @@ The prompt gives you:
   `date +%Y%m%d-%H%M%S` and use `.nogit/verify-{its output}/` in the repository root.
   The run directory takes one of two forms:
   - a disk path, such as `.nogit/verify-20261022-101500/`
-  - `factory:{org}/{repo}/{session}/{dir}/`, a directory of a factory session, such
+  - `factory:{org}/{repo}/{branch}/{session}/{dir}/`, a directory of a factory session, such
     as `factory:octonato/sdk/rate-limit/round-2/reviews/`. The first three segments
     name the session. `{dir}` is the directory's path in the session.
 
@@ -145,7 +145,7 @@ return the whole review as your reply:
 
 - For a disk run directory, run `mkdir -p {run directory}` and write the file.
 - For a `factory:` run directory, write it with the `write_file` tool of the
-  `jam-factory` server. Pass the session's `org`, `repo` and `session`, and
+  `jam-factory` server. Pass the session's `org`, `repo`, `branch` and `session`, and
   `{dir}/independent-review.md` as `path`. If the file exists, the tool fails
   with `exists`. Then read it with `read_file`, and write again with its version as
   `expected_version`.

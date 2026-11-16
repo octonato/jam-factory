@@ -1,0 +1,6 @@
+description = "Review a coworker's open PR as a factory review session that Jam Board shows. Each run is a round. The first round reviews the whole PR. A later round reviews the commits since the last round, or the whole PR after a rebase. Pass a commit hash to review from that commit. Each round writes the PR comment to round-N/submit.md, drops the findings already on the PR and offers to open the comment on GitHub. It never posts the comment. Add -a/--autonomously to never ask, or -i/--interactive to pick extra reviewers."
+prompt = '''
+Activate and follow the `review` skill. Treat the following text as the arguments supplied with the invocation:
+
+{{args}}
+'''

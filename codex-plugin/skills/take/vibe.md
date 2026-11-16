@@ -28,9 +28,9 @@ Re-read `session.json` before each stage and before each step that may ask me so
    - **An empty argument**: the request is what we discussed in this conversation. Write the goal, the decisions we made and the constraints. A reader who never saw the conversation must be able to act on it.
    - **An issue number, `#n` or an issue URL**: run `gh issue view {issue} --json number,title,body,url`. The request is the issue's title, URL and body.
    - **Anything else**: the request is the argument, verbatim.
-6. Create `request.md` with `write_file`, holding the request, as `state.md` shows.
-7. Create `tasks.md` with `write_file`, as `state.md` shows, with one task `T1`. Its title names the request in a few words. Set `source: request`, `status: open` and `commit: none`. Its text points to `request.md`.
-8. Create `session.json` with `write_file`, holding this worktree, the current branch and the base. Set `mode` from the flag, or `default` without one. Set `flow: vibe`, `stage: implement`, `round: 0`, `lastRound: false`, `clarified: false`, `tasksOpen: 1`, every other count `0`, `blocked: null` and `archived: false`.
+6. Call `start_session` with `category: session` and HEAD as `head`, as `state.md` says. Pass `fields` with this worktree, the repo, the current branch and the base. Set `mode` from the flag, or `default` without one. Set `flow: vibe`, `stage: implement`, `round: 0`, `lastRound: false`, `clarified: false`, `tasksOpen: 1`, every other count `0` and `blocked: null`. If the call fails with `exists`, tell me its message and stop. Use the returned `session` as the session id.
+7. Create `request.md` with `write_file`, holding the request, as `state.md` shows.
+8. Create `tasks.md` with `write_file`, as `state.md` shows, with one task `T1`. Its title names the request in a few words. Set `source: request`, `status: open` and `commit: none`. Its text points to `request.md`.
 9. Append a `request` line to `runs.jsonl` with `append_file` and `agent: "main"`. Set its `started` and `ended` to the current time. Set `durationMs: null`.
 10. Go to **Implement**.
 
@@ -63,7 +63,7 @@ Show me:
 
 - the commits, one line each, from `tasks.md`: short hash and subject
 - the assumptions, from `## Assumptions` in `request.md`, when it holds that section
-- the session, as `factory:{org}/{repo}/{session id}/`
+- the session, as `factory:{org}/{repo}/{branch}/{session id}/`
 
 Tell me that `$jam:verify` reviews the branch. Remind me that the branch is ready for me to push, merge or open a PR.
 

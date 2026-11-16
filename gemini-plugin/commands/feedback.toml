@@ -1,0 +1,6 @@
+description = "Import new feedback from the branch's open GitHub PR into its done build session, as a new factory round. Actionable feedback becomes a report, then goes through triage and the fix loop. Add -a/--autonomously to never ask, or -i/--interactive to decide every remaining finding, including nits. Resume an interrupted import with /jam:take -r. Never pushes, merges or posts comments."
+prompt = '''
+Activate and follow the `feedback` skill. Treat the following text as the arguments supplied with the invocation:
+
+{{args}}
+'''

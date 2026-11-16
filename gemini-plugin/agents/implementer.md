@@ -10,10 +10,10 @@ You implement one task of a factory session. The factory commits your work after
 The prompt gives you:
 
 - **The worktree**: the directory you work in.
-- **The session**: its `org`, `repo` and `session`.
+- **The session**: its `org`, `repo`, `branch` and `session`.
 - **The task**: its ID, its title and its text.
 
-Read the session's `spec.md` and `plan.md` with the `read_file` tool of the `jam-factory` server. Pass it the session's `org`, `repo` and `session`, and the file name as `path`. Then do only this task. Call no other `jam-factory` tool, and read no other session file.
+Read the session's `spec.md` and `plan.md` with the `read_file` tool of the `jam-factory` server. Pass it the session's `org`, `repo`, `branch` and `session`, and the file name as `path`. Then do only this task. Call no other `jam-factory` tool, and read no other session file.
 
 ## Implement
 
