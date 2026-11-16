@@ -12,15 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Lists, checks out and opens the pull requests of a configured main checkout with `gh` and `git`.
-//! Routes: `GET /api/prs?path=<main checkout>`, `POST /api/prs/checkout?path=<main checkout>&number=<N>`
+//! Lists, caches, refreshes, checks out and opens the pull requests of a configured main checkout with `gh` and `git`.
+//! Routes: `GET /api/prs?path=<main checkout>`, `GET /api/prs/cached?path=<main checkout>`,
+//! `GET /api/prs/view?path=<main checkout>&number=<N>`, `POST /api/prs/checkout?path=<main checkout>&number=<N>`
 //! and `POST /api/prs/open?path=<main checkout>&number=<N>`.
 
+use std::collections::HashMap;
 use std::env;
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{LazyLock, Mutex, MutexGuard, PoisonError};
 
 use serde::de::IgnoredAny;
 use serde::{Deserialize, Serialize};
@@ -43,6 +46,9 @@ const TEXT: &str = "text/plain; charset=utf-8";
 
 /// The login of a deleted account.
 const GHOST: &str = "ghost";
+
+/// The pull requests the server listed since it started.
+static CACHE: LazyLock<PrCache> = LazyLock::new(PrCache::default);
 
 /// Runs a program in a folder and waits for it to exit.
 pub trait Runner: Send + Sync {
@@ -96,7 +102,7 @@ impl Runner for SystemRunner {
 }
 
 /// An open pull request.
-#[derive(Debug, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Pr {
     pub number: u64,
@@ -135,7 +141,7 @@ pub enum Review {
 }
 
 /// The latest submitted review of one reviewer.
-#[derive(Debug, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Reviewer {
     pub login: String,
     pub state: String,
@@ -164,6 +170,8 @@ struct ListedPr {
     latest_reviews: Vec<ListedReview>,
     #[serde(default)]
     review_requests: Vec<IgnoredAny>,
+    #[serde(default)]
+    state: Option<String>,
 }
 
 /// A check run or a commit status in the `statusCheckRollup` of `gh pr list`.
@@ -330,6 +338,17 @@ pub fn parse_prs(json: &str) -> Result<Vec<Pr>, String> {
     Ok(listed.into_iter().map(Pr::from).collect())
 }
 
+/// The pull request in the `gh pr view` output `json`, or `None` when it is not open or has a bot author.
+fn parse_open_pr(json: &str) -> Result<Option<Pr>, String> {
+    let pr: ListedPr = serde_json::from_str(json)
+        .map_err(|error| format!("Cannot parse the gh pr view output: {error}"))?;
+
+    let open = pr.state.as_deref() == Some("OPEN");
+    let bot = pr.author.as_ref().is_some_and(|author| author.is_bot);
+
+    Ok((open && !bot).then(|| Pr::from(pr)))
+}
+
 /// The head branch in the `gh pr view` output `json`.
 fn parse_head(json: &str) -> Result<Head, String> {
     serde_json::from_str(json)
@@ -343,17 +362,77 @@ pub fn configured_main(repos: &dyn RepoList, target: &str) -> Option<Repo> {
     find_main(repos, Path::new(&path))
 }
 
-/// Answers `GET /api/prs` with `repos`.
-pub fn get(repos: &dyn RepoList, target: &str) -> Response {
-    get_with(repos, target, &SystemRunner { bin: None })
+/// The last listed pull requests of each main checkout, by its path.
+#[derive(Default)]
+pub struct PrCache {
+    lists: Mutex<HashMap<String, Vec<Pr>>>,
 }
 
-/// Answers `GET /api/prs` with `repos`, running `gh` with `runner`.
-pub fn get_with(repos: &dyn RepoList, target: &str, runner: &dyn Runner) -> Response {
+impl PrCache {
+    /// The cached pull requests of the main checkout `main`, or `None` before its first listing.
+    pub fn list(&self, main: &str) -> Option<Vec<Pr>> {
+        self.lists().get(main).cloned()
+    }
+
+    /// Caches `prs` as the pull requests of the main checkout `main`.
+    pub fn store(&self, main: &str, prs: &[Pr]) {
+        self.lists().insert(main.to_string(), prs.to_vec());
+    }
+
+    /// Replaces the cached PR `number` of `main` with `pr`, or drops it when `pr` is `None`.
+    /// A PR missing from the list goes first. A main checkout never listed stays uncached.
+    pub fn update(&self, main: &str, number: u64, pr: Option<&Pr>) {
+        let mut lists = self.lists();
+        let Some(prs) = lists.get_mut(main) else {
+            return;
+        };
+
+        let index = prs.iter().position(|cached| cached.number == number);
+
+        match (index, pr) {
+            (Some(index), Some(pr)) => prs[index] = pr.clone(),
+            (Some(index), None) => {
+                prs.remove(index);
+            }
+            (None, Some(pr)) => prs.insert(0, pr.clone()),
+            (None, None) => {}
+        }
+    }
+
+    fn lists(&self) -> MutexGuard<'_, HashMap<String, Vec<Pr>>> {
+        self.lists.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+/// Answers `GET /api/prs`, `GET /api/prs/cached` and `GET /api/prs/view` with `repos`.
+pub fn get(repos: &dyn RepoList, target: &str) -> Response {
+    get_with(repos, target, &SystemRunner { bin: None }, &CACHE)
+}
+
+/// Answers `GET /api/prs`, `GET /api/prs/cached` and `GET /api/prs/view` with `repos`, running `gh` with `runner` and caching in `cache`.
+pub fn get_with(
+    repos: &dyn RepoList,
+    target: &str,
+    runner: &dyn Runner,
+    cache: &PrCache,
+) -> Response {
+    let route = segments(target);
+    let number = pr_number(target);
+
     let Some(main) = configured_main(repos, target) else {
         return Response::error(404);
     };
 
+    match (&route[..], number) {
+        (["", "api", "prs"], _) => list(&main, runner, cache),
+        (["", "api", "prs", "cached"], _) => cached(&main, cache),
+        (["", "api", "prs", "view"], Some(number)) => view(&main, number, runner, cache),
+        _ => Response::error(404),
+    }
+}
+
+/// Lists the open pull requests of `main` with `gh pr list` and caches them on success.
+fn list(main: &Repo, runner: &dyn Runner, cache: &PrCache) -> Response {
     let args = [
         "pr",
         "list",
@@ -370,8 +449,37 @@ pub fn get_with(repos: &dyn RepoList, target: &str, runner: &dyn Runner) -> Resp
         .and_then(|json| parse_prs(&json));
 
     let reply = match prs {
-        Ok(prs) => json!({ "error": null, "prs": prs }),
+        Ok(prs) => {
+            cache.store(&main.path, &prs);
+            json!({ "error": null, "prs": prs })
+        }
         Err(error) => json!({ "error": error, "prs": [] }),
+    };
+
+    json_response(&reply)
+}
+
+/// The cached pull requests of `main`, with `prs: null` before its first listing.
+fn cached(main: &Repo, cache: &PrCache) -> Response {
+    json_response(&json!({ "error": null, "prs": cache.list(&main.path) }))
+}
+
+/// Reads the PR `number` of `main` with `gh pr view` and updates the cache, with `pr: null` when it is no longer open.
+fn view(main: &Repo, number: u64, runner: &dyn Runner, cache: &PrCache) -> Response {
+    let number_arg = number.to_string();
+    let fields = format!("{LIST_FIELDS},state");
+    let args = ["pr", "view", &number_arg, "--json", &fields];
+
+    let pr = runner
+        .run(Path::new(&main.path), "gh", &args)
+        .and_then(|json| parse_open_pr(&json));
+
+    let reply = match pr {
+        Ok(pr) => {
+            cache.update(&main.path, number, pr.as_ref());
+            json!({ "error": null, "pr": pr })
+        }
+        Err(error) => json!({ "error": error, "pr": null }),
     };
 
     json_response(&reply)
@@ -635,6 +743,16 @@ mod tests {
     /// The `/api/prs` target for the main checkout `path`.
     fn prs_target(path: &Path) -> String {
         format!("/api/prs?path={}", encoded(path))
+    }
+
+    /// The `/api/prs/cached` target for the main checkout `path`.
+    fn cached_target(path: &Path) -> String {
+        format!("/api/prs/cached?path={}", encoded(path))
+    }
+
+    /// The `/api/prs/view` target for the main checkout `path` and the PR `number`.
+    fn view_target(path: &Path, number: u64) -> String {
+        post_target("view", path, &number.to_string())
     }
 
     /// The `/api/prs/{route}` target for the main checkout `path` and the PR `number`.
@@ -1032,7 +1150,7 @@ esac
         let listed = json!([listed(12, json!({ "login": "alice" }), 1)]);
         let runner = StubRunner::new(vec![Ok(listed.to_string())]);
 
-        let response = get_with(&repos, &prs_target(&main), &runner);
+        let response = get_with(&repos, &prs_target(&main), &runner, &PrCache::default());
 
         assert_eq!(response.status, 200);
         assert_eq!(
@@ -1079,7 +1197,9 @@ esac
         let repos = FixedRepos(vec![main.clone()]);
         let runner = StubRunner::new(vec![Err("not logged in".to_string()), Ok("{}".to_string())]);
 
-        let failed = get_with(&repos, &prs_target(&main), &runner);
+        let cache = PrCache::default();
+
+        let failed = get_with(&repos, &prs_target(&main), &runner, &cache);
 
         assert_eq!(failed.status, 200);
         assert_eq!(
@@ -1087,10 +1207,11 @@ esac
             json!({ "error": "not logged in", "prs": [] })
         );
 
-        let wrong_shape = body(&get_with(&repos, &prs_target(&main), &runner));
+        let wrong_shape = body(&get_with(&repos, &prs_target(&main), &runner, &cache));
 
         assert!(wrong_shape["error"].is_string(), "{wrong_shape}");
         assert_eq!(wrong_shape["prs"], json!([]));
+        assert_eq!(cache.list(&main.to_string_lossy()), None);
     }
 
     #[test]
@@ -1109,8 +1230,169 @@ esac
             "/api/prs?path=".to_string(),
             prs_target(&linked),
             prs_target(&parent),
+            cached_target(&linked),
+            view_target(&linked, 7),
         ] {
-            let response = get_with(&repos, &target, &runner);
+            let response = get_with(&repos, &target, &runner, &PrCache::default());
+
+            assert_eq!(response.status, 404, "{target}");
+        }
+
+        assert!(runner.calls().is_empty());
+    }
+
+    #[test]
+    fn the_cached_route_serves_the_last_listing() {
+        let main = PathBuf::from("/s/o/r/main");
+        let repos = FixedRepos(vec![main.clone()]);
+        let alice = json!({ "login": "alice" });
+        let first = json!([listed(12, alice.clone(), 2), listed(7, alice.clone(), 1)]);
+        let second = json!([listed(7, alice, 1)]);
+        let runner = StubRunner::new(vec![
+            Ok(first.to_string()),
+            Err("offline".to_string()),
+            Ok(second.to_string()),
+        ]);
+        let cache = PrCache::default();
+        let cached_numbers = || {
+            let reply = body(&get_with(&repos, &cached_target(&main), &runner, &cache));
+            assert_eq!(reply["error"], Value::Null);
+            reply["prs"].as_array().map(|prs| {
+                prs.iter()
+                    .map(|pr| pr["number"].as_u64().unwrap())
+                    .collect::<Vec<_>>()
+            })
+        };
+
+        assert_eq!(cached_numbers(), None);
+
+        get_with(&repos, &prs_target(&main), &runner, &cache);
+        assert_eq!(cached_numbers(), Some(vec![12, 7]));
+
+        get_with(&repos, &prs_target(&main), &runner, &cache);
+        assert_eq!(
+            cached_numbers(),
+            Some(vec![12, 7]),
+            "a failed listing keeps the cache"
+        );
+
+        get_with(&repos, &prs_target(&main), &runner, &cache);
+        assert_eq!(cached_numbers(), Some(vec![7]));
+
+        assert_eq!(runner.calls().len(), 3, "the cached route never runs gh");
+    }
+
+    #[test]
+    fn the_view_route_refreshes_one_pr_and_its_cache_entry() {
+        let main = PathBuf::from("/s/o/r/main");
+        let repos = FixedRepos(vec![main.clone()]);
+        let alice = json!({ "login": "alice" });
+        let open = |pr: Value| with_fields(pr, json!({ "state": "OPEN" }));
+
+        let listing = json!([listed(12, alice.clone(), 2), listed(7, alice.clone(), 1)]);
+        let renamed = open(with_fields(
+            listed(12, alice.clone(), 3),
+            json!({ "title": "Renamed" }),
+        ));
+        let merged = with_fields(listed(7, alice.clone(), 1), json!({ "state": "MERGED" }));
+        let new = open(listed(30, alice, 4));
+        let runner = StubRunner::new(vec![
+            Ok(listing.to_string()),
+            Ok(renamed.to_string()),
+            Ok(merged.to_string()),
+            Ok(new.to_string()),
+        ]);
+        let cache = PrCache::default();
+        let path = main.to_string_lossy();
+        let titles = || {
+            let prs = cache.list(&path).unwrap();
+            prs.into_iter()
+                .map(|pr| format!("#{} {}", pr.number, pr.title))
+                .collect::<Vec<_>>()
+        };
+
+        get_with(&repos, &prs_target(&main), &runner, &cache);
+
+        let reply = body(&get_with(&repos, &view_target(&main, 12), &runner, &cache));
+        assert_eq!(reply["error"], Value::Null);
+        assert_eq!(reply["pr"]["number"], 12);
+        assert_eq!(reply["pr"]["title"], "Renamed");
+        assert_eq!(titles(), ["#12 Renamed", "#7 PR 7"]);
+
+        let reply = body(&get_with(&repos, &view_target(&main, 7), &runner, &cache));
+        assert_eq!(reply, json!({ "error": null, "pr": null }));
+        assert_eq!(titles(), ["#12 Renamed"]);
+
+        get_with(&repos, &view_target(&main, 30), &runner, &cache);
+        assert_eq!(titles(), ["#30 PR 30", "#12 Renamed"]);
+
+        let fields = format!("{LIST_FIELDS},state");
+        let view = strings(&["pr", "view", "12", "--json", &fields]);
+        assert_eq!(runner.calls()[1], (main, "gh".to_string(), view));
+    }
+
+    #[test]
+    fn a_failed_view_keeps_the_cache() {
+        let main = PathBuf::from("/s/o/r/main");
+        let repos = FixedRepos(vec![main.clone()]);
+        let listing = json!([listed(12, json!({ "login": "alice" }), 2)]);
+        let runner = StubRunner::new(vec![
+            Ok(listing.to_string()),
+            Err("not logged in".to_string()),
+            Ok("not json".to_string()),
+        ]);
+        let cache = PrCache::default();
+
+        get_with(&repos, &prs_target(&main), &runner, &cache);
+
+        let failed = body(&get_with(&repos, &view_target(&main, 12), &runner, &cache));
+        assert_eq!(failed, json!({ "error": "not logged in", "pr": null }));
+
+        let wrong_shape = body(&get_with(&repos, &view_target(&main, 12), &runner, &cache));
+        assert!(wrong_shape["error"].is_string(), "{wrong_shape}");
+        assert_eq!(wrong_shape["pr"], Value::Null);
+
+        assert_eq!(numbers(&cache.list(&main.to_string_lossy()).unwrap()), [12]);
+    }
+
+    #[test]
+    fn a_bot_pr_view_is_dropped() {
+        let bot = json!({ "login": "dependabot", "is_bot": true });
+        let json = with_fields(listed(5, bot, 1), json!({ "state": "OPEN" }));
+
+        assert_eq!(parse_open_pr(&json.to_string()), Ok(None));
+    }
+
+    #[test]
+    fn a_view_without_a_listing_caches_nothing() {
+        let main = PathBuf::from("/s/o/r/main");
+        let repos = FixedRepos(vec![main.clone()]);
+        let pr = with_fields(
+            listed(12, json!({ "login": "alice" }), 2),
+            json!({ "state": "OPEN" }),
+        );
+        let runner = StubRunner::new(vec![Ok(pr.to_string())]);
+        let cache = PrCache::default();
+
+        let reply = body(&get_with(&repos, &view_target(&main, 12), &runner, &cache));
+
+        assert_eq!(reply["pr"]["number"], 12);
+        assert_eq!(cache.list(&main.to_string_lossy()), None);
+    }
+
+    #[test]
+    fn get_routes_check_their_input() {
+        let main = PathBuf::from("/s/o/r/main");
+        let repos = FixedRepos(vec![main.clone()]);
+        let runner = StubRunner::new(vec![]);
+
+        for target in [
+            format!("/api/prs/view?path={}", encoded(&main)),
+            post_target("view", &main, "0"),
+            post_target("view", &main, "x"),
+            format!("/api/prs/other?path={}", encoded(&main)),
+        ] {
+            let response = get_with(&repos, &target, &runner, &PrCache::default());
 
             assert_eq!(response.status, 404, "{target}");
         }

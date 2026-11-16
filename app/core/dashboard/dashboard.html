@@ -1032,6 +1032,7 @@ const ACTION_ICONS = {
   github: '<path fill="currentColor" stroke="none" d="M8 0c4.42 0 8 3.58 8 8a8.013 8.013 0 0 1-5.45 7.59c-.4.08-.55-.17-.55-.38 0-.27.01-1.13.01-2.2 0-.75-.25-1.23-.54-1.48 1.78-.2 3.65-.88 3.65-3.95 0-.88-.31-1.59-.82-2.15.08-.2.36-1.02-.08-2.12 0 0-.67-.22-2.2.82-.64-.18-1.32-.27-2-.27-.68 0-1.36.09-2 .27-1.53-1.03-2.2-.82-2.2-.82-.44 1.1-.16 1.92-.08 2.12-.51.56-.82 1.28-.82 2.15 0 3.06 1.86 3.75 3.64 3.95-.23.2-.44.55-.51 1.07-.46.21-1.61.55-2.33-.66-.15-.24-.6-.83-1.23-.82-.67.01-.27.38.01.53.34.19.73.9.82 1.13.16.45.68 1.31 2.69.94 0 .67.01 1.3.01 1.49 0 .21-.15.45-.55.38A7.995 7.995 0 0 1 0 8c0-4.42 3.58-8 8-8Z"/>',
   archive: '<rect x="2" y="2.5" width="12" height="3" rx=".5"/><path d="M3 5.5v8h10v-8M6.5 8h3"/>',
   worktree: '<rect x="2" y="2.5" width="12" height="11" rx="1.5"/><path d="M6.5 2.5v11"/>',
+  refresh: '<path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2v3h-3"/>',
 }
 const CARD_ACTIONS = [
   { action: 'intellij', title: 'Open in IntelliJ (i)', icon: ACTION_ICONS.intellij },
@@ -1052,6 +1053,7 @@ const PR_ACTIONS = [
   { action: 'zed', title: 'Open in Zed (e)', icon: ACTION_ICONS.zed },
   { action: 'intellij', title: 'Open in IntelliJ (i)', icon: ACTION_ICONS.intellij },
   { action: 'github', title: 'Open on GitHub (o)', icon: ACTION_ICONS.github },
+  { action: 'refresh', title: 'Refresh PR (u)', icon: ACTION_ICONS.refresh },
 ]
 // The title of the worktree icon of a PR that no worktree holds.
 const PR_CHECKOUT_TITLE = 'Check out and open worktree page (c)'
@@ -1066,7 +1068,7 @@ const REVIEW_LABELS = {
 const TOOL_LABELS = { intellij: 'IntelliJ', zed: 'Zed', iterm: 'iTerm', github: 'GitHub' }
 const ACTION_KEYS = { a: 'archive', t: 'iterm', e: 'zed', i: 'intellij', o: 'github', g: 'lazygit' }
 const WORKTREE_KEYS = { o: 'github', i: 'intellij', e: 'zed', g: 'lazygit', t: 'shell' }
-const PR_KEYS = { c: 'worktree', Enter: 'worktree', r: 'claude', e: 'zed', i: 'intellij', o: 'github' }
+const PR_KEYS = { c: 'worktree', Enter: 'worktree', r: 'claude', e: 'zed', i: 'intellij', o: 'github', u: 'refresh' }
 const BACK_KEYS = ['l', 'Escape', 'Meta+[']
 const TABS = [
   { kind: 'repos', label: 'Repos', href: '#/' },
@@ -1084,7 +1086,8 @@ const REPOS_HELP = `
 const $ = (id) => document.getElementById(id)
 const state = { sessions: [], problems: [], failedChecks: [] }
 let reposState = null
-// The PRs of the shown PRs page: `{ path, prs, error, loading }`, or null.
+// The PRs of the shown PRs page: `{ path, prs, error, loading, refreshing }`, or null.
+// `loading` holds until the cached or the fresh list lands. `refreshing` holds until the fresh list lands.
 let prsState = null
 let tabsHtml = ''
 let listView = { html: '', el: null }
@@ -1107,6 +1110,8 @@ let leftWidth = null
 let selectedDir = null
 // The hash a back key on the session page goes to.
 let sessionOrigin = '#/sessions'
+// The PRs page a back key on the worktree page returns to: `{ hash, selectedPr, prFilter }`, or null for the repos page.
+let worktreeOrigin = null
 let selectedWorktree = null
 let orgFilter = null
 let repoFilter = ''
@@ -1114,6 +1119,8 @@ let selectedPr = null
 let prFilter = ''
 // The `${path}#${number}` keys of the PRs whose checkout runs.
 const prBusy = new Set()
+// The `${path}#${number}` keys of the PRs whose refresh runs.
+const prRefreshing = new Set()
 let pendingDiffs = []
 
 function escape(text) {
@@ -1286,21 +1293,41 @@ async function loadRepos() {
   }
 }
 
-// Fetches the PRs of the main checkout at `path` into `prsState`, unless the shown page changed meanwhile, then renders.
+// Shows the cached PRs of the main checkout at `path` in `prsState`, then the fresh list, unless the shown page changed meanwhile.
+// A failed fresh fetch keeps a shown cached list beside its error.
 async function loadPrs(path) {
-  const loading = { path, prs: [], error: null, loading: true }
-  prsState = loading
+  const state = { path, prs: [], error: null, loading: true, refreshing: true }
+  prsState = state
+  loadCachedPrs(state)
 
   let reply
   try {
     const { error, prs } = JSON.parse(await fetchText(`api/prs?path=${encodeURIComponent(path)}`))
-    reply = { path, prs: Array.isArray(prs) ? prs : [], error: stringOrNull(error), loading: false }
+    reply = { prs: Array.isArray(prs) ? prs : [], error: stringOrNull(error) }
   } catch (err) {
-    reply = { path, prs: [], error: err.message, loading: false }
+    reply = { prs: [], error: err.message }
   }
-  if (prsState !== loading) return
+  if (prsState !== state) return
 
-  prsState = reply
+  if (reply.error === null || state.loading) state.prs = reply.prs
+  state.error = reply.error
+  state.loading = false
+  state.refreshing = false
+  render()
+}
+
+// Shows the cached PRs of the main checkout of `state` while its fresh list loads. Does nothing without a cached list.
+async function loadCachedPrs(state) {
+  let prs
+  try {
+    prs = JSON.parse(await fetchText(`api/prs/cached?path=${encodeURIComponent(state.path)}`)).prs
+  } catch {
+    return
+  }
+  if (prsState !== state || !state.loading || !Array.isArray(prs)) return
+
+  state.prs = prs
+  state.loading = false
   render()
 }
 
@@ -1944,15 +1971,24 @@ function prChips(pr) {
   return chips.join('')
 }
 
-// Returns the row of `pr` in `repo`, outlined when `selected`: number, title, author and line counts; checkout state or worktree marker, CI and review states; chips and icons.
+// Returns the state of the checkout or refresh of `pr` in `repo` while one runs, else its worktree marker, else nothing.
+function prMarker(repo, pr, worktree) {
+  const key = prBusyKey(repo.path, pr)
+  if (prBusy.has(key)) return '<span class="marker">checking out…</span>'
+  if (prRefreshing.has(key)) return '<span class="marker">refreshing…</span>'
+  if (worktree !== undefined) return `<span class="marker">● ${escape(shortPath(worktree.path))}</span>`
+  return ''
+}
+
+// Returns the row of `pr` in `repo`, outlined when `selected`: number, title, author and line counts; checkout or refresh state or worktree marker, CI and review states; chips and icons.
 function prRowHtml(repo, pr, selected) {
   const worktree = prWorktree(repo, pr)
-  const busy = prBusy.has(prBusyKey(repo.path, pr))
+  const key = prBusyKey(repo.path, pr)
+  const busy = prBusy.has(key) || prRefreshing.has(key)
   const number = escape(pr.number)
 
   const lines = `<span class="added">+${escape(pr.additions)}</span> <span class="deleted">−${escape(pr.deletions)}</span>`
-  const marker = worktree !== undefined ? `<span class="marker">● ${escape(shortPath(worktree.path))}</span>` : ''
-  const checkout = busy ? '<span class="marker">checking out…</span>' : marker
+  const checkout = prMarker(repo, pr, worktree)
   const ci = `<span class="ci ${escape(pr.ci)}">${escape(CI_LABELS[pr.ci] ?? pr.ci)}</span>`
   const review = `<span class="review ${escape(pr.review)}" title="${escape(reviewersTitle(pr))}">${escape(REVIEW_LABELS[pr.review] ?? pr.review)}</span>`
 
@@ -1971,30 +2007,35 @@ function prRowHtml(repo, pr, selected) {
     </div>`
 }
 
-// Returns the card of the PRs page of `repo`: its name, its short path and, once loaded, its PR count.
+// Returns the card of the PRs page of `repo`: its name, its short path, the count of the shown list, and whether a fresh list loads.
 function prCardHtml(repo) {
-  const loaded = prsState !== null && !prsState.loading && prsState.error === null
-  const count = loaded ? prsState.prs.length : 0
-  const facts = loaded ? `<span class="pill">${count} ${count === 1 ? 'PR' : 'PRs'}</span>` : ''
+  const shown = prsState !== null && !prsState.loading && (prsState.error === null || prsState.prs.length > 0)
+  const count = shown ? prsState.prs.length : 0
+
+  const facts = []
+  if (shown) facts.push(`<span class="pill">${count} ${count === 1 ? 'PR' : 'PRs'}</span>`)
+  if (shown && prsState.refreshing) facts.push('<span class="pill">refreshing…</span>')
+
   return `
     <div class="session-card">
       <div class="name">
         <div class="id">${escape(`${repo.org}/${repo.repo}`)}</div>
         <div class="path">${escape(shortPath(repo.path))}</div>
       </div>
-      <div class="facts">${facts}</div>
+      <div class="facts">${facts.join('')}</div>
     </div>`
 }
 
-// Returns the PR list of the PRs page of `repo`: loading, the error, no PRs, no match, or one row per shown PR.
+// Returns the PR list of the PRs page of `repo`: loading, the error, no PRs, no match, or one row per shown PR. A cached list shows below the error of its refresh.
 function prListHtml(repo) {
   if (prsState === null || prsState.loading) return '<p class="empty">loading…</p>'
-  if (prsState.error !== null) return `<p class="config-error">${escape(prsState.error)}</p>`
-  if (prsState.prs.length === 0) return '<p class="empty">No open PRs.</p>'
+
+  const error = prsState.error === null ? '' : `<p class="config-error">${escape(prsState.error)}</p>`
+  if (prsState.prs.length === 0) return error || '<p class="empty">No open PRs.</p>'
 
   const prs = shownPrs()
-  if (prs.length === 0) return '<p class="empty">No PR matches.</p>'
-  return `<div class="rows">${prs.map((pr) => prRowHtml(repo, pr, pr.number === selectedPr)).join('')}</div>`
+  if (prs.length === 0) return `${error}<p class="empty">No PR matches.</p>`
+  return `${error}<div class="rows">${prs.map((pr) => prRowHtml(repo, pr, pr.number === selectedPr)).join('')}</div>`
 }
 
 // Returns why the repos list lacks the main checkout of a PRs page: still loading, the list's error, or not configured.
@@ -2012,7 +2053,7 @@ function updatePrsPart(key, id, html) {
   prsView[key] = html
 }
 
-// Renders the PRs page of the main checkout at `path`: its card, the filter field and the shown PRs. A page already shown keeps its field. A page without PRs for `path` fetches them. A PR no longer shown loses the selection.
+// Renders the PRs page of the main checkout at `path`: its card, the filter field and the shown PRs. A page already shown keeps its field. A page without PRs for `path` fetches them. A PR no longer shown loses the selection once a list shows.
 function renderPrsPage(path) {
   const repo = findRepo(path)
   if (repo === undefined) {
@@ -2034,7 +2075,7 @@ function renderPrsPage(path) {
   }
 
   if (prsState?.path !== path) loadPrs(path)
-  if (!shownPrs().some((pr) => pr.number === selectedPr)) selectedPr = null
+  if (!prsState.loading && !shownPrs().some((pr) => pr.number === selectedPr)) selectedPr = null
 
   updatePrsPart('card', 'pr-card', prCardHtml(repo))
   updatePrsPart('list', 'pr-list', prListHtml(repo))
@@ -3384,8 +3425,39 @@ async function prCheckout(path, pr) {
   return folder
 }
 
-// Runs the PR action `action` on `pr` of the main checkout at `path`, after its checkout for every action but `github`. Does nothing while its checkout runs. The page actions run only while this PRs page shows.
+// Fetches `pr` of the main checkout at `path` again and replaces its row, or drops the row when the PR is no longer open.
+// Does nothing while its refresh runs. Tells the user the error.
+async function refreshPr(path, pr) {
+  const key = prBusyKey(path, pr)
+  if (prRefreshing.has(key)) return
+
+  prRefreshing.add(key)
+  render()
+
+  let reply
+  try {
+    reply = JSON.parse(await fetchText(`api/prs/view?path=${encodeURIComponent(path)}&number=${pr.number}`))
+  } catch (err) {
+    reply = { error: err.message, pr: null }
+  }
+  prRefreshing.delete(key)
+
+  const error = stringOrNull(reply?.error)
+  const fresh = reply?.pr !== null && typeof reply?.pr === 'object' ? reply.pr : null
+
+  if (error === null && prsState?.path === path) {
+    prsState.prs = fresh === null
+      ? prsState.prs.filter((shown) => shown.number !== pr.number)
+      : prsState.prs.map((shown) => (shown.number === pr.number ? fresh : shown))
+  }
+
+  render()
+  if (error !== null) await tell(`Could not refresh PR #${pr.number}: ${error}`)
+}
+
+// Runs the PR action `action` on `pr` of the main checkout at `path`, after its checkout for every action but `github` and `refresh`. Does nothing while its checkout runs. The page actions run only while this PRs page shows.
 async function runPrAction(path, pr, action) {
+  if (action === 'refresh') return refreshPr(path, pr)
   if (prBusy.has(prBusyKey(path, pr))) return
 
   if (action === 'github') {
@@ -3400,6 +3472,7 @@ async function runPrAction(path, pr, action) {
   const route = parseRoute(location.hash)
   if (route.kind !== 'prs' || route.path !== path) return
 
+  selectedPr = pr.number
   if (action === 'worktree') location.hash = worktreeHash(folder)
   else if (action === 'claude') openWorktree(folder, 'claude')
 }
@@ -3571,13 +3644,14 @@ function renderTabs(kind) {
   tabsHtml = html
 }
 
-// Shows the page of the route. While the editor is open, shows only the edited file. A new route ends lazygit. A route off the worktree pages parks the shown worktree terminal. A route off the worktree page of the edited tab name drops the edit. A route off the PRs page drops its PRs, selection and filter. A new session page records the worktree page it opens from.
+// Shows the page of the route. While the editor is open, shows only the edited file. A new route ends lazygit. A route off the worktree pages parks the shown worktree terminal. A route off the worktree page of the edited tab name drops the edit. A route off the PRs page drops its PRs, selection and filter. A new session page records the worktree page it opens from. A new worktree page records the PRs page it opens from.
 function render() {
   const route = parseRoute(location.hash)
   if (editing !== null && !routeShows(route, editing)) return
   if (terminal !== null && location.hash !== terminal.hash) closeTerminal()
   if (route.kind !== 'worktree') parkWorktreeTerminal()
   if (renaming !== null && (route.kind !== 'worktree' || route.path !== renaming.path)) renaming = null
+  if (route.kind === 'worktree') recordWorktreeOrigin(route)
 
   if (route.kind !== 'prs') {
     prsState = null
@@ -3604,6 +3678,18 @@ function render() {
   if (!session) return renderNotFound()
 
   renderSessionPage(session, route.path)
+}
+
+// Records the PRs page, its selection and its filter as the origin of the worktree page of `route` when it opens from that PRs page.
+// Keeps the origin on the same worktree page and on a return from a session it opened. Drops it on any other way in.
+function recordWorktreeOrigin(route) {
+  const shown = parseRoute(shownHash)
+  const origin = parseRoute(sessionOrigin)
+  const same = shown.kind === 'worktree' && shown.path === route.path
+  const back = shown.kind === 'session' && origin.kind === 'worktree' && origin.path === route.path
+
+  if (shown.kind === 'prs') worktreeOrigin = { hash: shownHash, selectedPr, prFilter }
+  else if (!same && !back) worktreeOrigin = null
 }
 
 // Renders the new route. Leaving the edited file asks to discard unsaved changes, and cancel restores the shown route.
@@ -3737,7 +3823,15 @@ function sessionKey(key, session) {
 }
 
 // Runs the worktree page shortcut for `key` on the worktree at `path` and returns true when it acted.
+// A back key returns to the PRs page it opened from, with its selection and filter, else to the repos page.
 function worktreeKey(key, path) {
+  if (BACK_KEYS.includes(key) && worktreeOrigin !== null) {
+    selectedPr = worktreeOrigin.selectedPr
+    prFilter = worktreeOrigin.prFilter
+    location.hash = worktreeOrigin.hash
+    return true
+  }
+
   if (BACK_KEYS.includes(key)) {
     selectedWorktree = path
     location.hash = '#/'

@@ -3172,13 +3172,15 @@ const fixLogin = { path: '/s/akka/sdk/fix-login', branch: 'alice/fix-login', hea
 // Returns a reply function that answers `api/prs` with `prs` and `error`.
 const prsJson = (prs, error = null) => () => response(JSON.stringify({ error, prs }))
 
-// Returns a dashboard on `hash` after one poll of an api that answers `api/repos` with `repos` and `api/prs?path=…` with `prsReply()`, once a reply that is ready has landed.
-async function prsApp(repos, prsReply, hash = prsHashOf(sdkMain)) {
+// Returns a dashboard on `hash` after one poll of an api that answers `api/repos` with `repos`, `api/prs?path=…` with `prsReply()`
+// and `api/prs/cached?path=…` with `cachedReply()`, once a reply that is ready has landed.
+async function prsApp(repos, prsReply, hash = prsHashOf(sdkMain), cachedReply = () => response('', false, { status: 404 })) {
   const app = dashboard({
     fetcher: (url) => {
       if (url === 'api/repos') return response(JSON.stringify(repos))
       if (url === 'api/sessions') return sessionsReply([])
       if (url.startsWith('api/prs?path=')) return prsReply()
+      if (url.startsWith('api/prs/cached?path=')) return cachedReply()
       return response('', false, { status: 404 })
     },
   })
@@ -3188,8 +3190,11 @@ async function prsApp(repos, prsReply, hash = prsHashOf(sdkMain)) {
   return app
 }
 
-// Returns the `api/prs` URLs the dashboard fetched.
-const prsCalls = (app) => app.calls.filter((url) => url.startsWith('api/prs'))
+// Returns the `api/prs?path=…` URLs the dashboard fetched.
+const prsCalls = (app) => app.calls.filter((url) => url.startsWith('api/prs?path='))
+
+// Returns the `api/prs/cached?path=…` URLs the dashboard fetched.
+const cachedCalls = (app) => app.calls.filter((url) => url.startsWith('api/prs/cached?path='))
 
 // Returns the PR rows of the PRs page, each with its class, its number, its body text, its chips text and its icons HTML.
 const prRows = (app) => [...app.elements.get('pr-list').innerHTML.matchAll(/<div class="(row pr[^"]*)" data-number="(\d+)">\s*<div class="body">([\s\S]*?)<\/div>\s*<div class="foot">\s*<div class="pr-chips">([\s\S]*?)<\/div>\s*<div class="actions">([\s\S]*?)<\/div>/g)]
@@ -3220,9 +3225,11 @@ test('the PRs page fetches the list once and shows it', async () => {
   const app = await prsApp(selectRepos, prsJson(prList))
 
   assert.deepEqual(prsCalls(app), ['api/prs?path=%2Fs%2Fakka%2Fsdk%2Fmain'])
+  assert.deepEqual(cachedCalls(app), ['api/prs/cached?path=%2Fs%2Fakka%2Fsdk%2Fmain'])
   await app.run('poll()')
   await settle()
   assert.deepEqual(prsCalls(app), ['api/prs?path=%2Fs%2Fakka%2Fsdk%2Fmain'])
+  assert.equal(cachedCalls(app).length, 1)
 
   assert.match(app.elements.get('page').innerHTML, /<input type="search" class="repo-filter" id="pr-filter" placeholder="Filter by number, title, author or branch"/)
   assert.equal(prCardText(app), 'akka/sdk akka/sdk/main 2 PRs')
@@ -3282,12 +3289,14 @@ test('the row icons show their keys', async () => {
     'zed: Open in Zed (e) #12',
     'intellij: Open in IntelliJ (i) #12',
     'github: Open on GitHub (o) #12',
+    'refresh: Refresh PR (u) #12',
   ])
   assert.deepEqual(icons(fresh), [
     'worktree: Check out and open worktree page (c) #7',
     'zed: Open in Zed (e) #7',
     'intellij: Open in IntelliJ (i) #7',
     'github: Open on GitHub (o) #7',
+    'refresh: Refresh PR (u) #7',
   ])
 
   const panel = '<rect x="2" y="2.5" width="12" height="11" rx="1.5"/><path d="M6.5 2.5v11"/>'
@@ -3320,6 +3329,51 @@ test('the PRs page states', async () => {
   const unknown = await prsApp(selectRepos, prsJson(prList), prsHashOf('/s/akka/sdk'))
   assert.equal(pageText(unknown), 'not a configured repo')
   assert.deepEqual(prsCalls(unknown), [])
+})
+
+test('the PRs page shows the cached list while the fresh list loads', async () => {
+  const releases = []
+  const fresh = () => new Promise((resolve) => releases.push(resolve))
+  const app = await prsApp(selectRepos, fresh, prsHashOf(sdkMain), prsJson(prList))
+
+  assert.deepEqual(prNumbers(app), [12, 7])
+  assert.equal(prCardText(app), 'akka/sdk akka/sdk/main 2 PRs refreshing…')
+
+  press(app, 'ArrowDown')
+  releases[0](prsJson([prList[1]])())
+  await settle()
+  assert.deepEqual(prNumbers(app), [7])
+  assert.equal(prCardText(app), 'akka/sdk akka/sdk/main 1 PR')
+  assert.equal(app.run('selectedPr'), null, 'a PR the fresh list drops loses the selection')
+
+  const empty = await prsApp(selectRepos, fresh, prsHashOf(sdkMain), prsJson(null))
+  assert.equal(prListText(empty), 'loading…')
+  assert.equal(prCardText(empty), 'akka/sdk akka/sdk/main')
+  releases[1](prsJson(prList)())
+  await settle()
+  assert.deepEqual(prNumbers(empty), [12, 7])
+})
+
+test('a cached list that lands after the fresh list is dropped', async () => {
+  let release
+  const late = () => new Promise((resolve) => { release = resolve })
+  const app = await prsApp(selectRepos, prsJson([prList[1]]), prsHashOf(sdkMain), late)
+
+  assert.deepEqual(prNumbers(app), [7])
+  release(prsJson(prList)())
+  await settle()
+  assert.deepEqual(prNumbers(app), [7])
+})
+
+test('a failed refresh keeps the cached list below its error', async () => {
+  const app = await prsApp(selectRepos, prsJson([], 'not logged in'), prsHashOf(sdkMain), prsJson(prList))
+
+  assert.match(prListText(app), /^not logged in/)
+  assert.deepEqual(prNumbers(app), [12, 7])
+  assert.equal(prCardText(app), 'akka/sdk akka/sdk/main 2 PRs')
+
+  typePrFilter(app, 'zzz')
+  assert.equal(prListText(app), 'not logged in No PR matches.')
 })
 
 test('leaving and reopening the PRs page fetches again', async () => {
@@ -3468,10 +3522,12 @@ const encodedFixLogin = '%2Fs%2Fakka%2Fsdk%2Ffix-login'
 const checkoutUrl = (number) => `api/prs/checkout?path=%2Fs%2Fakka%2Fsdk%2Fmain&number=${number}`
 
 // Returns a dashboard on the PRs page of `sdkMain` after one poll, with fake terminal classes, the POST URLs, and the hash at each `api/repos` fetch.
-// It answers `api/repos` with `repos`, `POST api/prs/open` with `openReply()`, and each checkout with the reply a test passes to the next of `checkouts`.
-async function checkoutApp(repos = plain(selectRepos), openReply = () => response('', true, { status: 204 })) {
+// It answers `api/repos` with `repos`, `api/sessions` with `sessions`, `POST api/prs/open` with `openReply()`,
+// and each checkout and PR view with the reply a test passes to the next of `checkouts` and `views`.
+async function checkoutApp(repos = plain(selectRepos), openReply = () => response('', true, { status: 204 }), sessions = []) {
   const posts = []
   const checkouts = []
+  const views = []
   const reposHashes = []
   const app = dashboard({
     fetcher: (url, options) => {
@@ -3485,8 +3541,9 @@ async function checkoutApp(repos = plain(selectRepos), openReply = () => respons
         reposHashes.push(app.context.location.hash)
         return response(JSON.stringify(repos))
       }
-      if (url === 'api/sessions') return sessionsReply([])
+      if (url === 'api/sessions') return sessionsReply(sessions.map(sessionEntry))
       if (url.startsWith('api/prs?path=')) return prsJson(prList)()
+      if (url.startsWith('api/prs/view?')) return new Promise((resolve) => views.push(resolve))
       return response('', false, { status: 404 })
     },
   })
@@ -3494,7 +3551,7 @@ async function checkoutApp(repos = plain(selectRepos), openReply = () => respons
   app.context.location.hash = prsHashOf(sdkMain)
   await app.run('poll()')
   await settle()
-  return { app, posts, checkouts, repos, reposHashes, ...stubs }
+  return { app, posts, checkouts, views, repos, reposHashes, ...stubs }
 }
 
 // Answers the first pending checkout with the path of `worktree`, which `api/repos` lists from then on, and waits for the board.
@@ -3652,16 +3709,17 @@ test('the row icons run the same actions', async () => {
     'api/prs/open?path=%2Fs%2Fakka%2Fsdk%2Fmain&number=12',
   ])
   assert.equal(app.context.location.hash, prsHashOf(sdkMain))
-  assert.equal(app.run('selectedPr'), null)
+  assert.equal(app.run('selectedPr'), 12, 'the worktree icon selects its PR')
 
   const docs = { path: '/s/akka/sdk/docs', branch: 'docs', head: null }
   clickPrIcon(app, 7, 'worktree')
   await settle()
   assert.deepEqual(posts.slice(3), [checkoutUrl(7)])
-  assert.deepEqual(prClasses(app), ['row pr', 'row pr busy'])
+  assert.deepEqual(prClasses(app), ['row pr selected', 'row pr busy'])
 
   await finishCheckout(stubs, docs)
   assert.equal(app.context.location.hash, worktreeHashOf(docs.path))
+  assert.equal(app.run('selectedPr'), 7)
 })
 
 test('a failed checkout tells the error and clears the busy state', async () => {
@@ -3712,4 +3770,122 @@ test('leaving the PRs page during a checkout stays where the user went', async (
   await finishCheckout(stubs)
   assert.deepEqual(posts, [checkoutUrl(12), `api/open/zed?path=${encodedFixLogin}`])
   assert.equal(app.context.location.hash, '#/sessions')
+})
+
+// Returns the view URL of PR `number` of `sdkMain`.
+const viewUrl = (number) => `api/prs/view?path=%2Fs%2Fakka%2Fsdk%2Fmain&number=${number}`
+
+// Returns the `api/prs/view` URLs the dashboard fetched.
+const viewCalls = (app) => app.calls.filter((url) => url.startsWith('api/prs/view?'))
+
+test('u refreshes the selected PR and replaces its row', async () => {
+  const { app, views } = await checkoutApp()
+  press(app, 'ArrowDown')
+
+  assert.ok(press(app, 'u'))
+  press(app, 'u')
+  assert.deepEqual(viewCalls(app), [viewUrl(12)], 'a second key during a refresh sends nothing')
+  assert.deepEqual(prClasses(app), ['row pr selected busy', 'row pr'])
+  assert.match(prRows(app)[0].text, /refreshing…/)
+
+  views.shift()(response(JSON.stringify({ error: null, pr: { ...prList[0], title: 'Fix login v2', ci: 'failing' } })))
+  await settle()
+  assert.deepEqual(prClasses(app), ['row pr selected', 'row pr'])
+  assert.equal(prRows(app)[0].text, '#12 Fix login v2 alice · +10 −3 CI failing · approved')
+  assert.equal(app.run('prRefreshing.size'), 0)
+  assert.equal(prsCalls(app).length, 1)
+})
+
+test('the refresh icon drops a PR that is no longer open', async () => {
+  const { app, views } = await checkoutApp()
+
+  clickPrIcon(app, 7, 'refresh')
+  assert.deepEqual(viewCalls(app), [viewUrl(7)])
+  views.shift()(response(JSON.stringify({ error: null, pr: null })))
+  await settle()
+  assert.deepEqual(prNumbers(app), [12])
+  assert.equal(prCardText(app), 'akka/sdk akka/sdk/main 1 PR')
+})
+
+test('a failed refresh tells the error and keeps the row', async () => {
+  const { app, views } = await checkoutApp()
+  press(app, 'ArrowDown')
+
+  assert.ok(press(app, 'u'))
+  views.shift()(response(JSON.stringify({ error: 'not logged in', pr: null })))
+  await settle()
+  assert.equal(app.elements.get('modal').open, true)
+  assert.equal(app.elements.get('modal-text').textContent, 'Could not refresh PR #12: not logged in')
+  assert.deepEqual(prNumbers(app), [12, 7])
+  assert.deepEqual(prClasses(app), ['row pr selected', 'row pr'])
+
+  closeModal(app, '')
+  assert.ok(press(app, 'u'))
+  views.shift()(response('', false, { status: 500 }))
+  await settle()
+  assert.equal(app.elements.get('modal-text').textContent, `Could not refresh PR #12: 500 ${viewUrl(12)}`)
+  assert.deepEqual(prNumbers(app), [12, 7])
+})
+
+test('a back key on a worktree page opened from the PRs page returns to it with its selection and filter', async () => {
+  const repos = plain(selectRepos)
+  repos.repos[0].worktrees.push(fixLogin)
+
+  for (const [key, modifiers] of [['l'], ['Escape'], ['[', { metaKey: true }]]) {
+    const { app } = await checkoutApp(repos)
+    typePrFilter(app, 'fix')
+    press(app, 'ArrowDown')
+
+    assert.ok(press(app, 'c'))
+    await settle()
+    app.window.dispatch('hashchange')
+    assert.equal(app.context.location.hash, worktreeHashOf(fixLogin.path))
+    assert.equal(app.run('prFilter'), '')
+
+    assert.ok(press(app, key, modifiers), `${key} is taken`)
+    assert.equal(app.context.location.hash, prsHashOf(sdkMain))
+    app.window.dispatch('hashchange')
+    await settle()
+    assert.equal(app.elements.get('pr-filter').value, 'fix')
+    assert.deepEqual(prClasses(app), ['row pr selected'])
+    assert.equal(app.run('selectedPr'), 12)
+  }
+})
+
+test('the PRs page origin survives a session opened from the worktree page', async () => {
+  const repos = plain(selectRepos)
+  repos.repos[0].worktrees.push(fixLogin)
+  const fixSession = { ...session, org: 'akka', repo: 'sdk', branch: 'fix-login', id: 's2', dir: 'api/file/akka/sdk/fix-login/s2/', worktree: fixLogin.path }
+  const { app } = await checkoutApp(repos, undefined, [fixSession])
+  press(app, 'ArrowDown')
+
+  assert.ok(press(app, 'c'))
+  await settle()
+  app.window.dispatch('hashchange')
+
+  navigate(app, '#/akka/sdk/fix-login/s2')
+  await settle()
+  assert.ok(press(app, 'Escape'))
+  assert.equal(app.context.location.hash, worktreeHashOf(fixLogin.path))
+  app.window.dispatch('hashchange')
+
+  assert.ok(press(app, 'Escape'))
+  assert.equal(app.context.location.hash, prsHashOf(sdkMain))
+})
+
+test('a worktree page opened another way returns to the repos page', async () => {
+  const repos = plain(selectRepos)
+  repos.repos[0].worktrees.push(fixLogin)
+  const { app } = await checkoutApp(repos)
+  press(app, 'ArrowDown')
+
+  assert.ok(press(app, 'c'))
+  await settle()
+  app.window.dispatch('hashchange')
+
+  navigate(app, '#/')
+  navigate(app, worktreeHashOf(fixLogin.path))
+  assert.ok(press(app, 'Escape'))
+  assert.equal(app.context.location.hash, '#/')
+  assert.equal(app.run('selectedWorktree'), fixLogin.path)
 })

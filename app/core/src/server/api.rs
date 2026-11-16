@@ -37,7 +37,7 @@ pub fn get(store: &dyn Store, repos: &dyn RepoList, target: &str) -> Response {
     let result = match segments.as_slice() {
         ["", "api", "sessions"] => sessions(store),
         ["", "api", "repos"] => Ok(json_response(&repos_json(repos))),
-        ["", "api", "prs"] => return prs::get(repos, target),
+        ["", "api", "prs", ..] => return prs::get(repos, target),
         ["", "api", "files", org, repo, branch, id] => files(store, [org, repo, branch, id]),
         ["", "api", "file", org, repo, branch, id, path @ ..] if !path.is_empty() => {
             file(store, [org, repo, branch, id], path)
