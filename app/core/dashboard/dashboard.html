@@ -199,7 +199,7 @@
   .row.main.error { --tone: var(--muted); color: var(--muted); }
 
   .row:has(> a.body:hover),
-  .row.pr:has(> .body:hover) {
+  .row.pr:hover {
     border-color: var(--accent);
     border-left-color: var(--tone, var(--accent));
   }
@@ -229,8 +229,42 @@
     grid-template-columns: minmax(0, 1fr) auto;
   }
 
-  .row.pr .body { cursor: pointer; }
+  .row.pr { grid-template-columns: minmax(0, 1fr); cursor: pointer; }
+  .row.pr .body { gap: 4px 16px; padding-bottom: 4px; }
+  .row.pr .body > :nth-child(even) { justify-self: end; }
   .row.pr.busy .actions { opacity: 0.4; }
+
+  .row.pr .foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 0 0 6px 14px;
+  }
+
+  .pr-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+
+  .pr-chip {
+    padding: 1px 8px;
+    color: var(--chip);
+    font-size: 0.8rem;
+    background: color-mix(in srgb, var(--chip) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--chip) 45%, transparent);
+    border-radius: 999px;
+  }
+
+  .pr-chip.to-review { --chip: var(--warning); }
+  .pr-chip.reviewed { --chip: var(--good); }
+  .pr-chip.draft { --chip: var(--muted); }
+
+  .row .ci::before,
+  .row .review::before { content: '● '; }
+
+  .row .ci.passing, .row .review.approved { color: var(--good); }
+  .row .ci.failing, .row .review.changes-requested { color: var(--critical); }
+  .row .ci.pending, .row .review.review-required { color: var(--warning); }
+  .row .ci.none, .row .review.none { color: var(--muted); }
+  .row .review { cursor: help; }
 
   .row .actions {
     display: flex;
@@ -995,7 +1029,7 @@ const ACTION_ICONS = {
   zed: '<path d="M3.5 3.5h9l-9 9h9"/>',
   iterm: '<path d="M3 4.5 6.5 8 3 11.5M8.5 11.5H13"/>',
   lazygit: '<circle cx="5" cy="3.5" r="1.5"/><circle cx="5" cy="12.5" r="1.5"/><circle cx="11" cy="5.5" r="1.5"/><path d="M5 5v6M11 7c0 2.5-6 2-6 4"/>',
-  github: '<path d="M9 2.5h4.5V7M13.5 2.5 7.5 8.5M11.5 9.5v4h-9v-9h4"/>',
+  github: '<path fill="currentColor" stroke="none" d="M8 0c4.42 0 8 3.58 8 8a8.013 8.013 0 0 1-5.45 7.59c-.4.08-.55-.17-.55-.38 0-.27.01-1.13.01-2.2 0-.75-.25-1.23-.54-1.48 1.78-.2 3.65-.88 3.65-3.95 0-.88-.31-1.59-.82-2.15.08-.2.36-1.02-.08-2.12 0 0-.67-.22-2.2.82-.64-.18-1.32-.27-2-.27-.68 0-1.36.09-2 .27-1.53-1.03-2.2-.82-2.2-.82-.44 1.1-.16 1.92-.08 2.12-.51.56-.82 1.28-.82 2.15 0 3.06 1.86 3.75 3.64 3.95-.23.2-.44.55-.51 1.07-.46.21-1.61.55-2.33-.66-.15-.24-.6-.83-1.23-.82-.67.01-.27.38.01.53.34.19.73.9.82 1.13.16.45.68 1.31 2.69.94 0 .67.01 1.3.01 1.49 0 .21-.15.45-.55.38A7.995 7.995 0 0 1 0 8c0-4.42 3.58-8 8-8Z"/>',
   archive: '<rect x="2" y="2.5" width="12" height="3" rx=".5"/><path d="M3 5.5v8h10v-8M6.5 8h3"/>',
   worktree: '<rect x="2" y="2.5" width="12" height="11" rx="1.5"/><path d="M6.5 2.5v11"/>',
 }
@@ -1021,6 +1055,14 @@ const PR_ACTIONS = [
 ]
 // The title of the worktree icon of a PR that no worktree holds.
 const PR_CHECKOUT_TITLE = 'Check out and open worktree page (c)'
+const CI_LABELS = { none: 'no CI', pending: 'CI running', passing: 'CI passing', failing: 'CI failing' }
+const REVIEW_LABELS = {
+  none: 'no reviews',
+  commented: 'commented',
+  'review-required': 'review required',
+  approved: 'approved',
+  'changes-requested': 'changes requested',
+}
 const TOOL_LABELS = { intellij: 'IntelliJ', zed: 'Zed', iterm: 'iTerm', github: 'GitHub' }
 const ACTION_KEYS = { a: 'archive', t: 'iterm', e: 'zed', i: 'intellij', o: 'github', g: 'lazygit' }
 const WORKTREE_KEYS = { o: 'github', i: 'intellij', e: 'zed', g: 'lazygit', t: 'shell' }
@@ -1868,22 +1910,45 @@ function prBusyKey(path, pr) {
   return `${path}#${pr.number}`
 }
 
-// Returns the row of `pr` in `repo`, outlined when `selected`: its number, title, draft pill, checkout state or worktree marker, author, line counts and icons.
+// Returns the hover text of the review state of `pr`: each reviewer with the state of their latest review.
+function reviewersTitle(pr) {
+  if (pr.reviewers.length === 0) return 'No reviews yet'
+  return `Reviewed by ${pr.reviewers.map((reviewer) => `${reviewer.login} (${reviewer.state})`).join(', ')}`
+}
+
+// Returns the chips of `pr`: reviewed or to review, then draft.
+function prChips(pr) {
+  const chips = []
+  if (pr.reviewers.length > 0) chips.push('<span class="pr-chip reviewed">reviewed</span>')
+  else if (pr.reviewRequested) chips.push('<span class="pr-chip to-review">to review</span>')
+  if (pr.draft) chips.push('<span class="pr-chip draft">draft</span>')
+  return chips.join('')
+}
+
+// Returns the row of `pr` in `repo`, outlined when `selected`: number, title, author and line counts; checkout state or worktree marker, CI and review states; chips and icons.
 function prRowHtml(repo, pr, selected) {
   const worktree = prWorktree(repo, pr)
   const busy = prBusy.has(prBusyKey(repo.path, pr))
   const number = escape(pr.number)
-  const draft = pr.draft ? ' <span class="pill">draft</span>' : ''
-  const marker = worktree !== undefined ? `<span class="marker">● ${escape(shortPath(worktree.path))}</span> · ` : ''
-  const status = busy ? '<span class="marker">checking out…</span> · ' : marker
+
   const lines = `<span class="added">+${escape(pr.additions)}</span> <span class="deleted">−${escape(pr.deletions)}</span>`
+  const marker = worktree !== undefined ? `<span class="marker">● ${escape(shortPath(worktree.path))}</span>` : ''
+  const checkout = busy ? '<span class="marker">checking out…</span>' : marker
+  const ci = `<span class="ci ${escape(pr.ci)}">${escape(CI_LABELS[pr.ci] ?? pr.ci)}</span>`
+  const review = `<span class="review ${escape(pr.review)}" title="${escape(reviewersTitle(pr))}">${escape(REVIEW_LABELS[pr.review] ?? pr.review)}</span>`
+
   return `
     <div class="row pr${selected ? ' selected' : ''}${busy ? ' busy' : ''}" data-number="${number}">
       <div class="body">
-        <span class="name"><span class="id">#${number}</span> ${escape(pr.title)}${draft}</span>
-        <span class="label">${status}${escape(pr.author)} · ${lines}</span>
+        <span class="name"><span class="id">#${number}</span> ${escape(pr.title)}</span>
+        <span class="label">${escape(pr.author)} · ${lines}</span>
+        <span class="label">${checkout}</span>
+        <span class="label">${ci} · ${review}</span>
       </div>
-      <div class="actions">${actionButtons(prActions(worktree !== undefined), ` data-number="${number}"`)}</div>
+      <div class="foot">
+        <div class="pr-chips">${prChips(pr)}</div>
+        <div class="actions">${actionButtons(prActions(worktree !== undefined), ` data-number="${number}"`)}</div>
+      </div>
     </div>`
 }
 
@@ -1967,7 +2032,7 @@ function shownPr(number) {
   return shownPrs().find((pr) => pr.number === number)
 }
 
-// Runs the action of the clicked PR icon, or selects the PR whose row body was clicked.
+// Runs the action of the clicked PR icon, or selects the PR whose row was clicked.
 function onPrListClick(event) {
   const button = event.target.closest('button[data-action]')
   if (button) {
@@ -1976,10 +2041,10 @@ function onPrListClick(event) {
     return
   }
 
-  const body = event.target.closest('.row.pr > .body')
-  if (!body) return
+  const row = event.target.closest('.row.pr')
+  if (!row) return
 
-  selectedPr = Number(body.parentElement.dataset.number)
+  selectedPr = Number(row.dataset.number)
   renderPrsPage(prsView.path)
 }
 

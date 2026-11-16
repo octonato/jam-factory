@@ -22,6 +22,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use serde::de::IgnoredAny;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -30,7 +31,7 @@ use super::http::{Request, Response};
 use super::repos::{Repo, RepoList, find_main};
 
 /// The fields that `gh pr list` prints for each pull request.
-pub const LIST_FIELDS: &str = "number,title,author,headRefName,headRepositoryOwner,isCrossRepository,isDraft,additions,deletions,url,updatedAt";
+pub const LIST_FIELDS: &str = "number,title,author,headRefName,headRepositoryOwner,isCrossRepository,isDraft,additions,deletions,url,updatedAt,statusCheckRollup,reviewDecision,latestReviews,reviewRequests";
 
 /// The fields that `gh pr view` prints for the pull request to check out.
 const HEAD_FIELDS: &str = "headRefName,headRepositoryOwner,isCrossRepository";
@@ -96,6 +97,7 @@ impl Runner for SystemRunner {
 
 /// An open pull request.
 #[derive(Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Pr {
     pub number: u64,
     pub title: String,
@@ -105,6 +107,38 @@ pub struct Pr {
     pub additions: u64,
     pub deletions: u64,
     pub url: String,
+    pub ci: Ci,
+    pub review: Review,
+    pub reviewers: Vec<Reviewer>,
+    pub review_requested: bool,
+}
+
+/// The combined state of the checks of a pull request, from the least to the most severe.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Ci {
+    None,
+    Passing,
+    Pending,
+    Failing,
+}
+
+/// The review state of a pull request, from the least to the most severe.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Review {
+    None,
+    Commented,
+    ReviewRequired,
+    Approved,
+    ChangesRequested,
+}
+
+/// The latest submitted review of one reviewer.
+#[derive(Debug, PartialEq, Serialize)]
+pub struct Reviewer {
+    pub login: String,
+    pub state: String,
 }
 
 /// A pull request in the output of `gh pr list`.
@@ -122,6 +156,87 @@ struct ListedPr {
     deletions: u64,
     url: String,
     updated_at: String,
+    #[serde(default)]
+    status_check_rollup: Vec<Check>,
+    #[serde(default)]
+    review_decision: Option<String>,
+    #[serde(default)]
+    latest_reviews: Vec<ListedReview>,
+    #[serde(default)]
+    review_requests: Vec<IgnoredAny>,
+}
+
+/// A check run or a commit status in the `statusCheckRollup` of `gh pr list`.
+#[derive(Deserialize)]
+struct Check {
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    conclusion: Option<String>,
+    #[serde(default)]
+    state: Option<String>,
+}
+
+impl Check {
+    /// The state of the check: a commit status by its `state`, a check run by its `status` and `conclusion`.
+    fn ci(&self) -> Ci {
+        if let Some(state) = &self.state {
+            return match state.as_str() {
+                "SUCCESS" => Ci::Passing,
+                "FAILURE" | "ERROR" => Ci::Failing,
+                _ => Ci::Pending,
+            };
+        }
+
+        if self.status.as_deref() != Some("COMPLETED") {
+            return Ci::Pending;
+        }
+
+        match self.conclusion.as_deref() {
+            Some("FAILURE" | "TIMED_OUT" | "CANCELLED" | "ACTION_REQUIRED" | "STARTUP_FAILURE") => {
+                Ci::Failing
+            }
+            _ => Ci::Passing,
+        }
+    }
+}
+
+/// A review in the `latestReviews` of `gh pr list`.
+#[derive(Deserialize)]
+struct ListedReview {
+    #[serde(default)]
+    author: Option<Author>,
+    state: String,
+}
+
+impl ListedReview {
+    /// The review state this review gives the pull request.
+    fn review(&self) -> Review {
+        match self.state.as_str() {
+            "APPROVED" => Review::Approved,
+            "CHANGES_REQUESTED" => Review::ChangesRequested,
+            _ => Review::Commented,
+        }
+    }
+}
+
+/// The most severe state of `checks`, or `Ci::None` without checks.
+fn ci_state(checks: &[Check]) -> Ci {
+    checks.iter().map(Check::ci).max().unwrap_or(Ci::None)
+}
+
+/// The review state of a pull request: its `decision` when GitHub gives one, else the most severe of `reviews`.
+fn review_state(decision: Option<&str>, reviews: &[ListedReview]) -> Review {
+    match decision {
+        Some("APPROVED") => Review::Approved,
+        Some("CHANGES_REQUESTED") => Review::ChangesRequested,
+        Some("REVIEW_REQUIRED") => Review::ReviewRequired,
+        _ => reviews
+            .iter()
+            .map(ListedReview::review)
+            .max()
+            .unwrap_or(Review::None),
+    }
 }
 
 /// The author of a pull request in the output of `gh pr list`.
@@ -167,7 +282,24 @@ impl Head {
 }
 
 impl From<ListedPr> for Pr {
-    fn from(pr: ListedPr) -> Pr {
+    fn from(mut pr: ListedPr) -> Pr {
+        pr.latest_reviews.retain(|review| review.state != "PENDING");
+
+        let ci = ci_state(&pr.status_check_rollup);
+        let review = review_state(pr.review_decision.as_deref(), &pr.latest_reviews);
+        let review_requested = !pr.review_requests.is_empty();
+
+        let reviewers = pr
+            .latest_reviews
+            .into_iter()
+            .map(|listed| Reviewer {
+                login: listed
+                    .author
+                    .map_or_else(|| GHOST.to_string(), |author| author.login),
+                state: listed.state.to_lowercase().replace('_', " "),
+            })
+            .collect();
+
         Pr {
             number: pr.number,
             title: pr.title,
@@ -179,6 +311,10 @@ impl From<ListedPr> for Pr {
             additions: pr.additions,
             deletions: pr.deletions,
             url: pr.url,
+            ci,
+            review,
+            reviewers,
+            review_requested,
         }
     }
 }
@@ -432,7 +568,36 @@ mod tests {
             "deletions": number,
             "url": format!("https://github.com/o/r/pull/{number}"),
             "updatedAt": format!("2026-11-{day:02}T10:00:00Z"),
+            "statusCheckRollup": [],
+            "reviewDecision": "",
+            "latestReviews": [],
+            "reviewRequests": [],
         })
+    }
+
+    /// A check run in `status` with `conclusion`.
+    fn check_run(status: &str, conclusion: &str) -> Value {
+        json!({ "__typename": "CheckRun", "name": "build", "status": status, "conclusion": conclusion })
+    }
+
+    /// A commit status in `state`.
+    fn status_context(state: &str) -> Value {
+        json!({ "__typename": "StatusContext", "context": "ci/legacy", "state": state })
+    }
+
+    /// A latest review by `login` in `state`.
+    fn review(login: &str, state: &str) -> Value {
+        json!({ "author": { "login": login }, "state": state, "body": "" })
+    }
+
+    /// The CI state of the PR whose `statusCheckRollup` is `checks`.
+    fn ci_of(checks: Value) -> Ci {
+        let pr = with_fields(
+            listed(1, json!({ "login": "alice" }), 1),
+            json!({ "statusCheckRollup": checks }),
+        );
+
+        parse_prs(&json!([pr]).to_string()).unwrap().remove(0).ci
     }
 
     /// The `gh pr view` head of a PR on `branch` in the repository of `owner`, cross-repo when `cross`.
@@ -444,9 +609,9 @@ mod tests {
         })
     }
 
-    /// The `gh pr list` entry `pr` with the fields of `head`.
-    fn with_head(mut pr: Value, head: Value) -> Value {
-        for (name, value) in head.as_object().unwrap() {
+    /// The `gh pr list` entry `pr` with the fields of `fields`.
+    fn with_fields(mut pr: Value, fields: Value) -> Value {
+        for (name, value) in fields.as_object().unwrap() {
             pr[name] = value.clone();
         }
 
@@ -669,9 +834,134 @@ esac
                 additions: 30,
                 deletions: 3,
                 url: "https://github.com/o/r/pull/3".to_string(),
+                ci: Ci::None,
+                review: Review::None,
+                reviewers: vec![],
+                review_requested: false,
             }
         );
         assert!(!prs[1].draft);
+    }
+
+    #[test]
+    fn ci_is_the_most_severe_check() {
+        let passed = check_run("COMPLETED", "SUCCESS");
+        let skipped = check_run("COMPLETED", "SKIPPED");
+        let running = check_run("IN_PROGRESS", "");
+        let failed = check_run("COMPLETED", "FAILURE");
+
+        assert_eq!(ci_of(json!([])), Ci::None);
+        assert_eq!(ci_of(json!([passed, skipped])), Ci::Passing);
+        assert_eq!(ci_of(json!([passed, running])), Ci::Pending);
+        assert_eq!(ci_of(json!([running, failed, passed])), Ci::Failing);
+        assert_eq!(
+            ci_of(json!([check_run("COMPLETED", "CANCELLED")])),
+            Ci::Failing
+        );
+        assert_eq!(ci_of(json!([check_run("QUEUED", "")])), Ci::Pending);
+    }
+
+    #[test]
+    fn ci_reads_commit_statuses() {
+        assert_eq!(ci_of(json!([status_context("SUCCESS")])), Ci::Passing);
+        assert_eq!(ci_of(json!([status_context("PENDING")])), Ci::Pending);
+        assert_eq!(ci_of(json!([status_context("ERROR")])), Ci::Failing);
+        assert_eq!(ci_of(json!([status_context("FAILURE")])), Ci::Failing);
+    }
+
+    #[test]
+    fn review_takes_the_decision_or_the_latest_reviews() {
+        let alice = json!({ "login": "alice" });
+        let entry = |number, decision: &str, reviews: Value| {
+            with_fields(
+                listed(number, alice.clone(), number as u32),
+                json!({ "reviewDecision": decision, "latestReviews": reviews }),
+            )
+        };
+        let json = json!([
+            entry(1, "", json!([])),
+            entry(2, "", json!([review("bob", "COMMENTED")])),
+            entry(
+                3,
+                "",
+                json!([review("bob", "APPROVED"), review("carol", "COMMENTED")])
+            ),
+            entry(
+                4,
+                "",
+                json!([
+                    review("bob", "APPROVED"),
+                    review("carol", "CHANGES_REQUESTED")
+                ])
+            ),
+            entry(5, "REVIEW_REQUIRED", json!([review("bob", "COMMENTED")])),
+            entry(6, "APPROVED", json!([])),
+            entry(7, "CHANGES_REQUESTED", json!([])),
+        ]);
+
+        let prs = parse_prs(&json.to_string()).unwrap();
+        let reviews: Vec<(u64, Review)> = prs.iter().map(|pr| (pr.number, pr.review)).collect();
+
+        assert_eq!(
+            reviews,
+            [
+                (7, Review::ChangesRequested),
+                (6, Review::Approved),
+                (5, Review::ReviewRequired),
+                (4, Review::ChangesRequested),
+                (3, Review::Approved),
+                (2, Review::Commented),
+                (1, Review::None),
+            ]
+        );
+    }
+
+    #[test]
+    fn reviewers_skip_pending_reviews() {
+        let pr = with_fields(
+            listed(1, json!({ "login": "alice" }), 1),
+            json!({
+                "latestReviews": [
+                    review("bob", "CHANGES_REQUESTED"),
+                    review("carol", "PENDING"),
+                    { "author": null, "state": "COMMENTED" },
+                ],
+                "reviewRequests": [{ "__typename": "Team", "name": "core", "slug": "core" }],
+            }),
+        );
+
+        let prs = parse_prs(&json!([pr]).to_string()).unwrap();
+
+        assert_eq!(
+            prs[0].reviewers,
+            [
+                Reviewer {
+                    login: "bob".to_string(),
+                    state: "changes requested".to_string()
+                },
+                Reviewer {
+                    login: "ghost".to_string(),
+                    state: "commented".to_string()
+                },
+            ]
+        );
+        assert!(prs[0].review_requested);
+    }
+
+    #[test]
+    fn prs_serialize_in_camel_case() {
+        let pr = with_fields(
+            listed(1, json!({ "login": "alice" }), 1),
+            json!({ "reviewDecision": "CHANGES_REQUESTED", "statusCheckRollup": [check_run("IN_PROGRESS", "")] }),
+        );
+
+        let prs = parse_prs(&json!([pr]).to_string()).unwrap();
+        let value = serde_json::to_value(&prs[0]).unwrap();
+
+        assert_eq!(value["ci"], "pending");
+        assert_eq!(value["review"], "changes-requested");
+        assert_eq!(value["reviewRequested"], false);
+        assert_eq!(value["reviewers"], json!([]));
     }
 
     #[test]
@@ -700,19 +990,19 @@ esac
     fn a_cross_repo_pr_branch_has_the_owner() {
         let alice = json!({ "login": "alice" });
         let json = json!([
-            with_head(
+            with_fields(
                 listed(1, alice.clone(), 4),
                 head("patch-1", owner("bob"), true)
             ),
-            with_head(
+            with_fields(
                 listed(2, alice.clone(), 3),
                 head("patch-1", owner("o"), false)
             ),
-            with_head(
+            with_fields(
                 listed(3, alice.clone(), 2),
                 head("patch-1", owner(""), true)
             ),
-            with_head(listed(4, alice, 1), head("patch-1", Value::Null, true)),
+            with_fields(listed(4, alice, 1), head("patch-1", Value::Null, true)),
         ]);
 
         let prs = parse_prs(&json.to_string()).unwrap();
@@ -758,6 +1048,10 @@ esac
                     "additions": 120,
                     "deletions": 12,
                     "url": "https://github.com/o/r/pull/12",
+                    "ci": "none",
+                    "review": "none",
+                    "reviewers": [],
+                    "reviewRequested": false,
                 }],
             })
         );
