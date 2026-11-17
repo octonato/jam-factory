@@ -14,11 +14,13 @@
 
 //! Runs a program on a pseudo-terminal.
 
+use std::collections::HashMap;
 use std::env;
 use std::ffi::{OsStr, OsString};
 use std::io::{self, Read, Write};
 use std::mem;
 use std::path::Path;
+use std::process::{self, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 
@@ -130,6 +132,43 @@ impl Pty {
             .resize(size(cols, rows))
             .map_err(|error| error.to_string())
     }
+
+    /// The leader of the terminal's foreground process group, when it is not the program.
+    pub fn foreground(&self) -> Option<u32> {
+        let leader = u32::try_from(self.master.process_group_leader()?).ok()?;
+        (Some(leader) != self.child.process_id()).then_some(leader)
+    }
+}
+
+/// The command name of each process in `pids` that runs, by pid.
+pub fn command_names(pids: &[u32]) -> HashMap<u32, String> {
+    if pids.is_empty() {
+        return HashMap::new();
+    }
+
+    let list: Vec<String> = pids.iter().map(u32::to_string).collect();
+    let output = process::Command::new("ps")
+        .args(["-o", "pid=,args=", "-p", &list.join(",")])
+        .stderr(Stdio::null())
+        .output();
+
+    match output {
+        Ok(output) => parse_command_names(&String::from_utf8_lossy(&output.stdout)),
+        Err(_) => HashMap::new(),
+    }
+}
+
+/// The pid and command name of each `ps -o pid=,args=` line of `text`.
+fn parse_command_names(text: &str) -> HashMap<u32, String> {
+    text.lines()
+        .filter_map(|line| {
+            let mut words = line.split_whitespace();
+            let pid = words.next()?.parse().ok()?;
+            let program = words.next()?.trim_start_matches('-');
+            let name = Path::new(program).file_name()?.to_string_lossy();
+            Some((pid, name.into_owned()))
+        })
+        .collect()
 }
 
 impl Drop for Pty {
@@ -368,6 +407,53 @@ mod tests {
             assert!(Instant::now() < deadline, "{pid} still runs");
             thread::sleep(Duration::from_millis(20));
         }
+    }
+
+    #[test]
+    fn foreground_is_the_job_the_shell_runs() {
+        let dir = tempfile::tempdir().unwrap();
+        let program = Program {
+            name: "sh".to_string(),
+            args: vec!["-i".to_string()],
+        };
+        let mut pty = Pty::spawn(&program, dir.path(), 80, 24).unwrap();
+        assert_eq!(pty.foreground(), None);
+
+        pty.write(b"sleep 60\r").unwrap();
+
+        let deadline = Instant::now() + TIMEOUT;
+        loop {
+            let names = pty.foreground().map(|pid| command_names(&[pid]));
+            if names.is_some_and(|names| names.values().any(|name| name == "sleep")) {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "sleep never ran in the foreground"
+            );
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    #[test]
+    fn command_names_are_the_base_names_of_the_programs() {
+        let names = parse_command_names(
+            "  12 /usr/bin/vim notes.md\n345 -zsh\n 6 claude --resume\nbad line\n",
+        );
+
+        assert_eq!(
+            names,
+            HashMap::from([
+                (12, "vim".to_string()),
+                (345, "zsh".to_string()),
+                (6, "claude".to_string()),
+            ])
+        );
+    }
+
+    #[test]
+    fn command_names_of_no_pids_is_empty() {
+        assert!(command_names(&[]).is_empty());
     }
 
     #[test]

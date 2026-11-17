@@ -376,7 +376,6 @@
   .session-page.zoomed #metro-pane,
   .session-page.zoomed #splitter,
   .session-page.zoomed #worktree-sessions,
-  .session-page.zoomed .term-tabs:not(:has(.term-rename)),
   .session-page.zoomed .viewer-head {
     display: none;
   }
@@ -1077,6 +1076,8 @@ const TABS = [
 ]
 // The close code of a terminal socket whose terminal another window took.
 const TAKEN_CODE = 4001
+// The bytes a terminal tab sends for Shift+Enter: Escape then Return.
+const SHIFT_ENTER = '\x1b\r'
 const REPOS_HELP = `
   <p class="empty">Add <code>repos</code>, a list of paths to main checkouts, to <code>~/.jam-factory/config.json</code>:</p>
   <pre class="config-example">{
@@ -1824,7 +1825,7 @@ function terminalsHtml() {
     const rows = terms.tabs.map((tab) => `
       <div class="row worktree${isSelectedTerm(path, tab) ? ' selected' : ''}">
         <a class="body" href="${escape(worktreeHash(path))}" data-path="${escape(path)}" data-tab="${tab.id}">
-          <span class="name"><span class="id">${escape(tab.name)}</span></span>
+          <span class="name"><span class="id">${escape(tabTitle(tab))}</span></span>
           <span class="label">${escape(terminalLabel(tab))}</span>
         </a>
       </div>`).join('')
@@ -1947,13 +1948,13 @@ function worktreeSessionsHtml(path) {
 // Returns the tab strip of `terms`: one tab per terminal with its close button, then the `+` button. Tab `renamingId` shows its name in a text field.
 function termTabsHtml(terms, renamingId) {
   const nameHtml = (tab) => tab.id === renamingId
-    ? `<input class="term-rename" id="term-rename" value="${escape(tab.name)}" aria-label="Tab name" spellcheck="false">`
-    : `<button type="button" class="term-name" data-term="select" data-tab="${tab.id}" aria-pressed="${tab.id === terms.active}">${escape(tab.name)}</button>`
+    ? `<input class="term-rename" id="term-rename" value="${escape(tabTitle(tab))}" aria-label="Tab name" spellcheck="false">`
+    : `<button type="button" class="term-name" data-term="select" data-tab="${tab.id}" aria-pressed="${tab.id === terms.active}">${escape(tabTitle(tab))}</button>`
 
   const tabs = (terms?.tabs ?? []).map((tab) => `
     <span class="term-tab${tab.failed !== null ? ' failed' : ''}">
       ${nameHtml(tab)}
-      <button type="button" class="term-close" data-term="close" data-tab="${tab.id}" title="Close ${escape(tab.name)}">×</button>
+      <button type="button" class="term-close" data-term="close" data-tab="${tab.id}" title="Close ${escape(tabTitle(tab))}">×</button>
     </span>`)
   return `${tabs.join('')}<button type="button" class="term-add" data-term="add" title="Open a shell (t)">+</button>`
 }
@@ -3329,6 +3330,16 @@ function zoomTerminal(on) {
   terminal.xterm.focus()
 }
 
+// Returns true when `event` is Shift+Enter with no other modifier.
+function isShiftEnter(event) {
+  return event.key === 'Enter' && event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey
+}
+
+// Returns the name `tab` shows: the command its shell runs, unless a user named the tab.
+function tabTitle(tab) {
+  return tab.program === 'shell' && !tab.renamed && tab.command ? tab.command : tab.name
+}
+
 function activeWorktreeTerminal(path) {
   const terms = worktreeTerms.get(path)
   return terms?.tabs.find((tab) => tab.id === terms.active)
@@ -3347,13 +3358,18 @@ function addWorktreeTab(path, { name, program, serverId }) {
   $('term-store').append(el)
 
   const { xterm: term, fit } = createXterm(el)
-  term.attachCustomKeyEventHandler((event) => zoomKey(event) === null && tabKey(event) === null)
   const observer = new ResizeObserver(() => fit.fit())
   observer.observe(el)
 
   lastTabId += 1
-  const tab = { id: lastTabId, serverId, name, program, term, fit, socket: null, el, observer, failed: null, away: false }
+  const tab = { id: lastTabId, serverId, name, renamed: false, command: null, program, term, fit, socket: null, el, observer, failed: null, away: false }
   sendXterm(term, () => tab.socket)
+
+  term.attachCustomKeyEventHandler((event) => {
+    if (!isShiftEnter(event)) return zoomKey(event) === null && tabKey(event) === null
+    if (event.type === 'keydown' && tab.socket?.readyState === WebSocket.OPEN) tab.socket.send(new TextEncoder().encode(SHIFT_ENTER))
+    return false
+  })
 
   worktreeTermsOf(path).tabs.push(tab)
   return tab
@@ -3437,8 +3453,16 @@ function syncTerminals(list) {
       if (tab.serverId === null) continue
 
       const entry = running.get(tab.serverId)
-      if (entry === undefined) closeWorktreeTerminal(path, tab.id, false)
-      else if (renaming?.id !== tab.id) tab.name = entry.name
+      if (entry === undefined) {
+        closeWorktreeTerminal(path, tab.id, false)
+        continue
+      }
+
+      tab.command = entry.command ?? null
+      if (renaming?.id !== tab.id) {
+        tab.name = entry.name
+        tab.renamed = entry.renamed === true
+      }
     }
   }
 
@@ -3447,6 +3471,8 @@ function syncTerminals(list) {
     if (known.has(entry.id) || waitsForServerId(entry.path)) continue
 
     const tab = addWorktreeTab(entry.path, { name: entry.name, program: entry.program, serverId: entry.id })
+    tab.renamed = entry.renamed === true
+    tab.command = entry.command ?? null
     const terms = worktreeTerms.get(entry.path)
     const shell = /^shell (\d+)$/.exec(entry.name)
     if (shell !== null) terms.shells = Math.max(terms.shells, Number(shell[1]))
@@ -3582,15 +3608,16 @@ function renameWorktreeTerminal(path) {
   return true
 }
 
-// Ends the edit of the tab name, renames the tab to the trimmed text when `save` is true and the text is not blank, and focuses its terminal.
+// Ends the edit of the tab name, renames the tab to the trimmed text when `save` is true and the text is new and not blank, and focuses its terminal.
 function endRename(save) {
   if (renaming === null) return
 
   const tab = worktreeTerms.get(renaming.path)?.tabs.find((t) => t.id === renaming.id)
   const name = $('term-rename')?.value.trim() ?? ''
   renaming = null
-  if (save && tab !== undefined && name !== '') {
+  if (save && tab !== undefined && name !== '' && name !== tabTitle(tab)) {
     tab.name = name
+    tab.renamed = true
     if (tab.serverId !== null) postTerminal(tab, 'name', name)
   }
 

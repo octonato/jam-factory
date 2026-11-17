@@ -28,7 +28,7 @@ use serde_json::{Value, json};
 
 use super::api::{json_response, same_origin, segments};
 use super::http::{Request, Response};
-use super::pty::{Program, Pty};
+use super::pty::{Program, Pty, command_names};
 
 /// The most output bytes a terminal keeps for its next viewer.
 const KEPT_OUTPUT: usize = 256 * 1024;
@@ -183,6 +183,11 @@ impl Terminal {
         }
     }
 
+    /// The leader of the terminal's foreground process group, when it is not the program.
+    pub fn foreground(&self) -> Option<u32> {
+        lock(&self.pty).as_ref()?.foreground()
+    }
+
     /// Kills the program and waits for it to end.
     pub fn kill(&self) {
         let pty = lock(&self.pty).take();
@@ -240,11 +245,12 @@ impl Default for Terminals {
     }
 }
 
-/// A terminal with its folder, its program name and its tab name.
+/// A terminal with its folder, its program name, its tab name and whether a user named the tab.
 struct Entry {
     path: PathBuf,
     program: String,
     name: String,
+    renamed: bool,
     terminal: Arc<Terminal>,
 }
 
@@ -276,6 +282,7 @@ impl Terminals {
             path: dir.to_path_buf(),
             program: kind.to_string(),
             name: name.to_string(),
+            renamed: false,
             terminal: Arc::clone(&terminal),
         };
         entries.open.insert(id, entry);
@@ -294,21 +301,36 @@ impl Terminals {
             .map(|entry| Arc::clone(&entry.terminal))
     }
 
-    /// The running terminals in id order, as `{"terminals": [{"id", "path", "program", "name"}]}`.
+    /// The running terminals in id order, as `{"terminals": [{"id", "path", "program", "name", "renamed", "command"}]}`.
+    /// `command` is the name of the foreground job, or null when the program is in the foreground.
     pub fn to_json(&self) -> Value {
         let mut entries = lock(&self.entries);
         entries.prune();
 
-        let terminals: Vec<Value> = entries
+        let rows: Vec<(Value, Option<u32>)> = entries
             .open
             .iter()
             .map(|(id, entry)| {
-                json!({
+                let row = json!({
                     "id": id,
                     "path": entry.path.to_string_lossy(),
                     "program": entry.program,
                     "name": entry.name,
-                })
+                    "renamed": entry.renamed,
+                });
+                (row, entry.terminal.foreground())
+            })
+            .collect();
+        drop(entries);
+
+        let pids: Vec<u32> = rows.iter().filter_map(|(_, pid)| *pid).collect();
+        let names = command_names(&pids);
+
+        let terminals: Vec<Value> = rows
+            .into_iter()
+            .map(|(mut row, pid)| {
+                row["command"] = json!(pid.and_then(|pid| names.get(&pid)));
+                row
             })
             .collect();
 
@@ -323,6 +345,7 @@ impl Terminals {
         match entries.open.get_mut(&id) {
             Some(entry) => {
                 entry.name = name.to_string();
+                entry.renamed = true;
                 true
             }
             None => false,
@@ -575,13 +598,36 @@ mod tests {
         assert_eq!(
             terminals.to_json(),
             json!({ "terminals": [
-                { "id": first, "path": path, "program": "shell", "name": "build" },
-                { "id": second, "path": path, "program": "claude", "name": "claude" },
+                { "id": first, "path": path, "program": "shell", "name": "build", "renamed": true, "command": null },
+                { "id": second, "path": path, "program": "claude", "name": "claude", "renamed": false, "command": null },
             ]})
         );
 
         terminals.kill_all();
         assert_eq!(terminals.to_json(), json!({ "terminals": [] }));
+    }
+
+    #[test]
+    fn the_list_shows_the_foreground_command() {
+        let dir = tempfile::tempdir().unwrap();
+        let terminals = Terminals::default();
+        let program = Program {
+            name: "sh".to_string(),
+            args: vec!["-i".to_string()],
+        };
+
+        let (_, terminal) = terminals
+            .open(dir.path(), "shell", &program, "shell 1", 80, 24)
+            .unwrap();
+        terminal.write(b"sleep 60\r").unwrap();
+
+        let deadline = Instant::now() + TIMEOUT;
+        while terminals.to_json()["terminals"][0]["command"] != "sleep" {
+            assert!(Instant::now() < deadline, "{}", terminals.to_json());
+            thread::sleep(Duration::from_millis(20));
+        }
+
+        terminals.kill_all();
     }
 
     #[test]

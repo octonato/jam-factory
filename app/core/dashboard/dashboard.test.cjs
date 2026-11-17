@@ -2764,6 +2764,37 @@ test('a rename posts the new name for a tab with a server id', async () => {
   assert.deepEqual(posts, ['api/terminals/7/name build'])
 })
 
+test('a shell tab shows the command it runs until a user names it', async () => {
+  let running = [{ ...shellOnServer, command: 'claude' }, { ...claudeOnServer, command: 'node' }]
+  const { app, posts } = await worktreeApp(worktreePath, [], undefined, () => terminalsReply(running))
+  assert.deepEqual(tabNames(app), ['claude*', 'claude'])
+
+  running = [{ ...shellOnServer, command: null }, claudeOnServer]
+  await app.run('poll()')
+  assert.deepEqual(tabNames(app), ['shell 4*', 'claude'])
+
+  running = [{ ...shellOnServer, name: 'build', renamed: true, command: 'vim' }, claudeOnServer]
+  await app.run('poll()')
+  assert.deepEqual(tabNames(app), ['build*', 'claude'])
+
+  press(app, 'i', cmd)
+  pressInRename(app, 'Enter')
+  await settle()
+  assert.deepEqual(posts, [], 'an unchanged name posts nothing')
+})
+
+test('Shift+Enter sends Escape and Return to a worktree terminal', async () => {
+  const { sockets, terminals } = await runningApp([shellOnServer])
+  const key = (type, modifiers) => ({ type, key: 'Enter', shiftKey: true, altKey: false, ctrlKey: false, metaKey: false, ...modifiers })
+
+  assert.equal(terminals[0].handlers.key(key('keydown')), false)
+  assert.equal(terminals[0].handlers.key(key('keypress')), false)
+  assert.deepEqual(sockets[0].sent.map(bytes), [[27, 13]])
+
+  assert.equal(terminals[0].handlers.key(key('keydown', { shiftKey: false })), true)
+  assert.equal(sockets[0].sent.length, 1)
+})
+
 test('the terminals page lists the tabs of every worktree', async () => {
   const { app } = await runningApp([shellOnServer, claudeOnServer, mainOnServer])
   const away = tabsOf(app)[1]
