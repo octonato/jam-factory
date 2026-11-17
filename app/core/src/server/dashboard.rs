@@ -95,7 +95,7 @@ mod tests {
     #[test]
     fn dashboard_header_has_repos_sessions_and_terminals_tabs() {
         let html = std::str::from_utf8(embedded("/dashboard.html").unwrap().bytes).unwrap();
-        let start = html.find("<header>").unwrap();
+        let start = html.find("<header id=\"board-header\">").unwrap();
         let end = html.find("</header>").unwrap();
         let header = &html[start..end];
 

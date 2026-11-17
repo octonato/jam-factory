@@ -44,7 +44,7 @@ function cardRows(html) {
   }))
 }
 
-function dashboard({ script = source, pageWidth = 1200, pageLeft = 0, splitterWidth = 6, fetcher, storage = new Map() } = {}) {
+function dashboard({ script = source, pageWidth = 1200, pageLeft = 0, splitterWidth = 6, fetcher, storage = new Map(), search = '', hash = '' } = {}) {
   const elements = new Map()
   const calls = []
   const geometry = { pageWidth, pageLeft, splitterWidth }
@@ -149,7 +149,7 @@ function dashboard({ script = source, pageWidth = 1200, pageLeft = 0, splitterWi
     return el
   }
 
-  for (const id of ['tabs', 'page', 'term-store', 'status', 'problems', 'font-down', 'font-up', 'font-value', 'modal', 'modal-text', 'modal-cancel']) element(id)
+  for (const id of ['board-header', 'tabs', 'page', 'term-store', 'status', 'problems', 'font-down', 'font-up', 'font-value', 'modal', 'modal-text', 'modal-cancel']) element(id)
   elements.get('modal').showModal = () => { elements.get('modal').open = true }
 
   let pageHtml = ''
@@ -174,7 +174,8 @@ function dashboard({ script = source, pageWidth = 1200, pageLeft = 0, splitterWi
   const context = vm.createContext({
     document,
     window,
-    location: { hash: '' },
+    location: { hash, search },
+    URLSearchParams,
     localStorage: {
       getItem: (key) => storage.get(key) ?? null,
       setItem: (key, value) => storage.set(key, String(value)),
@@ -1147,13 +1148,13 @@ function appOpener(app) {
   return opened
 }
 
-// Clicks the link `href` of a `kind` row of the repos page with `modifiers`, and returns true when the page prevented the default.
-function clickRow(app, kind, href, modifiers = {}) {
+// Clicks the link `href` of a `kind` row in the element `container` with `modifiers`, and returns true when the page prevented the default.
+function clickRow(app, kind, href, modifiers = {}, container = 'repo-list') {
   let prevented = false
   const link = { getAttribute: (name) => (name === 'href' ? href : null) }
   const target = { closest: (selector) => (selector.includes(`.row.${kind} > a.body`) ? link : null) }
 
-  app.elements.get('repo-list').dispatch('click', { target, ...modifiers, preventDefault: () => { prevented = true } })
+  app.elements.get(container).dispatch('click', { target, ...modifiers, preventDefault: () => { prevented = true } })
   return prevented
 }
 
@@ -2077,7 +2078,7 @@ test('g on a session page runs lazygit in the pane', async () => {
 test('the lazygit card button runs lazygit', async () => {
   const { app, sockets } = await specLazygit()
   const actions = app.run('CARD_ACTIONS.map((entry) => `${entry.action}: ${entry.title}`).join(", ")')
-  assert.equal(actions, 'intellij: Open in IntelliJ (i), zed: Open in Zed (e), iterm: Open in iTerm (t), lazygit: Open in lazygit (g), archive: Archive (a)')
+  assert.equal(actions, 'worktree: Go to worktree page (c), intellij: Open in IntelliJ (i), zed: Open in Zed (e), iterm: Open in iTerm (t), lazygit: Open in lazygit (g), archive: Archive (a)')
 
   const button = { dataset: { action: 'lazygit' }, closest: () => ({ dataset: { dir: editSession.dir } }) }
   const target = { closest: (selector) => (selector === 'button[data-action]' ? button : null) }
@@ -4096,4 +4097,402 @@ test('a worktree page opened another way returns to the repos page', async () =>
   assert.ok(press(app, 'Escape'))
   assert.equal(app.context.location.hash, '#/')
   assert.equal(app.run('selectedWorktree'), fixLogin.path)
+})
+
+// Returns a standalone dashboard opened on `hash`, before any poll of an api that lists `sessions`, answers `api/repos` with `repos` and accepts every POST.
+function standaloneDashboard(hash, sessions = [], repos = worktreeRepos) {
+  return dashboard({
+    search: '?standalone',
+    hash,
+    fetcher: (url, options) => {
+      if (options?.method === 'POST') return response('', true, { status: 204 })
+      if (url === 'api/repos') return response(JSON.stringify(repos))
+      if (url === 'api/sessions') return sessionsReply(sessions.map(sessionEntry))
+      return response('', false, { status: 404 })
+    },
+  })
+}
+
+// Returns the dashboard of `standaloneDashboard(hash, sessions, repos)` after one poll.
+async function standaloneApp(hash, sessions = [], repos = worktreeRepos) {
+  const app = standaloneDashboard(hash, sessions, repos)
+  await app.run('poll()')
+  await settle()
+  return app
+}
+
+// Returns true when `app` may show the page of `hash`.
+const scoped = (app, hash) => app.run(`inScope(parseRoute(${JSON.stringify(hash)}))`)
+
+// Returns a session `id` of `o/r` in the worktree `worktree`.
+const sessionAt = (id, worktree) => ({ ...session, org: 'o', repo: 'r', id, dir: `api/file/o/r/main/${id}/`, worktree })
+
+test('the main window keeps the header and every route', () => {
+  const app = dashboard()
+
+  assert.ok(!app.elements.get('board-header').hidden)
+  assert.equal(app.run('standaloneRoot'), null)
+  assert.equal(scoped(app, '#/sessions'), true)
+  assert.equal(app.run('backTarget("#/")'), '#/')
+})
+
+test('a standalone window hides the header', () => {
+  const app = standaloneDashboard(worktreeHashOf(worktreePath))
+
+  assert.equal(app.elements.get('board-header').hidden, true)
+  assert.deepEqual(plain(app.run('standaloneRoot')), { kind: 'worktree', path: worktreePath })
+})
+
+test('a worktree root allows its page and its sessions only', async () => {
+  const sessions = [sessionAt('s1', `${worktreePath}/`), sessionAt('s3', mainPath)]
+  const app = await standaloneApp(worktreeHashOf(worktreePath), sessions)
+
+  for (const hash of [worktreeHashOf(worktreePath), '#/o/r/main/s1', '#/o/r/main/s1/spec.md']) {
+    assert.equal(scoped(app, hash), true, hash)
+  }
+  for (const hash of ['#/', '#/sessions', '#/terminals', worktreeHashOf(mainPath), '#/o/r/main/s3', prsHashOf(mainPath)]) {
+    assert.equal(scoped(app, hash), false, hash)
+  }
+})
+
+test("a session root allows its worktree page and that worktree's sessions", async () => {
+  const sessions = [sessionAt('s1', worktreePath), sessionAt('s2', worktreePath), sessionAt('s3', mainPath)]
+  const app = standaloneDashboard('#/o/r/main/s1', sessions)
+
+  for (const hash of ['#/o/r/main/s1', '#/o/r/main/s1/spec.md']) {
+    assert.equal(scoped(app, hash), true, `${hash} before the first poll`)
+  }
+  for (const hash of [worktreeHashOf(worktreePath), '#/o/r/main/s2']) {
+    assert.equal(scoped(app, hash), false, `${hash} before the first poll`)
+  }
+
+  await app.run('poll()')
+  await settle()
+  for (const hash of ['#/o/r/main/s1', worktreeHashOf(worktreePath), '#/o/r/main/s2']) {
+    assert.equal(scoped(app, hash), true, hash)
+  }
+  for (const hash of ['#/', '#/sessions', worktreeHashOf(mainPath), '#/o/r/main/s3']) {
+    assert.equal(scoped(app, hash), false, hash)
+  }
+})
+
+test("a PRs root allows its repo's worktrees and their sessions", async () => {
+  const repos = plain(selectRepos)
+  const app = await standaloneApp(prsHashOf(sdkMain), [sessionAt('sa', pathA), sessionAt('sc', pathC)], repos)
+
+  for (const hash of [prsHashOf(sdkMain), worktreeHashOf(pathA), worktreeHashOf(pathB), '#/o/r/main/sa']) {
+    assert.equal(scoped(app, hash), true, hash)
+  }
+  for (const hash of ['#/', prsHashOf(orMain), worktreeHashOf(pathC), '#/o/r/main/sc', worktreeHashOf(fixLogin.path)]) {
+    assert.equal(scoped(app, hash), false, hash)
+  }
+
+  repos.repos[0].worktrees.push(fixLogin)
+  await app.run('poll()')
+  await settle()
+  assert.equal(scoped(app, worktreeHashOf(fixLogin.path)), true, 'a worktree the repos list after a checkout')
+})
+
+test('an out-of-scope hash change restores the shown page', async () => {
+  const root = worktreeHashOf(worktreePath)
+  const app = await standaloneApp(root, [worktreeSession])
+
+  navigate(app, '#/sessions')
+  assert.equal(app.context.location.hash, root)
+  assert.equal(app.run('shownHash'), root)
+
+  navigate(app, '#/o/r/main/s1')
+  await settle()
+  navigate(app, worktreeHashOf(mainPath))
+  assert.equal(app.context.location.hash, '#/o/r/main/s1')
+  assert.equal(app.run('shownHash'), '#/o/r/main/s1')
+})
+
+test('a back key on the root page does nothing', async () => {
+  for (const [root, repos] of [[worktreeHashOf(worktreePath), worktreeRepos], ['#/o/r/main/s1', worktreeRepos], [prsHashOf(sdkMain), selectRepos]]) {
+    for (const [key, modifiers] of [['l'], ['Escape'], ['[', { metaKey: true }]]) {
+      const app = await standaloneApp(root, [worktreeSession], repos)
+
+      assert.ok(press(app, key, modifiers), `${key} is taken on ${root}`)
+      assert.equal(app.context.location.hash, root)
+    }
+  }
+})
+
+test('a back key off the root goes back within scope', async () => {
+  const worktreeRoot = await standaloneApp(worktreeHashOf(worktreePath), [worktreeSession])
+  navigate(worktreeRoot, '#/o/r/main/s1')
+  await settle()
+  assert.ok(press(worktreeRoot, 'Escape'))
+  assert.equal(worktreeRoot.context.location.hash, worktreeHashOf(worktreePath))
+
+  const sessionRoot = await standaloneApp('#/o/r/main/s1', [worktreeSession])
+  navigate(sessionRoot, worktreeHashOf(worktreePath))
+  assert.ok(press(sessionRoot, 'Escape'))
+  assert.equal(sessionRoot.context.location.hash, '#/o/r/main/s1')
+
+  const prsRoot = await standaloneApp(prsHashOf(sdkMain), [], selectRepos)
+  navigate(prsRoot, worktreeHashOf(pathA))
+  assert.ok(press(prsRoot, 'Escape'))
+  assert.equal(prsRoot.context.location.hash, prsHashOf(sdkMain))
+})
+
+// Gives `app` a fake app window API whose `setTitle` runs `setTitle`, and returns the titles it sets.
+function titleRecorder(app, setTitle = async () => {}) {
+  const titles = []
+  app.window.__TAURI__ = {
+    window: {
+      getCurrentWindow: () => ({
+        setTitle: (title) => {
+          titles.push(title)
+          return setTitle(title)
+        },
+      }),
+    },
+  }
+  return titles
+}
+
+// Returns a standalone dashboard opened on `hash` and the titles it sets over one poll.
+async function titledApp(hash, sessions = [], repos = worktreeRepos) {
+  const app = standaloneDashboard(hash, sessions, repos)
+  const titles = titleRecorder(app)
+  await app.run('poll()')
+  await settle()
+  return { app, titles }
+}
+
+test('a standalone worktree window names its repo and branch', async () => {
+  const unloaded = standaloneDashboard(worktreeHashOf(worktreePath))
+  assert.equal(unloaded.run('standaloneTitle()'), null)
+
+  const { titles } = await titledApp(worktreeHashOf(worktreePath))
+  assert.deepEqual(titles, ['Jam · r/feature'])
+
+  const detached = plain(worktreeRepos)
+  Object.assign(detached.repos[0].worktrees[1], { branch: null, head: 'abc1234' })
+  const { titles: detachedTitles } = await titledApp(worktreeHashOf(worktreePath), [], detached)
+  assert.deepEqual(detachedTitles, ['Jam · r/abc1234'])
+})
+
+test('a standalone session window names its org, repo and branch', async () => {
+  const unloaded = standaloneDashboard('#/org/repo/main/session', [session])
+  assert.equal(unloaded.run('standaloneTitle()'), null)
+
+  const { titles } = await titledApp('#/org/repo/main/session', [session])
+  assert.deepEqual(titles, ['Jam · org/repo/main'])
+})
+
+test('a standalone PRs window names its repo', async () => {
+  const { titles } = await titledApp(prsHashOf(sdkMain), [], selectRepos)
+
+  assert.deepEqual(titles, ['Jam · sdk PRs'])
+})
+
+test('the title is set once per change', async () => {
+  const repos = plain(worktreeRepos)
+  const { app, titles } = await titledApp(worktreeHashOf(worktreePath), [], repos)
+
+  await app.run('poll()')
+  await settle()
+  assert.deepEqual(titles, ['Jam · r/feature'])
+
+  repos.repos[0].worktrees[1].branch = 'renamed'
+  await app.run('poll()')
+  await settle()
+  assert.deepEqual(titles, ['Jam · r/feature', 'Jam · r/renamed'])
+})
+
+test('a failed title change tells the user', async () => {
+  const app = standaloneDashboard(worktreeHashOf(worktreePath))
+  titleRecorder(app, async () => {
+    throw new Error('denied')
+  })
+
+  await app.run('poll()')
+  await settle()
+  assert.equal(app.elements.get('modal').open, true)
+  assert.equal(app.elements.get('modal-text').textContent, 'Could not set the window title: Error: denied')
+})
+
+test('the main window never sets a title', async () => {
+  const app = dashboard({
+    hash: worktreeHashOf(worktreePath),
+    fetcher: (url) => {
+      if (url === 'api/repos') return response(JSON.stringify(worktreeRepos))
+      if (url === 'api/sessions') return sessionsReply([])
+      return response('', false, { status: 404 })
+    },
+  })
+  const titles = titleRecorder(app)
+
+  await app.run('poll()')
+  await settle()
+  assert.equal(app.run('standaloneTitle()'), null)
+  assert.deepEqual(titles, [])
+})
+
+test('Cmd+click on a sessions page row opens the session in a new app window', async () => {
+  const app = await reposApp(worktreeRepos, [worktreeSession], '#/sessions')
+  const opened = appOpener(app)
+
+  assert.ok(clickRow(app, 'card', '#/o/r/main/s1', { metaKey: true }, 'list'))
+  await settle()
+
+  assert.deepEqual(opened, ['#/o/r/main/s1'])
+  assert.equal(app.context.location.hash, '#/sessions')
+})
+
+test('Cmd+click on a worktree page session row opens the session in a new app window', async () => {
+  const { app } = await worktreeApp(worktreePath, [worktreeSession])
+  const opened = appOpener(app)
+
+  assert.ok(clickRow(app, 'session', '#/o/r/main/s1', { metaKey: true }, 'worktree-sessions'))
+  await settle()
+
+  assert.deepEqual(opened, ['#/o/r/main/s1'])
+  assert.equal(app.context.location.hash, worktreeHashOf(worktreePath))
+})
+
+test('Cmd+click in a standalone window opens another window and stays put', async () => {
+  const root = worktreeHashOf(worktreePath)
+  const app = await standaloneApp(root, [worktreeSession])
+  const opened = appOpener(app)
+
+  assert.ok(clickRow(app, 'session', '#/o/r/main/s1', { metaKey: true }, 'worktree-sessions'))
+  await settle()
+
+  assert.deepEqual(opened, ['#/o/r/main/s1'])
+  assert.equal(app.context.location.hash, root)
+})
+
+// Returns a dashboard on the page of `shown`, a session `s1` of `o/r`, after one poll of an api that answers `api/repos` with `repos`.
+async function sessionPageApp(shown = worktreeSession, repos = worktreeRepos) {
+  const app = await reposApp(repos, [shown], '#/o/r/main/s1')
+  await settle()
+  return app
+}
+
+// The repos of `worktreeRepos` as `api/repos` lists them: without the main checkout among `worktrees`.
+const linkedRepos = { error: null, repos: [{ ...worktreeRepos.repos[0], worktrees: [worktreeRepos.repos[0].worktrees[1]] }] }
+
+test('c on a session page goes to its worktree page', async () => {
+  const app = await sessionPageApp()
+
+  assert.ok(press(app, 'c'))
+  assert.equal(app.context.location.hash, worktreeHashOf(worktreePath))
+})
+
+test('the session card button goes to the worktree page', async () => {
+  const app = await sessionPageApp()
+
+  const button = { dataset: { action: 'worktree' }, closest: () => ({ dataset: { dir: worktreeSession.dir } }) }
+  const target = { closest: (selector) => (selector === 'button[data-action]' ? button : null) }
+  app.elements.get('session-card').dispatch('click', { target })
+  assert.equal(app.context.location.hash, worktreeHashOf(worktreePath))
+})
+
+test('c on a session without a worktree does nothing', async () => {
+  for (const worktree of [undefined, '']) {
+    const app = await sessionPageApp({ ...worktreeSession, worktree })
+
+    press(app, 'c')
+    assert.equal(app.context.location.hash, '#/o/r/main/s1', `worktree ${JSON.stringify(worktree)}`)
+  }
+})
+
+test('c in a standalone session window goes to its worktree page', async () => {
+  const app = await standaloneApp('#/o/r/main/s1', [worktreeSession])
+
+  assert.ok(press(app, 'c'))
+  app.window.dispatch('hashchange')
+  assert.equal(app.context.location.hash, worktreeHashOf(worktreePath))
+})
+
+test('c on a session with a trailing slash goes to the listed worktree page', async () => {
+  const app = await sessionPageApp({ ...worktreeSession, worktree: `${worktreePath}/` }, linkedRepos)
+
+  assert.ok(press(app, 'c'))
+  assert.equal(app.context.location.hash, worktreeHashOf(worktreePath))
+})
+
+test('c on a session in the main checkout does nothing', async () => {
+  const app = await sessionPageApp({ ...worktreeSession, worktree: mainPath }, linkedRepos)
+
+  press(app, 'c')
+  assert.equal(app.context.location.hash, '#/o/r/main/s1')
+})
+
+test('a standalone session window with a trailing slash has the listed worktree page in scope', async () => {
+  const app = await standaloneApp('#/o/r/main/s1', [sessionAt('s1', `${worktreePath}/`)], linkedRepos)
+
+  assert.deepEqual(plain(app.run('standaloneWorktrees()')), [worktreePath])
+  assert.equal(scoped(app, worktreeHashOf(worktreePath)), true)
+})
+
+test('the session card shows the worktree button with its key', async () => {
+  const app = await sessionPageApp()
+
+  assert.match(app.elements.get('session-card').innerHTML, /data-action="worktree" title="Go to worktree page \(c\)"/)
+})
+
+// Archives `archived` in `app` once the user confirms, and fires the hash change the archive makes.
+async function archive(app, archived) {
+  const shown = app.context.location.hash
+  app.context.archived = archived
+  app.run('ask = async () => true')
+
+  await app.run('archiveSession(archived)')
+  if (app.context.location.hash !== shown) app.window.dispatch('hashchange')
+  await settle()
+}
+
+test('archiving a session in a standalone window goes back to its worktree page', async () => {
+  const root = worktreeHashOf(worktreePath)
+  const app = await standaloneApp(root, [worktreeSession])
+  navigate(app, '#/o/r/main/s1')
+  await settle()
+
+  await archive(app, worktreeSession)
+  assert.equal(app.context.location.hash, root)
+})
+
+test('archiving the root session of a standalone window closes it', async () => {
+  const root = '#/o/r/main/s1'
+  const app = await standaloneApp(root, [worktreeSession])
+  const closes = appWindow(app)
+
+  await archive(app, worktreeSession)
+  assert.equal(closes.count, 1)
+  assert.equal(app.context.location.hash, root)
+})
+
+test('a back key on a missing session page of a standalone window goes to the root', async () => {
+  for (const [root, id] of [[worktreeHashOf(worktreePath), 's1'], ['#/o/r/main/s1', 's2']]) {
+    for (const [key, modifiers] of [['l'], ['Escape'], ['[', { metaKey: true }]]) {
+      const sessions = [sessionAt('s1', worktreePath), sessionAt('s2', worktreePath)]
+      const app = await standaloneApp(root, sessions)
+      navigate(app, `#/o/r/main/${id}`)
+      await settle()
+
+      sessions.splice(sessions.findIndex((s) => s.id === id), 1)
+      await app.run('poll()')
+      await settle()
+      assert.equal(pageText(app), 'session not found')
+
+      assert.ok(press(app, key, modifiers), `${key} is taken on ${id}`)
+      assert.equal(app.context.location.hash, root)
+    }
+  }
+})
+
+test('archiving a session in the main window goes to the sessions page', async () => {
+  const { app } = await worktreeApp(worktreePath, [worktreeSession])
+  navigate(app, '#/o/r/main/s1')
+  await settle()
+  const closes = appWindow(app)
+
+  await archive(app, worktreeSession)
+  assert.equal(app.context.location.hash, '#/sessions')
+  assert.equal(closes.count, 0)
 })

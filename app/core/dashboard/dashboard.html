@@ -80,6 +80,7 @@
     border-bottom: 1px solid var(--line);
   }
 
+  header[hidden] { display: none; }
   header h1 { margin: 0; font-size: 1.286rem; }
 
   .tabs { display: flex; gap: 4px; }
@@ -892,7 +893,7 @@
 </style>
 </head>
 <body>
-<header>
+<header id="board-header">
   <h1>Jam Board</h1>
   <nav class="tabs" id="tabs"><a class="tab" href="#/" aria-current="page">Repos</a><a class="tab" href="#/sessions">Sessions</a><a class="tab" href="#/terminals">Terminals</a></nav>
   <span id="status">loading…</span>
@@ -1034,6 +1035,7 @@ const ACTION_ICONS = {
   refresh: '<path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2v3h-3"/>',
 }
 const CARD_ACTIONS = [
+  { action: 'worktree', title: 'Go to worktree page (c)', icon: ACTION_ICONS.worktree },
   { action: 'intellij', title: 'Open in IntelliJ (i)', icon: ACTION_ICONS.intellij },
   { action: 'zed', title: 'Open in Zed (e)', icon: ACTION_ICONS.zed },
   { action: 'iterm', title: 'Open in iTerm (t)', icon: ACTION_ICONS.iterm },
@@ -1065,7 +1067,7 @@ const REVIEW_LABELS = {
   'changes-requested': 'changes requested',
 }
 const TOOL_LABELS = { intellij: 'IntelliJ', zed: 'Zed', iterm: 'iTerm', github: 'GitHub' }
-const ACTION_KEYS = { a: 'archive', t: 'iterm', e: 'zed', i: 'intellij', o: 'github', g: 'lazygit' }
+const ACTION_KEYS = { c: 'worktree', a: 'archive', t: 'iterm', e: 'zed', i: 'intellij', o: 'github', g: 'lazygit' }
 const WORKTREE_KEYS = { o: 'github', i: 'intellij', e: 'zed', g: 'lazygit', t: 'shell' }
 const PR_KEYS = { c: 'worktree', Enter: 'worktree', r: 'claude', e: 'zed', i: 'intellij', o: 'github', u: 'refresh' }
 const BACK_KEYS = ['l', 'Escape', 'Meta+[']
@@ -1111,6 +1113,12 @@ let selectedTerm = null
 let terminalsView = { el: null, list: '' }
 let lastTabId = 0
 let shownHash = ''
+// The hash a standalone window opened on, or null in the main window.
+const rootHash = new URLSearchParams(location.search ?? '').has('standalone') ? location.hash : null
+// The route of `rootHash`, or null in the main window.
+const standaloneRoot = rootHash === null ? null : parseRoute(rootHash)
+// The title last set on the app window, or null.
+let windowTitle = null
 let renderSeq = 0
 let fontSize = FONT_DEFAULT
 let leftWidth = null
@@ -1577,6 +1585,7 @@ function renderList() {
   listView = { html, el: $('page').firstElementChild }
   listView.el.addEventListener('click', onCardAction)
   listView.el.addEventListener('click', onOrgFilter)
+  listView.el.addEventListener('click', onRowClick)
   showSelection()
 }
 
@@ -1744,7 +1753,7 @@ function renderRepos() {
       </div>`
     $('repo-filter').value = repoFilter
     $('repo-filter').addEventListener('input', onRepoFilter)
-    $('repo-list').addEventListener('click', onRepoRowClick)
+    $('repo-list').addEventListener('click', onRowClick)
     reposView = { el: $('page').firstElementChild, list: '' }
   }
 
@@ -1763,11 +1772,11 @@ function onRepoFilter(event) {
   renderRepos()
 }
 
-// Opens a clicked main or worktree row in a new app window on Cmd+click. Does nothing in a browser.
-function onRepoRowClick(event) {
+// Opens a clicked main, worktree or session row in a new app window on Cmd+click. Does nothing in a browser.
+function onRowClick(event) {
   if (!event.metaKey || window.__TAURI__ === undefined) return
 
-  const link = event.target.closest('.row.main > a.body, .row.worktree > a.body')
+  const link = event.target.closest('.row.main > a.body, .row.worktree > a.body, .row.card > a.body, .row.session > a.body')
   if (!link) return
 
   event.preventDefault()
@@ -1904,6 +1913,15 @@ function findWorktree(path) {
   return null
 }
 
+// Returns the path of the linked worktree that `sameWorktree` matches with `path`, or null when no checkout lists one.
+function listedWorktree(path) {
+  for (const repo of reposState?.repos ?? []) {
+    const worktree = repo.worktrees.find((w) => sameWorktree(w.path, path))
+    if (worktree) return worktree.path
+  }
+  return null
+}
+
 // Returns the worktree card: the checkout's name, the worktree's short path and branch, and its actions.
 function worktreeCardHtml(repo, worktree) {
   return `
@@ -1992,6 +2010,7 @@ function renderWorktreePage(path) {
     const page = $('page').firstElementChild
     resizeSessionPage(page)
     $('worktree-card').addEventListener('click', onWorktreeCardAction)
+    $('worktree-sessions').addEventListener('click', onRowClick)
     $('term-tabs').addEventListener('click', onTermTabsClick)
     $('term-tabs').addEventListener('keydown', onRenameKey)
     $('term-tabs').addEventListener('focusout', onRenameBlur)
@@ -3183,6 +3202,7 @@ function routeShows(route, file) {
   return session !== undefined && file.key === session.dir + (route.path ?? file.path)
 }
 
+// Archives `session` once the user confirms. The main window then goes to the sessions page. A standalone window goes back within its scope, or closes when `session` is its root.
 async function archiveSession(session) {
   if (!(await ask(`Archive ${sessionName(session)}? The dashboard will no longer list it.`))) return
 
@@ -3194,7 +3214,10 @@ async function archiveSession(session) {
     return
   }
 
-  location.hash = '#/sessions'
+  if (standaloneRoot === null) location.hash = '#/sessions'
+  else if (isRoot(parseRoute(sessionHref(session)))) return closeWindow()
+  else location.hash = backTarget(sessionOrigin) ?? rootHash
+
   poll()
 }
 
@@ -3627,9 +3650,18 @@ function endRename(save) {
 
 // Runs the card action `action` on `session`.
 function runAction(session, action) {
-  if (action === 'archive') archiveSession(session)
+  if (action === 'worktree') goToWorktree(session)
+  else if (action === 'archive') archiveSession(session)
   else if (action === 'lazygit') openLazygit(session)
   else openTool(session, action)
+}
+
+// Goes to the worktree page of `session`. Does nothing when no checkout lists the worktree of `session`.
+function goToWorktree(session) {
+  const path = listedWorktree(session.worktree)
+  if (path === null) return
+
+  location.hash = worktreeHash(path)
 }
 
 // Runs the action bound to `key` on `session` and returns true when `key` has one.
@@ -3905,7 +3937,7 @@ function renderTabs(kind) {
   tabsHtml = html
 }
 
-// Shows the page of the route. While the editor is open, shows only the edited file. A new route ends lazygit. A route off the worktree pages parks the shown worktree terminal. A route off the worktree page of the edited tab name drops the edit. A route off the PRs page drops its PRs, selection and filter. A new session page records the worktree page it opens from. A new worktree page records the PRs page it opens from.
+// Shows the page of the route and syncs the window title. While the editor is open, shows only the edited file. A new route ends lazygit. A route off the worktree pages parks the shown worktree terminal. A route off the worktree page of the edited tab name drops the edit. A route off the PRs page drops its PRs, selection and filter. A new session page records the worktree page it opens from. A new worktree page records the PRs page it opens from.
 function render() {
   const route = parseRoute(location.hash)
   if (editing !== null && !routeShows(route, editing)) return
@@ -3930,6 +3962,12 @@ function render() {
   renderSeq += 1
   shownHash = location.hash
   renderTabs(route.kind)
+  renderPage(route)
+  syncTitle()
+}
+
+// Shows the page of `route`.
+function renderPage(route) {
   if (route.kind === 'repos') return renderRepos()
   if (route.kind === 'sessions') return renderList()
   if (route.kind === 'terminals') return renderTerminals()
@@ -3954,8 +3992,90 @@ function recordWorktreeOrigin(route) {
   else if (!same && !back) worktreeOrigin = null
 }
 
-// Renders the new route. Leaving the edited file asks to discard unsaved changes, and cancel restores the shown route.
+// Returns true when `route` shows the root page of a standalone window, whatever file of a session it shows.
+function isRoot(route) {
+  if (standaloneRoot === null || route.kind !== standaloneRoot.kind) return false
+  if (route.kind === 'session') return sessionHref(route) === sessionHref(standaloneRoot)
+  return route.path === standaloneRoot.path
+}
+
+// Returns the paths of the worktrees whose pages and sessions a standalone window may show.
+function standaloneWorktrees() {
+  if (standaloneRoot.kind === 'worktree') return [standaloneRoot.path]
+
+  if (standaloneRoot.kind === 'session') {
+    const session = state.sessions.find((s) => sessionHref(s) === sessionHref(standaloneRoot))
+    const path = session === undefined ? null : listedWorktree(session.worktree)
+    return path === null ? [] : [path]
+  }
+
+  if (standaloneRoot.kind === 'prs') {
+    const repo = reposState?.repos.find((r) => r.path === standaloneRoot.path)
+    return repo === undefined ? [] : repo.worktrees.map((worktree) => worktree.path)
+  }
+  return []
+}
+
+// Returns true when the window may show `route`.
+function inScope(route) {
+  if (standaloneRoot === null || isRoot(route)) return true
+
+  const worktrees = standaloneWorktrees()
+  const scoped = (path) => worktrees.some((worktree) => sameWorktree(worktree, path))
+  if (route.kind === 'worktree') return scoped(route.path)
+  if (route.kind !== 'session') return false
+
+  const session = state.sessions.find((s) => sessionHref(s) === sessionHref(route))
+  return session !== undefined && scoped(session.worktree)
+}
+
+// Returns the hash a back key goes to for the destination `hash`, or null when the back key does nothing.
+function backTarget(hash) {
+  if (standaloneRoot === null) return hash
+  if (isRoot(parseRoute(shownHash))) return null
+  return inScope(parseRoute(hash)) ? hash : rootHash
+}
+
+// Returns the title of a standalone window, or null in the main window or while the names of its root are unknown.
+function standaloneTitle() {
+  if (standaloneRoot === null) return null
+
+  if (standaloneRoot.kind === 'worktree') {
+    const found = findWorktree(standaloneRoot.path)
+    return found === null ? null : `Jam · ${found.repo.repo}/${found.worktree.branch ?? found.worktree.head ?? ''}`
+  }
+
+  if (standaloneRoot.kind === 'session') {
+    const session = state.sessions.find((s) => sessionHref(s) === sessionHref(standaloneRoot))
+    return session === undefined ? null : `Jam · ${branchName(session)}`
+  }
+
+  if (standaloneRoot.kind === 'prs') {
+    const repo = findRepo(standaloneRoot.path)
+    return repo === undefined ? null : `Jam · ${repo.repo} PRs`
+  }
+  return null
+}
+
+// Sets the app window title to `standaloneTitle()` when it changed. Does nothing in a browser.
+function syncTitle() {
+  const title = standaloneTitle()
+  if (window.__TAURI__?.window === undefined || title === null || title === windowTitle) return
+
+  windowTitle = title
+  window.__TAURI__.window
+    .getCurrentWindow()
+    .setTitle(title)
+    .catch((err) => tell(`Could not set the window title: ${err}`))
+}
+
+// Renders the new route. An out-of-scope route restores the shown route. Leaving the edited file asks to discard unsaved changes, and cancel restores the shown route.
 function onHashChange() {
+  if (!inScope(parseRoute(location.hash))) {
+    location.hash = shownHash
+    return
+  }
+
   if (editing === null || routeShows(parseRoute(location.hash), editing)) return render()
 
   const back = shownHash
@@ -4067,9 +4187,12 @@ function filterKey(key, field) {
 // Runs the session page shortcut for `key` on `session` and returns true when it acted.
 function sessionKey(key, session) {
   if (BACK_KEYS.includes(key)) {
+    const target = backTarget(sessionOrigin)
+    if (target === null) return true
+
     confirmDiscard(() => {
       selectedDir = session.dir
-      location.hash = sessionOrigin
+      location.hash = target
     })
     return true
   }
@@ -4084,19 +4207,33 @@ function sessionKey(key, session) {
   return sessionAction(session, key)
 }
 
+// Runs the shortcut for `key` on the page of the missing session `route` and returns true when it acted. A back key off the root of a standalone window goes to the root.
+function missingSessionKey(key, route) {
+  if (standaloneRoot === null || isRoot(route) || !BACK_KEYS.includes(key)) return false
+
+  location.hash = rootHash
+  return true
+}
+
 // Runs the worktree page shortcut for `key` on the worktree at `path` and returns true when it acted.
 // A back key returns to the PRs page it opened from, with its selection and filter, else to the repos page.
 function worktreeKey(key, path) {
   if (BACK_KEYS.includes(key) && worktreeOrigin !== null) {
+    const target = backTarget(worktreeOrigin.hash)
+    if (target === null) return true
+
     selectedPr = worktreeOrigin.selectedPr
     prFilter = worktreeOrigin.prFilter
-    location.hash = worktreeOrigin.hash
+    location.hash = target
     return true
   }
 
   if (BACK_KEYS.includes(key)) {
+    const target = backTarget('#/')
+    if (target === null) return true
+
     selectedWorktree = path
-    location.hash = '#/'
+    location.hash = target
     return true
   }
 
@@ -4107,8 +4244,11 @@ function worktreeKey(key, path) {
 // Runs the PRs page shortcut for `key` on the PRs page of the main checkout at `path` and returns true when it acted.
 function prsKey(key, path) {
   if (BACK_KEYS.includes(key)) {
+    const target = backTarget('#/')
+    if (target === null) return true
+
     selectedWorktree = path
-    location.hash = '#/'
+    location.hash = target
     return true
   }
 
@@ -4241,7 +4381,7 @@ function onKey(event) {
   }
 
   const session = state.sessions.find((s) => sessionHref(s) === sessionHref(route))
-  if (session && sessionKey(key, session)) event.preventDefault()
+  if (session ? sessionKey(key, session) : missingSessionKey(key, route)) event.preventDefault()
 }
 
 // Returns the stored font size, or the default when it is missing or out of range.
@@ -4326,6 +4466,7 @@ $('font-down').addEventListener('click', () => stepFontSize(-1))
 $('font-up').addEventListener('click', () => stepFontSize(1))
 showFontSize(readFontSize())
 orgFilter = readOrgFilter()
+if (standaloneRoot !== null) $('board-header').hidden = true
 
 window.addEventListener('hashchange', onHashChange)
 window.addEventListener('beforeunload', onBeforeUnload)

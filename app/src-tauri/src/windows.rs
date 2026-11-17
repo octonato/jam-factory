@@ -31,6 +31,8 @@ const MAIN: &str = "main";
 
 const EXTRA_PREFIX: &str = "board-";
 
+const STANDALONE: &str = "standalone";
+
 static NEXT_EXTRA: AtomicUsize = AtomicUsize::new(1);
 
 const SERVER_DEADLINE: Duration = Duration::from_secs(3);
@@ -68,11 +70,10 @@ fn try_open_board_window(app: &AppHandle) -> Result<(), String> {
 /// Opens a new board window on the page at `hash` of the dashboard that `window` shows.
 #[tauri::command]
 pub async fn open_window(window: WebviewWindow, hash: String) -> Result<(), String> {
-    let mut url = window.url().map_err(|e| e.to_string())?;
+    let url = standalone_url(window.url().map_err(|e| e.to_string())?, &hash);
     let port = url
         .port_or_known_default()
         .ok_or("The board window has no port")?;
-    url.set_fragment(Some(hash.trim_start_matches('#')));
 
     let label = format!(
         "{EXTRA_PREFIX}{}",
@@ -81,11 +82,24 @@ pub async fn open_window(window: WebviewWindow, hash: String) -> Result<(), Stri
     build_board_window(window.app_handle(), &label, url, port)
 }
 
+/// Returns `url` with the query `standalone` and the fragment `hash`.
+fn standalone_url(mut url: Url, hash: &str) -> Url {
+    url.set_query(Some(STANDALONE));
+    url.set_fragment(Some(hash.trim_start_matches('#')));
+    url
+}
+
+/// Returns true when the window labelled `label` shows on every Desktop.
+fn on_all_workspaces(label: &str) -> bool {
+    label == MAIN
+}
+
 /// Opens a window labelled `label` on `url`. It keeps the dashboard served on `port` and sends other links to the browser.
 fn build_board_window(app: &AppHandle, label: &str, url: Url, port: u16) -> Result<(), String> {
     let window = WebviewWindowBuilder::new(app, label, WebviewUrl::External(url))
         .title("Jam Board")
         .inner_size(1200.0, 800.0)
+        .visible_on_all_workspaces(on_all_workspaces(label))
         .on_navigation(move |url| match navigation::decide(url, port) {
             Navigation::Stay => true,
             Navigation::Browser => {
@@ -161,6 +175,22 @@ mod tests {
     }
 
     #[test]
+    fn a_standalone_url_carries_the_query_and_the_hash() {
+        let base = Url::parse("http://127.0.0.1:8731/dashboard.html?standalone#/old").unwrap();
+        let url = standalone_url(base, "#/worktree/%2Fa%2Fb");
+        assert_eq!(
+            url.as_str(),
+            "http://127.0.0.1:8731/dashboard.html?standalone#/worktree/%2Fa%2Fb"
+        );
+    }
+
+    #[test]
+    fn only_the_main_window_shows_on_all_workspaces() {
+        assert!(on_all_workspaces(MAIN));
+        assert!(!on_all_workspaces("board-1"));
+    }
+
+    #[test]
     fn the_dashboard_invokes_the_open_window_command() {
         let dashboard = include_str!("../../core/dashboard/dashboard.html");
 
@@ -189,6 +219,12 @@ mod tests {
                 .permissions
                 .iter()
                 .any(|p| p.identifier().get() == "allow-open-window")
+        );
+        assert!(
+            capability
+                .permissions
+                .iter()
+                .any(|p| p.identifier().get() == "core:window:allow-set-title")
         );
 
         let patterns: Vec<RemoteUrlPattern> = capability
