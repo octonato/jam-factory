@@ -17,7 +17,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use jam_factory_store::root::resolve_repos;
+use jam_factory_store::root::{resolve_github_user, resolve_repos};
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -28,9 +28,14 @@ const SHORT_SHA: usize = 7;
 pub trait RepoList: Send + Sync {
     /// The paths of the main checkouts, or the reason they cannot be read.
     fn paths(&self) -> Result<Vec<PathBuf>, String>;
+
+    /// The GitHub user of the config, or the reason it cannot be read.
+    fn github_user(&self) -> Result<Option<String>, String> {
+        Ok(None)
+    }
 }
 
-/// The repos of `~/.jam-factory/config.json` under `home`, read again on every call.
+/// The repos and the GitHub user of `~/.jam-factory/config.json` under `home`, read again on every call.
 pub struct ConfigRepos {
     pub home: PathBuf,
 }
@@ -38,6 +43,10 @@ pub struct ConfigRepos {
 impl RepoList for ConfigRepos {
     fn paths(&self) -> Result<Vec<PathBuf>, String> {
         resolve_repos(&self.home).map_err(|error| error.to_string())
+    }
+
+    fn github_user(&self) -> Result<Option<String>, String> {
+        resolve_github_user(&self.home).map_err(|error| error.to_string())
     }
 }
 

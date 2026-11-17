@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Finds the factory root, the server port and the repos from `~/.jam-factory/config.json`.
+//! Finds the factory root, the server port, the repos and the GitHub user from `~/.jam-factory/config.json`.
 
 use std::fs;
 use std::io;
@@ -61,9 +61,23 @@ struct PortConfig {
     port: Option<u16>,
 }
 
+/// A config file whose GitHub user cannot be read, with its path and the reason.
+#[derive(Debug, Error)]
+#[error("Cannot read the GitHub user from {}: {reason}", path.display())]
+pub struct GithubUserError {
+    pub path: PathBuf,
+    pub reason: String,
+}
+
 #[derive(Default, Deserialize)]
 struct ReposConfig {
     repos: Option<Vec<String>>,
+}
+
+#[derive(Default, Deserialize)]
+struct GithubUserConfig {
+    #[serde(rename = "githubUser")]
+    github_user: Option<String>,
 }
 
 /// Returns the factory root for the home folder `home`.
@@ -131,6 +145,20 @@ pub fn resolve_repos(home: &Path) -> Result<Vec<PathBuf>, ReposError> {
     }
 
     Ok(repos)
+}
+
+/// Returns the `githubUser` of the config for the home folder `home`, or `None` when it is missing or blank.
+pub fn resolve_github_user(home: &Path) -> Result<Option<String>, GithubUserError> {
+    let path = home.join(CONFIG_DIR).join(CONFIG_FILE);
+
+    let config: GithubUserConfig = read_config(&path).map_err(|reason| GithubUserError {
+        path: path.clone(),
+        reason,
+    })?;
+
+    let user = config.github_user.map(|user| user.trim().to_string());
+
+    Ok(user.filter(|user| !user.is_empty()))
 }
 
 /// Reads and parses the config file at `path`, or returns an empty config when it is missing.
@@ -351,6 +379,42 @@ mod tests {
             let config = write_config(home.path(), text);
 
             let err = resolve_repos(home.path()).unwrap_err();
+
+            assert!(
+                err.to_string().contains(&config.display().to_string()),
+                "{text}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn github_user_is_read_and_trimmed() {
+        let home = tempfile::tempdir().unwrap();
+
+        assert_eq!(resolve_github_user(home.path()).unwrap(), None);
+
+        for (text, expected) in [
+            (r#"{ "githubUser": "octonato" }"#, Some("octonato")),
+            (r#"{ "githubUser": " octonato " }"#, Some("octonato")),
+            (r#"{ "githubUser": "  " }"#, None),
+            (r#"{ "root": "/x" }"#, None),
+        ] {
+            write_config(home.path(), text);
+
+            let user = resolve_github_user(home.path()).unwrap();
+
+            assert_eq!(user.as_deref(), expected, "{text}");
+        }
+    }
+
+    #[test]
+    fn bad_github_user_is_an_error() {
+        let home = tempfile::tempdir().unwrap();
+
+        for text in [r#"{ "githubUser": 3 }"#, "not json"] {
+            let config = write_config(home.path(), text);
+
+            let err = resolve_github_user(home.path()).unwrap_err();
 
             assert!(
                 err.to_string().contains(&config.display().to_string()),

@@ -25,6 +25,7 @@ use super::open;
 use super::prs;
 use super::repos::{RepoList, is_worktree, repos_json};
 use super::terminals::{self, Terminals};
+use super::worktrees;
 use crate::store::Store;
 
 const HTML: &str = "text/html; charset=utf-8";
@@ -71,6 +72,7 @@ pub fn post(
         ["", "api", "open", ..] => open::post(store, repos, request),
         ["", "api", "prs", ..] => prs::post(repos, request),
         ["", "api", "terminals", ..] => terminals::post(terminals, request),
+        ["", "api", "worktrees", ..] => worktrees::post(repos, request),
         _ => Response::error(404),
     }
 }

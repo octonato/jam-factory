@@ -149,8 +149,14 @@ function dashboard({ script = source, pageWidth = 1200, pageLeft = 0, splitterWi
     return el
   }
 
-  for (const id of ['board-header', 'tabs', 'page', 'term-store', 'status', 'problems', 'font-down', 'font-up', 'font-value', 'modal', 'modal-text', 'modal-cancel']) element(id)
-  elements.get('modal').showModal = () => { elements.get('modal').open = true }
+  for (const id of ['board-header', 'tabs', 'page', 'term-store', 'status', 'problems', 'font-down', 'font-up', 'font-value', 'modal', 'modal-text', 'modal-input', 'modal-cancel']) element(id)
+  const modal = elements.get('modal')
+  modal.showModal = () => { modal.open = true }
+  modal.close = (value = '') => {
+    modal.returnValue = value
+    modal.open = false
+    modal.dispatch('close')
+  }
 
   let pageHtml = ''
   elements.get('page').querySelectorAll = () => cardRows(pageHtml)
@@ -4495,4 +4501,153 @@ test('archiving a session in the main window goes to the sessions page', async (
   await archive(app, worktreeSession)
   assert.equal(app.context.location.hash, '#/sessions')
   assert.equal(closes.count, 0)
+})
+
+const newWorktree = { path: '/s/akka/sdk/fix-it', branch: 'octonato/fix-it', head: null }
+
+// Returns the `api/worktrees` URL of `name` for `sdkMain`.
+const newWorktreeUrl = (name) => `api/worktrees?path=%2Fs%2Fakka%2Fsdk%2Fmain&name=${encodeURIComponent(name)}`
+
+// Returns a dashboard on `hash` after one poll, with the POST URLs and the pending `api/worktrees` replies.
+async function newWorktreeApp(hash) {
+  const posts = []
+  const creates = []
+  const repos = plain(selectRepos)
+  const app = dashboard({
+    fetcher: (url, options) => {
+      if (options?.method === 'POST') {
+        posts.push(url)
+        return new Promise((resolve) => creates.push(resolve))
+      }
+      if (url === 'api/repos') return response(JSON.stringify(repos))
+      if (url === 'api/sessions') return sessionsReply([])
+      if (url.startsWith('api/prs?path=')) return prsJson(prList)()
+      return response('', false, { status: 404 })
+    },
+  })
+  app.context.location.hash = hash
+  await app.run('poll()')
+  await settle()
+  return { app, posts, creates, repos }
+}
+
+// Types `name` into the open modal and presses Enter in its text field.
+function enterName(app, name) {
+  const input = app.elements.get('modal-input')
+  input.value = name
+
+  let prevented = false
+  input.dispatch('keydown', { key: 'Enter', preventDefault: () => { prevented = true } })
+  assert.ok(prevented)
+}
+
+// Answers the first pending creation with the path of `newWorktree`, which `api/repos` lists from then on, and waits for the board.
+async function finishCreate({ creates, repos }) {
+  repos.repos[0].worktrees.push(newWorktree)
+  creates.shift()(response(JSON.stringify({ path: newWorktree.path })))
+  await settle()
+}
+
+test('b on a main row asks for a name, creates the worktree and opens its page', async () => {
+  const stubs = await newWorktreeApp('#/')
+  const { app, posts } = stubs
+  press(app, 'ArrowDown')
+  assert.equal(app.run('selectedWorktree'), sdkMain)
+
+  assert.ok(press(app, 'b'))
+  assert.equal(app.elements.get('modal').open, true)
+  assert.equal(app.elements.get('modal-input').hidden, false)
+  assert.equal(app.elements.get('modal-input').focused, true)
+  assert.equal(app.elements.get('modal-text').textContent, 'Name of the new worktree of akka/sdk')
+
+  enterName(app, ' fix it ')
+  await settle()
+  assert.deepEqual(posts, [newWorktreeUrl('fix it')])
+  assert.equal(app.context.location.hash, '#/')
+
+  await finishCreate(stubs)
+  assert.equal(app.context.location.hash, worktreeHashOf(newWorktree.path))
+  assert.equal(app.run('creatingWorktree'), false)
+})
+
+test('b and the card button on the PRs page create a worktree', async () => {
+  for (const act of [(app) => press(app, 'b'), (app) => clickCardButton(app, 'new-worktree')]) {
+    const stubs = await newWorktreeApp(prsHashOf(sdkMain))
+    const { app, posts } = stubs
+
+    act(app)
+    assert.equal(app.elements.get('modal').open, true)
+    enterName(app, 'fix-it')
+    await settle()
+    assert.deepEqual(posts, [newWorktreeUrl('fix-it')])
+
+    await finishCreate(stubs)
+    assert.equal(app.context.location.hash, worktreeHashOf(newWorktree.path))
+  }
+})
+
+// Clicks the card button of `action` on the PRs page.
+function clickCardButton(app, action) {
+  const button = { dataset: { action } }
+  const target = { closest: (selector) => (selector === 'button[data-action]' ? button : null) }
+  app.elements.get('pr-card').dispatch('click', { target })
+}
+
+test('the PRs page card holds the create worktree button', async () => {
+  const { app } = await newWorktreeApp(prsHashOf(sdkMain))
+
+  assert.match(app.elements.get('pr-card').innerHTML, /data-action="new-worktree" title="Create a worktree \(b\)"/)
+})
+
+test('a cancelled or blank name creates nothing', async () => {
+  for (const close of [(app) => closeModal(app, 'cancel'), (app) => closeModal(app, ''), (app) => enterName(app, '   ')]) {
+    const { app, posts } = await newWorktreeApp(prsHashOf(sdkMain))
+
+    assert.ok(press(app, 'b'))
+    close(app)
+    await settle()
+    assert.deepEqual(posts, [])
+    assert.equal(app.run('creatingWorktree'), false)
+    assert.equal(app.context.location.hash, prsHashOf(sdkMain))
+  }
+})
+
+test('b does nothing on a worktree row', async () => {
+  const { app, posts } = await newWorktreeApp('#/')
+  press(app, 'ArrowDown')
+  press(app, 'ArrowDown')
+  assert.equal(app.run('selectedWorktree'), pathA)
+
+  assert.equal(press(app, 'b'), false)
+  assert.notEqual(app.elements.get('modal').open, true)
+  assert.deepEqual(posts, [])
+})
+
+test('a failed creation tells the error and stays on the page', async () => {
+  const { app, creates } = await newWorktreeApp(prsHashOf(sdkMain))
+
+  press(app, 'b')
+  enterName(app, 'taken')
+  await settle()
+  creates.shift()(response('Branch octonato/taken already exists', false, { status: 409 }))
+  await settle()
+
+  assert.equal(app.elements.get('modal').open, true)
+  assert.equal(app.elements.get('modal-input').hidden, true)
+  assert.equal(app.elements.get('modal-text').textContent, 'Could not create the worktree taken: Branch octonato/taken already exists')
+  assert.equal(app.context.location.hash, prsHashOf(sdkMain))
+  assert.equal(app.run('creatingWorktree'), false)
+})
+
+test('leaving the page during a creation stays where the user went', async () => {
+  const stubs = await newWorktreeApp(prsHashOf(sdkMain))
+  const { app } = stubs
+
+  press(app, 'b')
+  enterName(app, 'fix-it')
+  await settle()
+  navigate(app, '#/sessions')
+  await finishCreate(stubs)
+
+  assert.equal(app.context.location.hash, '#/sessions')
 })

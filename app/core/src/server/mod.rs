@@ -25,6 +25,7 @@ pub mod pty;
 pub mod repos;
 pub mod terminal;
 pub mod terminals;
+pub mod worktrees;
 
 use std::io;
 use std::net::{SocketAddr, TcpListener, TcpStream};

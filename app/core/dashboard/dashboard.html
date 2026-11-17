@@ -394,6 +394,23 @@
 
   #modal p { margin: 0 0 16px; }
 
+  #modal input {
+    display: block;
+    width: 100%;
+    min-width: 320px;
+    margin-bottom: 16px;
+    padding: 6px 10px;
+    color: var(--ink);
+    font: inherit;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+  }
+
+  #modal input[hidden] { display: none; }
+
+  #modal input:focus { border-color: var(--accent); outline: none; }
+
   #modal .buttons { display: flex; justify-content: flex-end; gap: 8px; }
 
   #modal button {
@@ -909,6 +926,7 @@
 <dialog id="modal">
   <form method="dialog">
     <p id="modal-text"></p>
+    <input id="modal-input" hidden autocomplete="off" spellcheck="false" aria-labelledby="modal-text">
     <div class="buttons">
       <button value="cancel" id="modal-cancel">Cancel</button>
       <button value="ok">OK</button>
@@ -1033,6 +1051,7 @@ const ACTION_ICONS = {
   archive: '<rect x="2" y="2.5" width="12" height="3" rx=".5"/><path d="M3 5.5v8h10v-8M6.5 8h3"/>',
   worktree: '<rect x="2" y="2.5" width="12" height="11" rx="1.5"/><path d="M6.5 2.5v11"/>',
   refresh: '<path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2v3h-3"/>',
+  'new-worktree': '<rect x="2" y="2.5" width="12" height="11" rx="1.5"/><path d="M8 5.5v5M5.5 8h5"/>',
 }
 const CARD_ACTIONS = [
   { action: 'worktree', title: 'Go to worktree page (c)', icon: ACTION_ICONS.worktree },
@@ -1056,6 +1075,11 @@ const PR_ACTIONS = [
   { action: 'github', title: 'Open on GitHub (o)', icon: ACTION_ICONS.github },
   { action: 'refresh', title: 'Refresh PR (u)', icon: ACTION_ICONS.refresh },
 ]
+const PRS_CARD_ACTIONS = [
+  { action: 'new-worktree', title: 'Create a worktree (b)', icon: ACTION_ICONS['new-worktree'] },
+]
+// The key that creates a worktree of a main checkout.
+const NEW_WORKTREE_KEY = 'b'
 // The title of the worktree icon of a PR that no worktree holds.
 const PR_CHECKOUT_TITLE = 'Check out and open worktree page (c)'
 const CI_LABELS = { none: 'no CI', pending: 'CI running', passing: 'CI passing', failing: 'CI failing' }
@@ -1134,6 +1158,8 @@ let selectedPr = null
 let prFilter = ''
 // The `${path}#${number}` keys of the PRs whose checkout runs.
 const prBusy = new Set()
+// True while the board asks for a worktree name or creates the worktree.
+let creatingWorktree = false
 // The `${path}#${number}` keys of the PRs whose refresh runs.
 const prRefreshing = new Set()
 let pendingDiffs = []
@@ -2143,7 +2169,7 @@ function prRowHtml(repo, pr, selected) {
     </div>`
 }
 
-// Returns the card of the PRs page of `repo`: its name, its short path, the count of the shown list, and whether a fresh list loads.
+// Returns the card of the PRs page of `repo`: its name, its short path, the count of the shown list, whether a fresh list loads, and its actions.
 function prCardHtml(repo) {
   const shown = prsState !== null && !prsState.loading && (prsState.error === null || prsState.prs.length > 0)
   const count = shown ? prsState.prs.length : 0
@@ -2159,7 +2185,14 @@ function prCardHtml(repo) {
         <div class="path">${escape(shortPath(repo.path))}</div>
       </div>
       <div class="facts">${facts.join('')}</div>
+      <div class="actions">${actionButtons(PRS_CARD_ACTIONS)}</div>
     </div>`
+}
+
+// Creates a worktree for the clicked card button of the PRs page.
+function onPrCardAction(event) {
+  const button = event.target.closest('button[data-action]')
+  if (button?.dataset.action === 'new-worktree') createWorktree(prsView.path)
 }
 
 // Returns the PR list of the PRs page of `repo`: loading, the error, no PRs, no match, or one row per shown PR. A cached list shows below the error of its refresh.
@@ -2207,6 +2240,7 @@ function renderPrsPage(path) {
     $('pr-filter').value = prFilter
     $('pr-filter').addEventListener('input', onPrFilter)
     $('pr-list').addEventListener('click', onPrListClick)
+    $('pr-card').addEventListener('click', onPrCardAction)
     prsView = { path, el: $('page').firstElementChild, card: '', list: '' }
   }
 
@@ -3065,17 +3099,19 @@ async function showFile(session, files, path, seq) {
   if (!sameFile) $('view').scrollTop = 0
 }
 
-// Shows the modal with `message` and resolves with the value of the button that closed it.
-function openModal(message, cancellable) {
+// Shows the modal with `message`, and its text field when `input`, and resolves with the value of the button that closed it.
+function openModal(message, cancellable, input = false) {
   const modal = $('modal')
   $('modal-text').textContent = message
   $('modal-cancel').hidden = !cancellable
+  $('modal-input').hidden = !input
   modal.returnValue = ''
 
   const closed = new Promise((resolve) => {
     modal.addEventListener('close', () => resolve(modal.returnValue), { once: true })
   })
   modal.showModal()
+  if (input) $('modal-input').focus()
   return closed
 }
 
@@ -3085,6 +3121,22 @@ async function ask(message) {
 
 async function tell(message) {
   await openModal(message, false)
+}
+
+// Shows the modal with `message` above an empty text field, and resolves with the trimmed text on OK, or null.
+async function askText(message) {
+  $('modal-input').value = ''
+
+  const answer = await openModal(message, true, true)
+  return answer === 'ok' ? $('modal-input').value.trim() : null
+}
+
+// Closes the modal with OK on `Enter` in its text field.
+function onModalInputKey(event) {
+  if (event.key !== 'Enter') return
+
+  event.preventDefault()
+  $('modal').close('ok')
 }
 
 // Returns an editor over `text` in `container`.
@@ -3693,6 +3745,45 @@ async function postCheckout(path, pr) {
   return folder
 }
 
+// Posts a new worktree `name` of the main checkout at `path` and returns the worktree path of the reply.
+async function postWorktree(path, name) {
+  const res = await fetch(`api/worktrees?path=${encodeURIComponent(path)}&name=${encodeURIComponent(name)}`, { method: 'POST' })
+  const text = await res.text()
+  if (!res.ok) throw new Error(text.trim() || `${res.status} ${res.statusText}`)
+
+  const folder = stringOrNull(JSON.parse(text)?.path)
+  if (folder === null) throw new Error('the reply has no worktree path')
+  return folder
+}
+
+// Asks for a name, creates a worktree of the main checkout at `path` on a new branch, reloads the repos and opens its worktree page.
+// Does nothing while a creation runs. Stays where the user went when the page changed meanwhile. Tells the user the error.
+async function createWorktree(path) {
+  const repo = findRepo(path)
+  if (repo === undefined || repo.error !== null || creatingWorktree) return
+
+  creatingWorktree = true
+  const name = await askText(`Name of the new worktree of ${repo.org}/${repo.repo}`)
+  if (!name) {
+    creatingWorktree = false
+    return
+  }
+
+  const hash = location.hash
+  let folder = null
+  let problem = null
+  try {
+    folder = await postWorktree(path, name)
+    await loadRepos()
+  } catch (err) {
+    problem = err.message
+  }
+
+  creatingWorktree = false
+  if (problem !== null) return tell(`Could not create the worktree ${name}: ${problem}`)
+  if (location.hash === hash) location.hash = worktreeHash(folder)
+}
+
 // Resolves to the path of the worktree that holds `pr` of the main checkout at `path`, after a checkout and a repos reload when none holds it. Resolves to null after it tells the user the error.
 async function prCheckout(path, pr) {
   const repo = findRepo(path)
@@ -4145,6 +4236,11 @@ function reposKey(key) {
     return true
   }
 
+  if (row.worktree === null && key === NEW_WORKTREE_KEY) {
+    createWorktree(row.path)
+    return true
+  }
+
   if (row.worktree === null) return false
   return worktreeAction(row.path, key)
 }
@@ -4259,6 +4355,11 @@ function prsKey(key, path) {
 
   if (key === '/') {
     $('pr-filter')?.focus()
+    return true
+  }
+
+  if (key === NEW_WORKTREE_KEY) {
+    createWorktree(path)
     return true
   }
 
@@ -4467,6 +4568,8 @@ $('font-up').addEventListener('click', () => stepFontSize(1))
 showFontSize(readFontSize())
 orgFilter = readOrgFilter()
 if (standaloneRoot !== null) $('board-header').hidden = true
+
+$('modal-input').addEventListener('keydown', onModalInputKey)
 
 window.addEventListener('hashchange', onHashChange)
 window.addEventListener('beforeunload', onBeforeUnload)

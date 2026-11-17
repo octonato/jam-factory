@@ -160,6 +160,12 @@ To list main checkouts on the Repos tab of Jam Board, set `repos` to a list of t
 
 The Repos tab lists each checkout with its linked worktrees. A worktree's page lists its live sessions and runs a shell or lazygit in each tab. `jam-factory-server` reads `repos` on each request, so a change to `repos` needs no restart.
 
+To create a worktree, select a main row on the Repos tab and press `b`, or press `b` on the PRs page of a main checkout. Enter the worktree name. Jam Board creates a new branch at the main checkout's HEAD in a sibling folder named after the worktree, then opens the worktree page. To prefix the branch with your GitHub user, set `githubUser`. With `"githubUser": "octonato"`, the name `rate-limit` gives the branch `octonato/rate-limit` in the folder `rate-limit`:
+
+```json
+{ "githubUser": "octonato" }
+```
+
 Restart `jam-factory-server` after you change `root` or `port`:
 
 ```sh
@@ -333,7 +339,7 @@ A step in changes mode holds git diffs. A step in code-path mode holds lines of 
 
 ```
 ~/.jam-factory/
-  config.json                    optional: { "root": "<root>", "port": <port>, "repos": ["<path>", ...] }
+  config.json                    optional: { "root": "<root>", "port": <port>, "repos": ["<path>", ...], "githubUser": "<login>" }
 <root>/                          ~/.jam-factory/factory by default
   <org>/<repo>/sessions/<branch>/<session id>/
     session.json                 the session's mode, stage, round and counts
