@@ -169,13 +169,17 @@ mod tests {
     }
 
     #[test]
-    fn session_card_holds_the_actions() {
+    fn session_strip_holds_the_archive_action() {
         let html = std::str::from_utf8(embedded("/dashboard.html").unwrap().bytes).unwrap();
-        let start = html.find("function sessionCardHtml(").unwrap();
+        let start = html.find("function sessionStripHtml(").unwrap();
         let rest = &html[start..];
         let end = rest.find("\nfunction ").unwrap_or(rest.len());
 
-        assert!(rest[..end].contains("cardActions(session)"));
+        assert!(rest[..end].contains("actionButtons(STRIP_ACTIONS)"));
+        assert!(html.contains(
+            "const STRIP_ACTIONS = CARD_ACTIONS.filter(({ action }) => action === 'archive')"
+        ));
+        assert!(!html.contains("function sessionCardHtml("));
     }
 
     #[test]
@@ -242,11 +246,11 @@ mod tests {
         let html = std::str::from_utf8(embedded("/dashboard.html").unwrap().bytes).unwrap();
 
         assert_eq!(
-            css_rule(html, "#view.terminal"),
-            "padding: 0; overflow: hidden; background: #142b37;"
+            css_rule(html, ".term-view"),
+            "flex: 1; min-height: 0; overflow: hidden; background: #142b37;"
         );
         assert_eq!(
-            css_rule(html, "#view.terminal .xterm"),
+            css_rule(html, ".term-view .xterm"),
             "height: 100%; padding: 4px 8px;"
         );
     }
@@ -259,11 +263,9 @@ mod tests {
             css_rule(html, ".session-page.zoomed"),
             "grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr);"
         );
-        for hidden in [".session-bar,", "#metro-pane,", "#splitter,"] {
-            assert!(html.contains(&format!(".session-page.zoomed {hidden}\n")));
-        }
+        assert!(html.contains(".session-page.zoomed .session-bar,\n"));
         assert_eq!(
-            css_rule(html, ".session-page.zoomed .viewer-head"),
+            css_rule(html, ".session-page.zoomed .worktree-bar"),
             "display: none;"
         );
     }

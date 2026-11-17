@@ -225,7 +225,6 @@
 
   .row.main .body,
   .row.worktree .body,
-  .row.session .body,
   .row.pr .body {
     grid-template-columns: minmax(0, 1fr) auto;
   }
@@ -344,12 +343,16 @@
   .session-page {
     display: grid;
     grid-template-columns: minmax(0, var(--left, 30%)) 6px minmax(0, 1fr);
-    grid-template-rows: auto minmax(0, 1fr);
+    grid-template-rows: auto auto auto minmax(0, 1fr);
     height: 100%;
   }
 
-  #metro-pane,
-  #worktree-sessions {
+  .session-page.terminal-item {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto minmax(0, 1fr);
+  }
+
+  #metro-pane {
     overflow: auto;
     padding: 16px 16px 48px;
   }
@@ -374,10 +377,7 @@
   .session-page.zoomed { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
 
   .session-page.zoomed .session-bar,
-  .session-page.zoomed #metro-pane,
-  .session-page.zoomed #splitter,
-  .session-page.zoomed #worktree-sessions,
-  .session-page.zoomed .viewer-head {
+  .session-page.zoomed .worktree-bar {
     display: none;
   }
 
@@ -456,9 +456,6 @@
     resize: none;
   }
 
-  #view.terminal { padding: 0; overflow: hidden; background: #142b37; }
-  #view.terminal .xterm { height: 100%; padding: 4px 8px; }
-
   .term-tabs {
     display: flex;
     flex-wrap: wrap;
@@ -518,6 +515,56 @@
     padding: 12px 16px;
     border-bottom: 1px solid var(--line);
   }
+
+  .worktree-bar {
+    display: flex;
+    flex-wrap: wrap;
+    grid-column: 1 / -1;
+    align-items: center;
+    gap: 4px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .bar-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 8px;
+    color: var(--ink-2);
+    font-size: 0.857rem;
+    text-decoration: none;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+  }
+
+  .bar-item.waiting { --tone: var(--warning); }
+  .bar-item.blocked { --tone: var(--critical); }
+  .bar-item.done { --tone: var(--good); }
+  .bar-item:is(.waiting, .blocked, .done) { border-left: 3px solid var(--tone); }
+  .bar-item .id { font-weight: 600; }
+  .bar-item:hover { color: var(--accent); }
+
+  .bar-item[aria-current="page"] {
+    color: var(--ink);
+    border-color: var(--accent);
+    border-left-color: var(--tone, var(--accent));
+  }
+
+  .session-strip {
+    grid-column: 1 / -1;
+    padding: 8px 16px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .session-strip .facts {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .session-strip .actions { display: flex; margin: 0 -4px 0 auto; }
 
   .session-card {
     display: flex;
@@ -897,7 +944,7 @@
   #view .code pre code.hljs { padding: 10px 12px; }
 
   @media (max-width: 800px) {
-    .session-page { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 55fr) minmax(0, 45fr); }
+    .session-page { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto auto minmax(0, 55fr) minmax(0, 45fr); }
     #splitter { display: none; }
     .viewer { border-top: 1px solid var(--line); }
   }
@@ -1058,9 +1105,10 @@ const CARD_ACTIONS = [
   { action: 'intellij', title: 'Open in IntelliJ (i)', icon: ACTION_ICONS.intellij },
   { action: 'zed', title: 'Open in Zed (e)', icon: ACTION_ICONS.zed },
   { action: 'iterm', title: 'Open in iTerm (t)', icon: ACTION_ICONS.iterm },
-  { action: 'lazygit', title: 'Open in lazygit (g)', icon: ACTION_ICONS.lazygit },
+  { action: 'lazygit', title: 'Open lazygit in a tab (g)', icon: ACTION_ICONS.lazygit },
   { action: 'archive', title: 'Archive (a)', icon: ACTION_ICONS.archive },
 ]
+const STRIP_ACTIONS = CARD_ACTIONS.filter(({ action }) => action === 'archive')
 const WORKTREE_ACTIONS = [
   { action: 'lazygit', title: 'Open lazygit in a tab (g)', icon: ACTION_ICONS.lazygit },
   { action: 'iterm', title: 'Open in iTerm', icon: ACTION_ICONS.iterm },
@@ -1122,12 +1170,12 @@ let prsState = null
 let tabsHtml = ''
 let listView = { html: '', el: null }
 let reposView = { el: null, list: '' }
-let sessionView = { dir: null, el: null, card: '', metro: '', head: '', stops: [], selected: -1 }
-let worktreeView = { path: null, el: null, card: '', sessions: '', tabs: '' }
+let sessionView = { dir: null, card: '', metro: '', head: '', stops: [], selected: -1 }
+// The shown worktree page, where `item` is the dir of the selected session or null for the Terminal item.
+let worktreeView = { path: null, el: null, item: null, card: '', bar: '', tabs: '' }
 let prsView = { path: null, el: null, card: '', list: '' }
 let lastView = { key: null, path: null, text: null, version: null }
 let editing = null
-let terminal = null
 // The terminal tabs of each worktree path: `{ tabs, active, shells }`, where `shells` is the highest shell number used.
 const worktreeTerms = new Map()
 // The tab whose name the tab strip edits: `{ path, id }`, or null.
@@ -1147,10 +1195,9 @@ let renderSeq = 0
 let fontSize = FONT_DEFAULT
 let leftWidth = null
 let selectedDir = null
-// The hash a back key on the session page goes to.
-let sessionOrigin = '#/sessions'
-// The PRs page a back key on the worktree page returns to: `{ hash, selectedPr, prFilter }`, or null for the repos page.
-let worktreeOrigin = null
+// The page the shown worktree page was entered from: `{ hash, selectedPr, prFilter, dir }`, or null.
+// `hash` is `#/sessions`, a PRs hash, or null for the repos page. `dir` is the dir of the session last shown on the page.
+let pageOrigin = null
 let selectedWorktree = null
 let orgFilter = null
 let repoFilter = ''
@@ -1798,11 +1845,11 @@ function onRepoFilter(event) {
   renderRepos()
 }
 
-// Opens a clicked main, worktree or session row in a new app window on Cmd+click. Does nothing in a browser.
+// Opens a clicked main, worktree or session row, or a bar item, in a new app window on Cmd+click. Does nothing in a browser.
 function onRowClick(event) {
   if (!event.metaKey || window.__TAURI__ === undefined) return
 
-  const link = event.target.closest('.row.main > a.body, .row.worktree > a.body, .row.card > a.body, .row.session > a.body')
+  const link = event.target.closest('.row.main > a.body, .row.worktree > a.body, .row.card > a.body, a.bar-item')
   if (!link) return
 
   event.preventDefault()
@@ -1948,6 +1995,21 @@ function listedWorktree(path) {
   return null
 }
 
+// Returns the path of the worktree page of `session`: the listed worktree of `session`, else its own worktree, or null when its worktree is missing or empty.
+function sessionWorktree(session) {
+  if (typeof session.worktree !== 'string' || session.worktree === '') return null
+  return listedWorktree(session.worktree) ?? session.worktree
+}
+
+// Returns the key of the worktree page that `route` shows: its worktree path, or the href of a session with no worktree. Returns null when it shows none.
+function routePage(route) {
+  if (route.kind === 'worktree') return route.path
+  if (route.kind !== 'session') return null
+
+  const session = state.sessions.find((s) => sessionHref(s) === sessionHref(route))
+  return session === undefined ? null : sessionWorktree(session) ?? sessionHref(session)
+}
+
 // Returns the worktree card: the checkout's name, the worktree's short path and branch, and its actions.
 function worktreeCardHtml(repo, worktree) {
   return `
@@ -1977,16 +2039,53 @@ function missingWorktreeCardHtml(path) {
     </div>`
 }
 
-// Returns the live sessions of the worktree at `path`, each a link to its page with its id, flow and stage.
-function worktreeSessionsHtml(path) {
-  const rows = sessionsOf(path).map((session) => `
-    <div class="row session ${tint(session)}">
-      <a class="body" href="${escape(sessionHref(session))}">
-        <span class="name"><span class="id">${escape(session.id)}</span></span>
-        <span class="label"><span class="pill">${escape(sessionFlow(session))}</span> ${escape(session.stage ?? 'unknown')}</span>
-      </a>
-    </div>`)
-  return rows.length > 0 ? `<div class="rows">${rows.join('')}</div>` : '<p class="empty">No live sessions.</p>'
+// Returns the card of the main checkout of `repo`: the checkout's name, its short path and a `main checkout` pill.
+function mainCheckoutCardHtml(repo) {
+  return `
+    <div class="session-card">
+      <div class="name">
+        <div class="id">${escape(`${repo.org}/${repo.repo}`)}</div>
+        <div class="path">${escape(shortPath(repo.path))}</div>
+      </div>
+      <div class="facts"><span class="pill">main checkout</span></div>
+    </div>`
+}
+
+// Returns the card of the worktree page of `path`: the worktree card of `found`, the main checkout card, or the missing worktree card.
+function pageCardHtml(path, found) {
+  if (found !== null) return worktreeCardHtml(found.repo, found.worktree)
+
+  const repo = findRepo(path)
+  if (repo !== undefined) return mainCheckoutCardHtml(repo)
+  return missingWorktreeCardHtml(path ?? '')
+}
+
+// Returns the items of the bar of the worktree at `path`: the Terminal item, then one item per session of `path`, then `selected` when `path` lacks it.
+// Returns only the item of `selected` when `path` is null.
+function barItems(path, selected) {
+  if (path === null) return [{ hash: sessionHref(selected), session: selected }]
+
+  const sessions = sessionsOf(path)
+  if (selected !== null && !sessions.some((session) => session.dir === selected.dir)) sessions.push(selected)
+
+  const terminal = { hash: worktreeHash(path), session: null }
+  return [terminal, ...sessions.map((session) => ({ hash: sessionHref(session), session }))]
+}
+
+// Returns the bar of the worktree at `path`: one link per item, with the item of `selected` as the current page.
+function worktreeBarHtml(path, selected) {
+  return barItems(path, selected).map(({ hash, session }) => {
+    const current = session?.dir === selected?.dir ? ' aria-current="page"' : ''
+    if (session === null) return `<a class="bar-item" href="${escape(hash)}"${current}>▣ Terminal</a>`
+
+    const tone = tint(session)
+    return `
+      <a class="bar-item${tone === '' ? '' : ` ${tone}`}" href="${escape(hash)}"${current}>
+        <span class="id">${escape(session.id)}</span>
+        <span class="pill">${escape(sessionFlow(session))}</span>
+        ${escape(session.stage ?? 'unknown')}
+      </a>`
+  }).join('')
 }
 
 // Returns the tab strip of `terms`: one tab per terminal with its close button, then the `+` button. Tab `renamingId` shows its name in a text field.
@@ -2011,57 +2110,100 @@ function updateWorktreePart(key, id, html) {
   worktreeView[key] = html
 }
 
-// Renders the worktree page of `path`: its card, its sessions, and its terminal tabs with the active terminal. A worktree missing from the repos list keeps the page while it has tabs.
-function renderWorktreePage(path) {
+// Renders the worktree page of `path` with `session` and its `file` selected, or the Terminal item when `session` is null, or only the reason for an unlisted `path` with no tabs and no sessions.
+// A null `path` renders the page of `session` alone.
+function renderWorktreePage(path, session, file) {
   const found = findWorktree(path)
   const terms = worktreeTerms.get(path)
-  if (found === null && (terms?.tabs.length ?? 0) === 0) {
+  const hasTabs = (terms?.tabs.length ?? 0) > 0
+  if (found === null && !hasTabs && sessionsOf(path).length === 0 && session === null) {
     parkWorktreeTerminal()
     $('page').innerHTML = `<div class="column"><p>${missingWorktreeHtml()}</p></div>`
     return
   }
 
-  if (worktreeView.el !== $('page').firstElementChild || worktreeView.path !== path) {
-    parkWorktreeTerminal()
-    $('page').innerHTML = `
-      <div class="session-page">
+  const item = session?.dir ?? null
+  if (worktreeView.el !== $('page').firstElementChild || worktreeView.path !== path || worktreeView.item !== item) {
+    buildWorktreePage(path, item)
+  }
+
+  updateWorktreePart('card', 'worktree-card', pageCardHtml(path, found))
+  updateWorktreePart('bar', 'worktree-bar', worktreeBarHtml(path, session))
+
+  if (session !== null) return renderSessionContent(session, file)
+
+  if (renaming !== null && !terms?.tabs.some((tab) => tab.id === renaming.id)) renaming = null
+  const tabs = found === null && !hasTabs ? missingWorktreeHtml() : termTabsHtml(terms, renaming?.id)
+  if (renaming === null || $('term-rename') === null) updateWorktreePart('tabs', 'term-tabs', tabs)
+  showWorktreeTerminal(path)
+  if (activeWorktreeTerminal(path) === undefined) worktreeView.el.classList.remove('zoomed')
+}
+
+// Replaces `#page` with the worktree page of `path`, which shows the session whose dir is `item`, or the terminal tabs when `item` is null.
+function buildWorktreePage(path, item) {
+  parkWorktreeTerminal()
+  $('page').innerHTML = worktreePageHtml(item === null)
+
+  const page = $('page').firstElementChild
+  $('worktree-card').addEventListener('click', onWorktreeCardAction)
+  $('worktree-bar').addEventListener('click', onRowClick)
+  worktreeView = { path, el: page, item, card: '', bar: '', tabs: '' }
+
+  if (item === null) {
+    $('term-tabs').addEventListener('click', onTermTabsClick)
+    $('term-tabs').addEventListener('keydown', onRenameKey)
+    $('term-tabs').addEventListener('focusout', onRenameBlur)
+    return
+  }
+
+  resizeSessionPage(page)
+  $('session-card').addEventListener('click', onCardAction)
+  $('metro').addEventListener('click', onMetroClick)
+  $('splitter').addEventListener('pointerdown', onSplitterDown)
+  $('view').addEventListener('click', onDiffToggle)
+  sessionView = { dir: item, card: '', metro: '', head: '', stops: [], selected: -1 }
+  lastView = { key: null, path: null, text: null, version: null }
+}
+
+// Returns the markup of the worktree page: the card and the bar, then the terminal tabs when `terminal` is true, else the session strip, the metro, the splitter and the viewer.
+function worktreePageHtml(terminal) {
+  const head = `
         <div class="session-bar" id="worktree-card"></div>
-        <section id="worktree-sessions"></section>
-        <div id="splitter"></div>
+        <nav class="worktree-bar" id="worktree-bar"></nav>`
+
+  if (terminal) {
+    return `
+      <div class="session-page terminal-item">${head}
         <section class="viewer">
           <div class="term-tabs" id="term-tabs"></div>
           <div class="term-view" id="term-view"></div>
         </section>
       </div>`
-    const page = $('page').firstElementChild
-    resizeSessionPage(page)
-    $('worktree-card').addEventListener('click', onWorktreeCardAction)
-    $('worktree-sessions').addEventListener('click', onRowClick)
-    $('term-tabs').addEventListener('click', onTermTabsClick)
-    $('term-tabs').addEventListener('keydown', onRenameKey)
-    $('term-tabs').addEventListener('focusout', onRenameBlur)
-    $('splitter').addEventListener('pointerdown', onSplitterDown)
-    worktreeView = { path, el: page, card: '', sessions: '', tabs: '' }
   }
 
-  const card = found === null ? missingWorktreeCardHtml(path) : worktreeCardHtml(found.repo, found.worktree)
-  updateWorktreePart('card', 'worktree-card', card)
-  updateWorktreePart('sessions', 'worktree-sessions', worktreeSessionsHtml(path))
-
-  if (renaming !== null && !terms?.tabs.some((tab) => tab.id === renaming.id)) renaming = null
-  if (renaming === null || $('term-rename') === null) updateWorktreePart('tabs', 'term-tabs', termTabsHtml(terms, renaming?.id))
-  showWorktreeTerminal(path)
-  if (activeWorktreeTerminal(path) === undefined) worktreeView.el.classList.remove('zoomed')
+  return `
+      <div class="session-page">${head}
+        <div class="session-strip" id="session-card"></div>
+        <section id="metro-pane">
+          <div class="metro" id="metro"></div>
+        </section>
+        <div id="splitter"></div>
+        <section class="viewer">
+          <div class="viewer-head" id="viewer-head"></div>
+          <div id="view"></div>
+        </section>
+      </div>`
 }
 
-// Opens lazygit in a tab, or the worktree in a tool, for the clicked card button.
+// Opens the worktree in the tool of the clicked card button, or lazygit in a new tab, or the Terminal item with a lazygit tab when a session item shows.
 function onWorktreeCardAction(event) {
   const button = event.target.closest('button[data-action]')
   if (!button) return
 
   const path = worktreeView.path
-  if (button.dataset.action === 'lazygit') openWorktreeTerminal(path, 'lazygit')
-  else openWorktreeTool(path, button.dataset.action)
+  if (button.dataset.action !== 'lazygit') openWorktreeTool(path, button.dataset.action)
+  else if (worktreeView.item === null) openWorktreeTerminal(path, 'lazygit')
+  else confirmDiscard(() => openWorktree(path, 'lazygit'))
 }
 
 // Opens a shell, or selects or closes a tab, for the clicked button of the tab strip.
@@ -2908,8 +3050,8 @@ function firstStarted(runs) {
   return times.length > 0 ? new Date(Math.min(...times)) : null
 }
 
-// Returns the session card: the session's name, worktree, facts and actions.
-function sessionCardHtml(session, runs) {
+// Returns the session strip: the facts of `session` and its `runs` as pills, then the archive button.
+function sessionStripHtml(session, runs) {
   const stage = session.stage === 'blocked' ? `blocked at ${phaseStage(session) ?? 'unknown'}` : session.stage ?? 'unknown'
   const facts =
     sessionFlow(session) === 'walk'
@@ -2930,13 +3072,9 @@ function sessionCardHtml(session, runs) {
   if (tokens !== null) facts.push(`${formatCount(tokens)} agent tokens`)
 
   return `
-    <div class="session-card" data-dir="${escape(session.dir)}">
-      <div class="name">
-        <div class="id">${escape(branchName(session))}</div>
-        <div class="path">${escape(sessionDetail(session))}</div>
-      </div>
-      <div class="facts">${facts.map((fact) => `<span class="pill">${escape(fact)}</span>`).join('')}</div>
-      <div class="actions">${cardActions(session)}</div>
+    <div class="facts" data-dir="${escape(session.dir)}">
+      ${facts.map((fact) => `<span class="pill">${escape(fact)}</span>`).join('')}
+      <span class="actions">${actionButtons(STRIP_ACTIONS)}</span>
     </div>`
 }
 
@@ -3074,14 +3212,9 @@ function viewerHeadHtml(stop, open) {
   return `${path}<span class="by">${escape([stop.label, ...agents].join(' · '))}</span>`
 }
 
-// Returns the viewer head while lazygit runs: `lazygit`, then the worktree of `session`.
-function terminalHeadHtml(session) {
-  return `<span class="path">lazygit</span><span class="by">${escape(shortPath(session.worktree))}</span>`
-}
-
-// Shows `path` in the pane, or a blank pane when it is null or missing. Leaves the pane alone while the editor or lazygit is open.
+// Shows `path` in the pane, or a blank pane when it is null or missing. Leaves the pane alone while the editor is open.
 async function showFile(session, files, path, seq) {
-  if (editing !== null || terminal !== null) return
+  if (editing !== null) return
 
   const key = path === null ? null : session.dir + path
 
@@ -3089,7 +3222,7 @@ async function showFile(session, files, path, seq) {
   if (path !== null && files.includes(path)) file = await fetchFile(encodePath(key)).catch(() => null)
   const text = file?.text ?? null
 
-  if (seq !== renderSeq || editing !== null || terminal !== null) return
+  if (seq !== renderSeq || editing !== null) return
   if (lastView.key === key && lastView.text === text) return
 
   const sameFile = lastView.key === key
@@ -3254,7 +3387,8 @@ function routeShows(route, file) {
   return session !== undefined && file.key === session.dir + (route.path ?? file.path)
 }
 
-// Archives `session` once the user confirms. The main window then goes to the sessions page. A standalone window goes back within its scope, or closes when `session` is its root.
+// Archives `session` once the user confirms, then shows its worktree page, or the sessions page when it has no worktree or that page shows.
+// A standalone window shows its root instead, or closes when `session` is its root.
 async function archiveSession(session) {
   if (!(await ask(`Archive ${sessionName(session)}? The dashboard will no longer list it.`))) return
 
@@ -3266,9 +3400,11 @@ async function archiveSession(session) {
     return
   }
 
-  if (standaloneRoot === null) location.hash = '#/sessions'
-  else if (isRoot(parseRoute(sessionHref(session)))) return closeWindow()
-  else location.hash = backTarget(sessionOrigin) ?? rootHash
+  if (standaloneRoot !== null && isRoot(parseRoute(sessionHref(session)))) return closeWindow()
+
+  const path = sessionWorktree(session)
+  if (standaloneRoot !== null) location.hash = rootHash
+  else if (parseRoute(location.hash).kind !== 'sessions') location.hash = path === null ? '#/sessions' : worktreeHash(path)
 
   poll()
 }
@@ -3295,19 +3431,6 @@ function terminalFontSize() {
   return Math.round(fontSize * 0.8)
 }
 
-// Runs lazygit on the worktree of `session` in the pane of its page, or focuses lazygit when it runs there.
-function openLazygit(session) {
-  if (terminal?.dir === session.dir) return terminal.xterm.focus()
-
-  confirmDiscard(() => {
-    const route = parseRoute(location.hash)
-    if (route.kind !== 'session' || sessionHref(route) !== sessionHref(session)) location.hash = sessionHref(session)
-
-    render()
-    startTerminal(session)
-  })
-}
-
 // Returns an xterm in the board's font and colours, opened in `container`, and its fit addon.
 function createXterm(container) {
   const xterm = new Terminal({ fontFamily: MONO_FONT, fontSize: terminalFontSize(), theme: TERMINAL_THEME })
@@ -3315,13 +3438,6 @@ function createXterm(container) {
   xterm.loadAddon(fit)
   xterm.open(container)
   return { xterm, fit }
-}
-
-// Returns a socket to `url` that carries the bytes and the size changes of `xterm`.
-function connectXterm(xterm, url) {
-  const socket = openXtermSocket(xterm, url)
-  sendXterm(xterm, () => socket)
-  return socket
 }
 
 // Returns a socket to `url` that writes its bytes to `xterm`, sends the size of `xterm` when it opens, and passes each text frame to `onText`.
@@ -3349,60 +3465,6 @@ function sendXterm(xterm, socketOf) {
   xterm.onData((data) => send(new TextEncoder().encode(data)))
   xterm.onBinary((data) => send(Uint8Array.from(data, (c) => c.charCodeAt(0))))
   xterm.onResize(({ cols, rows }) => send(JSON.stringify({ cols, rows })))
-}
-
-// Mounts xterm in the pane and connects it to lazygit on the worktree of `session`.
-function startTerminal(session) {
-  const view = $('view')
-  view.replaceChildren()
-  view.classList.add('terminal')
-
-  const { xterm, fit } = createXterm(view)
-  fit.fit()
-
-  const socket = connectXterm(xterm, `ws://${location.host}/api/lazygit/${sessionPath(session)}?cols=${xterm.cols}&rows=${xterm.rows}`)
-  socket.onclose = (event) => {
-    if (terminal?.socket !== socket) return
-
-    closeTerminal()
-    render()
-    if (event.code !== 1000) tell(`lazygit stopped for ${sessionName(session)}: ${event.reason || 'the connection closed'}`)
-  }
-  xterm.attachCustomKeyEventHandler((event) => zoomKey(event) === null)
-
-  const observer = new ResizeObserver(() => fit.fit())
-  observer.observe(view)
-
-  terminal = { hash: location.hash, dir: session.dir, socket, xterm, fit, observer }
-  lastView = { key: null, path: null, text: null, version: null }
-  xterm.focus()
-}
-
-// Ends lazygit and empties the pane. Does nothing when lazygit does not run.
-function closeTerminal() {
-  if (terminal === null) return
-
-  const { socket, xterm, observer } = terminal
-  terminal = null
-  socket.onclose = null
-  socket.close()
-  observer.disconnect()
-  xterm.dispose()
-  sessionView.el.classList.remove('zoomed')
-
-  const view = $('view')
-  view.classList.remove('terminal')
-  view.replaceChildren()
-  lastView = { key: null, path: null, text: null, version: null }
-}
-
-// Shows lazygit alone on the session page when `on` is true, and the whole page when false. Does nothing when lazygit does not run.
-function zoomTerminal(on) {
-  if (terminal === null) return
-
-  sessionView.el.classList.toggle('zoomed', on)
-  terminal.fit.fit()
-  terminal.xterm.focus()
 }
 
 // Returns true when `event` is Shift+Enter with no other modifier.
@@ -3441,7 +3503,7 @@ function addWorktreeTab(path, { name, program, serverId }) {
   sendXterm(term, () => tab.socket)
 
   term.attachCustomKeyEventHandler((event) => {
-    if (!isShiftEnter(event)) return zoomKey(event) === null && tabKey(event) === null
+    if (!isShiftEnter(event)) return zoomKey(event) === null && tabKey(event) === null && barKey(event) === null
     if (event.type === 'keydown' && tab.socket?.readyState === WebSocket.OPEN) tab.socket.send(new TextEncoder().encode(SHIFT_ENTER))
     return false
   })
@@ -3633,9 +3695,9 @@ function showWorktreeTerminal(path) {
   if (tab.socket === null && tab.serverId !== null && tab.failed === null && !tab.away) attachWorktreeTerminal(path, tab)
 }
 
-// Shows the active terminal alone on the shown worktree page when `on` is true, and the whole page when false. Returns false when that page has no active tab.
+// Shows the active terminal alone on the shown Terminal item when `on` is true, and the whole page when false. Returns false when no Terminal item shows or it has no active tab.
 function zoomWorktreeTerminal(on) {
-  if (worktreeView.el !== $('page').firstElementChild) return false
+  if (worktreeView.el !== $('page').firstElementChild || worktreeView.item !== null) return false
 
   const tab = activeWorktreeTerminal(worktreeView.path)
   if (tab === undefined) return false
@@ -3646,9 +3708,9 @@ function zoomWorktreeTerminal(on) {
   return true
 }
 
-// Runs the tab `action` of `tabKey` on the shown worktree page. Returns false when no worktree page is shown, a tab name is being edited, or the action has no tab to act on.
+// Runs the tab `action` of `tabKey` on the shown Terminal item. Returns false when no Terminal item shows, a tab name is being edited, or the action has no tab to act on.
 function worktreeTabAction(action) {
-  if (worktreeView.el !== $('page').firstElementChild || renaming !== null) return false
+  if (worktreeView.el !== $('page').firstElementChild || worktreeView.item !== null || renaming !== null) return false
 
   const path = worktreeView.path
   if (action === 'new') {
@@ -3667,6 +3729,17 @@ function stepWorktreeTerminal(path, step) {
 
   const index = terms.tabs.findIndex((tab) => tab.id === terms.active)
   selectWorktreeTerminal(path, terms.tabs[(index + step + count) % count].id)
+  return true
+}
+
+// Goes to the bar item `step` places after the selected item of the shown worktree page, wrapping around the ends. Returns false when no worktree page shows.
+function stepBarItem(step) {
+  if (worktreeView.el === null || worktreeView.el !== $('page').firstElementChild) return false
+
+  const selected = state.sessions.find((session) => session.dir === worktreeView.item) ?? null
+  const items = barItems(worktreeView.path, selected)
+  const index = items.findIndex(({ session }) => session?.dir === selected?.dir)
+  if (items.length > 1) location.hash = items[(index + step + items.length) % items.length].hash
   return true
 }
 
@@ -3704,7 +3777,7 @@ function endRename(save) {
 function runAction(session, action) {
   if (action === 'worktree') goToWorktree(session)
   else if (action === 'archive') archiveSession(session)
-  else if (action === 'lazygit') openLazygit(session)
+  else if (action === 'lazygit') openSessionWorktree(session, 'lazygit')
   else openTool(session, action)
 }
 
@@ -3714,6 +3787,14 @@ function goToWorktree(session) {
   if (path === null) return
 
   location.hash = worktreeHash(path)
+}
+
+// Goes to the worktree page of `session` and shows a tab running `program` there. Tells the user when no checkout lists the worktree of `session`.
+function openSessionWorktree(session, program) {
+  const path = listedWorktree(session.worktree)
+  if (path === null) return tell('Terminals open only in a linked worktree.')
+
+  confirmDiscard(() => openWorktree(path, program))
 }
 
 // Runs the action bound to `key` on `session` and returns true when `key` has one.
@@ -3869,9 +3950,8 @@ function revealStop(index) {
   card.scrollIntoView({ block: 'nearest' })
 }
 
-// Ends lazygit, then shows `path` of `session`, and renders again when the route already names it.
+// Shows `path` of `session`, and renders again when the route already names it.
 function openPath(session, path) {
-  closeTerminal()
   if (parseRoute(location.hash)?.path === path) render()
   else location.hash = fileHref(session, path)
 }
@@ -3922,9 +4002,10 @@ function resizeSessionPage(page, width = leftWidth) {
   page.style.setProperty('--left', `${leftWidth}px`)
 }
 
+// Clamps the left column of the shown session item to the new window width.
 function onSessionResize() {
   const page = $('page').firstElementChild
-  if (page !== null && (page === sessionView.el || page === worktreeView.el)) resizeSessionPage(page)
+  if (page !== null && page === worktreeView.el && worktreeView.item !== null) resizeSessionPage(page)
 }
 
 // Resizes the left column while the splitter is dragged.
@@ -3949,31 +4030,9 @@ function onSplitterDown(event) {
   )
 }
 
-async function renderSessionPage(session, path) {
+// Shows `session` on its item of the worktree page: its strip, its metro, and `file` or its default file in the viewer.
+async function renderSessionContent(session, file) {
   const seq = renderSeq
-
-  if (sessionView.el !== $('page').firstElementChild || sessionView.dir !== session.dir) {
-    $('page').innerHTML = `
-      <div class="session-page">
-        <div class="session-bar" id="session-card"></div>
-        <section id="metro-pane">
-          <div class="metro" id="metro"></div>
-        </section>
-        <div id="splitter"></div>
-        <section class="viewer">
-          <div class="viewer-head" id="viewer-head"></div>
-          <div id="view"></div>
-        </section>
-      </div>`
-    const page = $('page').firstElementChild
-    resizeSessionPage(page)
-    $('session-card').addEventListener('click', onCardAction)
-    $('metro').addEventListener('click', onMetroClick)
-    $('splitter').addEventListener('pointerdown', onSplitterDown)
-    $('view').addEventListener('click', onDiffToggle)
-    sessionView = { dir: session.dir, el: page, card: '', metro: '', head: '', stops: [], selected: -1 }
-    lastView = { key: null, path: null, text: null, version: null }
-  }
 
   const files = await listFiles(session)
   const runs = await loadRuns(session.dir, files)
@@ -3981,14 +4040,14 @@ async function renderSessionPage(session, path) {
   const walk = sessionFlow(session) === 'walk' ? await loadWalk(session.dir, files) : null
   if (seq !== renderSeq) return
 
-  const card = sessionCardHtml(session, runs)
-  if (sessionView.card !== card) {
-    $('session-card').innerHTML = card
-    sessionView.card = card
+  const strip = sessionStripHtml(session, runs)
+  if (sessionView.card !== strip) {
+    $('session-card').innerHTML = strip
+    sessionView.card = strip
   }
 
   const stops = buildStops(session, files, runs, outcomes, walk)
-  const open = editing !== null ? editing.path : path ?? defaultFile(session, files, sessionRound(session))
+  const open = editing !== null ? editing.path : file ?? defaultFile(session, files, sessionRound(session))
   if (!stopShows(stops[sessionView.selected], open)) sessionView.selected = stopIndexForFile(stops, open)
   sessionView.stops = stops
 
@@ -4002,7 +4061,7 @@ async function renderSessionPage(session, path) {
     if (first) revealStop(sessionView.selected)
   }
 
-  const head = terminal !== null ? terminalHeadHtml(session) : viewerHeadHtml(stops[sessionView.selected], open)
+  const head = viewerHeadHtml(stops[sessionView.selected], open)
   if (sessionView.head !== head) {
     $('viewer-head').innerHTML = head
     sessionView.head = head
@@ -4012,7 +4071,6 @@ async function renderSessionPage(session, path) {
 }
 
 function renderNotFound() {
-  closeTerminal()
   $('page').innerHTML = '<div class="column"><p class="empty">session not found</p></div>'
 }
 
@@ -4028,26 +4086,20 @@ function renderTabs(kind) {
   tabsHtml = html
 }
 
-// Shows the page of the route and syncs the window title. While the editor is open, shows only the edited file. A new route ends lazygit. A route off the worktree pages parks the shown worktree terminal. A route off the worktree page of the edited tab name drops the edit. A route off the PRs page drops its PRs, selection and filter. A new session page records the worktree page it opens from. A new worktree page records the PRs page it opens from.
+// Shows the page of the route and syncs the window title. While the editor is open, shows only the edited file.
+// A route off the Terminal item parks the shown worktree terminal. A route off the Terminal item of the edited tab name drops the edit.
+// A route into a worktree page records its origin. A route off the PRs page drops its PRs, selection and filter.
 function render() {
   const route = parseRoute(location.hash)
   if (editing !== null && !routeShows(route, editing)) return
-  if (terminal !== null && location.hash !== terminal.hash) closeTerminal()
   if (route.kind !== 'worktree') parkWorktreeTerminal()
   if (renaming !== null && (route.kind !== 'worktree' || route.path !== renaming.path)) renaming = null
-  if (route.kind === 'worktree') recordWorktreeOrigin(route)
+  recordPageOrigin(route)
 
   if (route.kind !== 'prs') {
     prsState = null
     selectedPr = null
     prFilter = ''
-  }
-
-  if (route.kind === 'session') {
-    const shown = parseRoute(shownHash)
-    if (shown.kind !== 'session' || sessionHref(shown) !== sessionHref(route)) {
-      sessionOrigin = shown.kind === 'worktree' ? shownHash : '#/sessions'
-    }
   }
 
   renderSeq += 1
@@ -4062,25 +4114,28 @@ function renderPage(route) {
   if (route.kind === 'repos') return renderRepos()
   if (route.kind === 'sessions') return renderList()
   if (route.kind === 'terminals') return renderTerminals()
-  if (route.kind === 'worktree') return renderWorktreePage(route.path)
+  if (route.kind === 'worktree') return renderWorktreePage(route.path, null, null)
   if (route.kind === 'prs') return renderPrsPage(route.path)
 
   const session = state.sessions.find((s) => sessionHref(s) === sessionHref(route))
   if (!session) return renderNotFound()
 
-  renderSessionPage(session, route.path)
+  renderWorktreePage(sessionWorktree(session), session, route.path)
 }
 
-// Records the PRs page, its selection and its filter as the origin of the worktree page of `route` when it opens from that PRs page.
-// Keeps the origin on the same worktree page and on a return from a session it opened. Drops it on any other way in.
-function recordWorktreeOrigin(route) {
-  const shown = parseRoute(shownHash)
-  const origin = parseRoute(sessionOrigin)
-  const same = shown.kind === 'worktree' && shown.path === route.path
-  const back = shown.kind === 'session' && origin.kind === 'worktree' && origin.path === route.path
+// Sets `pageOrigin` to the shown page when `route` enters a worktree page from another page, and records the session `route` shows.
+function recordPageOrigin(route) {
+  const page = routePage(route)
+  if (page === null) return
 
-  if (shown.kind === 'prs') worktreeOrigin = { hash: shownHash, selectedPr, prFilter }
-  else if (!same && !back) worktreeOrigin = null
+  const shown = parseRoute(shownHash)
+  if (pageOrigin === null || routePage(shown) !== page) {
+    pageOrigin = { hash: null, selectedPr: null, prFilter: '', dir: null }
+    if (shown.kind === 'sessions') pageOrigin.hash = '#/sessions'
+    if (shown.kind === 'prs') Object.assign(pageOrigin, { hash: shownHash, selectedPr, prFilter })
+  }
+
+  if (route.kind === 'session') pageOrigin.dir = state.sessions.find((s) => sessionHref(s) === sessionHref(route)).dir
 }
 
 // Returns true when `route` shows the root page of a standalone window, whatever file of a session it shows.
@@ -4280,16 +4335,11 @@ function filterKey(key, field) {
   return false
 }
 
-// Runs the session page shortcut for `key` on `session` and returns true when it acted.
+// Runs the session item shortcut for `key` on `session` and returns true when it acted.
+// The tool keys open the listed worktree of `session`, else the worktree that `session` records.
 function sessionKey(key, session) {
   if (BACK_KEYS.includes(key)) {
-    const target = backTarget(sessionOrigin)
-    if (target === null) return true
-
-    confirmDiscard(() => {
-      selectedDir = session.dir
-      location.hash = target
-    })
+    leavePage(sessionWorktree(session))
     return true
   }
 
@@ -4300,7 +4350,19 @@ function sessionKey(key, session) {
 
   if (key === 'ArrowDown' || key === 'ArrowUp') return moveStop(session, key === 'ArrowDown' ? 1 : -1)
 
-  return sessionAction(session, key)
+  if (key === 'a') {
+    archiveSession(session)
+    return true
+  }
+
+  if (!Object.hasOwn(WORKTREE_KEYS, key)) return false
+
+  const action = WORKTREE_KEYS[key]
+  const path = sessionWorktree(session)
+  if (action === 'lazygit' || action === 'shell') openSessionWorktree(session, action)
+  else if (findWorktree(path) === null) openTool(session, action)
+  else openWorktreeTool(path, action)
+  return true
 }
 
 // Runs the shortcut for `key` on the page of the missing session `route` and returns true when it acted. A back key off the root of a standalone window goes to the root.
@@ -4312,29 +4374,32 @@ function missingSessionKey(key, route) {
 }
 
 // Runs the worktree page shortcut for `key` on the worktree at `path` and returns true when it acted.
-// A back key returns to the PRs page it opened from, with its selection and filter, else to the repos page.
 function worktreeKey(key, path) {
-  if (BACK_KEYS.includes(key) && worktreeOrigin !== null) {
-    const target = backTarget(worktreeOrigin.hash)
-    if (target === null) return true
-
-    selectedPr = worktreeOrigin.selectedPr
-    prFilter = worktreeOrigin.prFilter
-    location.hash = target
-    return true
-  }
-
   if (BACK_KEYS.includes(key)) {
-    const target = backTarget('#/')
-    if (target === null) return true
-
-    selectedWorktree = path
-    location.hash = target
+    leavePage(path)
     return true
   }
 
   if (findWorktree(path) === null) return false
   return worktreeAction(path, key)
+}
+
+// Leaves the worktree page of `path` for `pageOrigin` once the editor holds no unsaved changes.
+// Selects there the session last shown on the page, or restores the PRs selection and filter, or selects `path` on the repos page.
+function leavePage(path) {
+  const origin = pageOrigin ?? { hash: null, selectedPr: null, prFilter: '', dir: null }
+  const target = backTarget(origin.hash ?? '#/')
+  if (target === null) return
+
+  confirmDiscard(() => {
+    if (origin.hash === null) selectedWorktree = path
+    else if (origin.hash === '#/sessions') selectedDir = origin.dir ?? selectedDir
+    else {
+      selectedPr = origin.selectedPr
+      prFilter = origin.prFilter
+    }
+    location.hash = target
+  })
 }
 
 // Runs the PRs page shortcut for `key` on the PRs page of the main checkout at `path` and returns true when it acted.
@@ -4418,16 +4483,20 @@ function tabKey(event) {
   return null
 }
 
+// Returns the bar step of `event`: `previous` for Alt+Cmd+[, `next` for Alt+Cmd+], and null for any other key.
+function barKey(event) {
+  if (!event.metaKey || !event.altKey || event.ctrlKey || event.shiftKey) return null
+
+  if (event.code === 'BracketLeft') return 'previous'
+  if (event.code === 'BracketRight') return 'next'
+  return null
+}
+
 // Dispatches a shortcut key to the shown page.
 function onKey(event) {
   if (editorKey(event)) return
 
   const zoom = zoomKey(event)
-  if (terminal !== null && zoom !== null) {
-    event.preventDefault()
-    return zoomTerminal(zoom)
-  }
-
   if (zoom !== null && zoomWorktreeTerminal(zoom)) {
     event.preventDefault()
     return
@@ -4439,7 +4508,12 @@ function onKey(event) {
     return
   }
 
-  if (terminal !== null && event.target.closest('#view')) return
+  const barStep = barKey(event)
+  if (barStep !== null && !$('modal').open && stepBarItem(barStep === 'next' ? 1 : -1)) {
+    event.preventDefault()
+    return
+  }
+
   if (event.target.closest('#term-view')) return
 
   const key = shortcutKey(event)
@@ -4514,11 +4588,6 @@ function showFontSize(size) {
       tab.fit.fit()
     }
   }
-
-  if (terminal === null) return
-
-  terminal.xterm.options.fontSize = terminalFontSize()
-  terminal.fit.fit()
 }
 
 function stepFontSize(step) {

@@ -164,7 +164,7 @@ function dashboard({ script = source, pageWidth = 1200, pageLeft = 0, splitterWi
     get: () => pageHtml,
     set(value) {
       pageHtml = value
-      this.firstElementChild = element(value.includes('class="session-page"') ? 'session-page' : 'list')
+      this.firstElementChild = element(/class="session-page[ "]/.test(value) ? 'session-page' : 'list')
       for (const [, id] of value.matchAll(/ id="([^"]+)"/g)) {
         element(id).parentElement = this.firstElementChild
       }
@@ -230,7 +230,7 @@ test('the model gate rejects integerOrNull returning zero', () => {
 test('rendering an old session lists files and never fetches an absent run log', async () => {
   const app = dashboard({ fetcher: () => filesReply(['session.json']) })
   app.context.session = session
-  await app.run('renderSessionPage(session, null)')
+  await app.run('renderWorktreePage("", session, null)')
   assert.deepEqual(app.calls, [filesUrl])
 })
 
@@ -241,7 +241,7 @@ test('a listed run log is parsed after listing and tolerates a truncated line', 
       : filesReply(['runs.jsonl']),
   })
   app.context.session = session
-  await app.run('renderSessionPage(session, null)')
+  await app.run('renderWorktreePage("", session, null)')
   assert.deepEqual(app.calls, [filesUrl, `${session.dir}runs.jsonl`])
   assert.match(app.elements.get('session-card').innerHTML, /5 agent tokens/)
   const runs = await app.run('loadRuns("a space/", ["runs.jsonl"])')
@@ -263,7 +263,7 @@ test('run logs remain optional when fetching fails', async () => {
 test('splitter clamps dragging, resizing and reopening to the actual page and splitter widths', async () => {
   const app = dashboard({ pageWidth: 1200, pageLeft: 100, splitterWidth: 10, fetcher: () => response('') })
   app.context.session = session
-  await app.run('renderSessionPage(session, null)')
+  await app.run('renderWorktreePage("", session, null)')
   const splitter = app.elements.get('splitter')
   const left = () => Number.parseInt(app.elements.get('session-page').style.getPropertyValue('--left'))
   let prevented = false
@@ -291,14 +291,14 @@ test('splitter clamps dragging, resizing and reopening to the actual page and sp
   app.geometry.pageWidth = 400
   app.window.dispatch('resize')
   assert.equal(left(), 290, 'mobile layout keeps the saved desktop width')
-  assert.match(html, /@media \(max-width: 800px\)\s*\{\s*\.session-page \{ grid-template-columns: minmax\(0, 1fr\); grid-template-rows: auto minmax\(0, 55fr\) minmax\(0, 45fr\); \}/)
+  assert.match(html, /@media \(max-width: 800px\)\s*\{\s*\.session-page \{ grid-template-columns: minmax\(0, 1fr\); grid-template-rows: auto auto auto minmax\(0, 55fr\) minmax\(0, 45fr\); \}/)
 
   app.elements.get('page').innerHTML = '<div>list</div>'
   app.geometry.pageWidth = 850
   app.geometry.splitterWidth = 10
   app.window.dispatch('resize')
   app.run('leftWidth = 1200')
-  await app.run('renderSessionPage(session, null)')
+  await app.run('renderWorktreePage("", session, null)')
   assert.equal(left(), 540)
   assert.ok(app.geometry.pageWidth - left() - app.geometry.splitterWidth >= 300)
 })
@@ -307,24 +307,10 @@ test('window resizing before opening a session is safe', () => {
   dashboard().window.dispatch('resize')
 })
 
-test('the session card heads the session page above the split panes', async () => {
-  const app = dashboard({ fetcher: () => filesReply(['session.json']) })
-  app.context.session = session
-  await app.run('renderSessionPage(session, null)')
-
-  const page = app.elements.get('page').innerHTML
-  assert.match(page, /<div class="session-page">\s*<div class="session-bar" id="session-card"><\/div>\s*<section id="metro-pane">\s*<div class="metro" id="metro"><\/div>\s*<\/section>/)
-  assert.match(html, /\.session-bar \{[^}]*grid-column: 1 \/ -1;/)
-  assert.doesNotMatch(html, /session-card-wrap|position: sticky/)
-
-  const card = app.elements.get('session-card').innerHTML
-  assert.match(card, /<div class="name">\s*<div class="id">[^<]*<\/div>\s*<div class="path">[^<]*<\/div>\s*<\/div>\s*<div class="facts">/)
-})
-
 test('revealing a stop scrolls its card into view without a header offset', async () => {
   const app = dashboard({ fetcher: () => filesReply(['session.json']) })
   app.context.session = session
-  await app.run('renderSessionPage(session, null)')
+  await app.run('renderWorktreePage("", session, null)')
 
   const card = { style: {}, scrolled: null, scrollIntoView(options) { this.scrolled = options } }
   app.elements.get('metro').querySelector = () => card
@@ -358,15 +344,15 @@ test('session facts include stage, last round, deferred gaps and only recorded a
     { stop: 'review', round: 1, agent: null, tokens: 1000 },
     { stop: 'triage', round: 1, agent: 'triager', tokens: null },
   ]
-  const card = app.run('sessionCardHtml(session, parseRuns(entries.map(JSON.stringify).join("\\n")))')
+  const card = app.run('sessionStripHtml(session, parseRuns(entries.map(JSON.stringify).join("\\n")))')
   for (const fact of ['done', 'round 2', 'last round', '3 deferred without issue', '15 agent tokens']) {
     assert.ok(card.includes(`>${fact}</span>`), `missing session fact: ${fact}`)
   }
   app.context.session = { ...session, stage: 'blocked', blocked: { stage: 'implement' } }
-  assert.match(app.run('sessionCardHtml(session, [])'), />blocked at implement<\/span>/)
-  assert.doesNotMatch(app.run('sessionCardHtml(session, parseRuns(JSON.stringify(entries[0])))'), /agent tokens/)
-  assert.doesNotMatch(app.run('sessionCardHtml(session, parseRuns(JSON.stringify(entries[4])))'), /agent tokens/)
-  assert.match(app.run('sessionCardHtml(session, parseRuns(\'{"stop":"spec","round":0,"agent":"worker","tokens":0}\'))'), /0 agent tokens/)
+  assert.match(app.run('sessionStripHtml(session, [])'), />blocked at implement<\/span>/)
+  assert.doesNotMatch(app.run('sessionStripHtml(session, parseRuns(JSON.stringify(entries[0])))'), /agent tokens/)
+  assert.doesNotMatch(app.run('sessionStripHtml(session, parseRuns(JSON.stringify(entries[4])))'), /agent tokens/)
+  assert.match(app.run('sessionStripHtml(session, parseRuns(\'{"stop":"spec","round":0,"agent":"worker","tokens":0}\'))'), /0 agent tokens/)
 })
 
 test('blocked Implement keeps existing tasks as a link and session.json as its main file', () => {
@@ -403,7 +389,7 @@ test('rendering a session reads each round triage outcome and skips Implement af
   }
   const app = dashboard({ fetcher: (url) => response(pages[url] ?? '', Object.hasOwn(pages, url)) })
   app.context.session = { ...session, stage: 'verify', round: 1 }
-  await app.run('renderSessionPage(session, null)')
+  await app.run('renderWorktreePage("", session, null)')
 
   const stops = app.run('sessionView.stops')
   assert.equal(stops.some((stop) => stop.kind === 'implement' && stop.round === 2), false, 'Implement shown after finalize')
@@ -1024,19 +1010,6 @@ function press(app, key, modifiers = {}, target = { closest: () => null }) {
   return prevented
 }
 
-test('l, Escape and Cmd+[ return from a session to the list', () => {
-  for (const [key, modifiers] of [['l'], ['Escape'], ['[', { metaKey: true }]]) {
-    const app = dashboard()
-    app.context.session = session
-    app.run('state.sessions = [session]')
-    app.context.location.hash = app.run('sessionHref(session)')
-
-    assert.ok(press(app, key, modifiers), `${key} is taken`)
-    assert.equal(app.context.location.hash, '#/sessions')
-    assert.equal(app.run('selectedDir'), session.dir)
-  }
-})
-
 test('l, Escape and Cmd+[ return from a worktree page to the repos', () => {
   for (const [key, modifiers] of [['l'], ['Escape'], ['[', { metaKey: true }]]) {
     const app = dashboard()
@@ -1454,7 +1427,7 @@ test('a CRLF file without typing leaves the editor without a PUT or a discard pr
 
   assert.equal(app.elements.get('modal').open, undefined)
   assert.equal(app.run('editing'), null)
-  assert.equal(app.context.location.hash, '#/sessions')
+  assert.equal(app.context.location.hash, '#/')
   assert.deepEqual(api.puts, [])
 })
 
@@ -1505,14 +1478,14 @@ test('v outside the editor does not leave edit mode', async () => {
   assert.equal(app.run('editing.editor.value()'), '# Edited\n')
 })
 
-test('Escape outside the editor returns to the list', async () => {
+test('Escape outside the editor leaves the page', async () => {
   const app = await openFile(fileApi({ 'spec.md': '# Spec\n' }), 'spec.md')
 
   press(app, 'w')
   assert.ok(press(app, 'Escape'))
 
   assert.equal(app.run('editing'), null)
-  assert.equal(app.context.location.hash, '#/sessions')
+  assert.equal(app.context.location.hash, '#/')
 })
 
 test('a conflict keeps edit mode and the text, and shows a message in the viewer head', async () => {
@@ -1572,7 +1545,7 @@ test('leaving with changes asks to discard them', async () => {
   closeModal(app, 'ok')
   await settle()
   assert.equal(app.run('editing'), null)
-  assert.equal(app.context.location.hash, '#/sessions')
+  assert.equal(app.context.location.hash, '#/')
   assert.deepEqual(api.puts, [])
 })
 
@@ -1885,7 +1858,7 @@ test('walk rows read writing n/m', () => {
   assert.equal(app.run('stepLabel(session)'), 'walk-through · writing 1/2')
   assert.match(app.run('rowContent(session)'), /<span class="pill">walk-through<\/span> walk-through · writing 1\/2<\/span>/)
 
-  const facts = [...app.run('sessionCardHtml(session, [])').matchAll(/<span class="pill">([^<]*)<\/span>/g)].map((match) => match[1])
+  const facts = [...app.run('sessionStripHtml(session, [])').matchAll(/<span class="pill">([^<]*)<\/span>/g)].map((match) => match[1])
   assert.deepEqual(facts, ['walk-through', 'walk', '1/2 steps'])
 
   app.context.session = walkSession('walk', 1, 2, { counts: undefined })
@@ -2050,324 +2023,6 @@ function terminalStubs(app) {
   return { sockets, terminals, observers }
 }
 
-// Returns a dashboard that shows `path` of `editSession` from `api`, with fake terminal classes, and the instances they create.
-async function lazygitApp(api, path) {
-  const app = await openFile(api, path)
-  return { app, ...terminalStubs(app) }
-}
-
-// Returns a lazygit dashboard that shows `spec.md` of `editSession`.
-const specLazygit = () => lazygitApp(fileApi({ 'spec.md': '# Spec\n' }), 'spec.md')
-
-test('g on a session page runs lazygit in the pane', async () => {
-  const { app, sockets, terminals } = await specLazygit()
-
-  assert.ok(press(app, 'g'))
-  assert.equal(sockets.length, 1)
-  assert.equal(sockets[0].url, 'ws://127.0.0.1:8731/api/lazygit/o/r/main/s?cols=100&rows=30')
-  assert.equal(sockets[0].binaryType, 'arraybuffer')
-
-  const [xterm] = terminals
-  assert.equal(xterm.focused, true)
-  assert.deepEqual(app.elements.get('view').children, [xterm.element])
-  assert.equal(xterm.options.fontFamily, 'ui-monospace, SFMono-Regular, Menlo, monospace')
-  assert.equal(xterm.options.fontSize, 14)
-  assert.equal(xterm.options.theme, app.run('TERMINAL_THEME'))
-  assert.equal(xterm.options.theme.background, '#142b37')
-  assert.equal(xterm.options.theme.foreground, '#e0e2e3')
-
-  await settle()
-  assert.match(app.elements.get('viewer-head').innerHTML, /<span class="path">lazygit<\/span>/)
-  assert.doesNotMatch(app.elements.get('view').innerHTML, /# Spec/)
-})
-
-test('the lazygit card button runs lazygit', async () => {
-  const { app, sockets } = await specLazygit()
-  const actions = app.run('CARD_ACTIONS.map((entry) => `${entry.action}: ${entry.title}`).join(", ")')
-  assert.equal(actions, 'worktree: Go to worktree page (c), intellij: Open in IntelliJ (i), zed: Open in Zed (e), iterm: Open in iTerm (t), lazygit: Open in lazygit (g), archive: Archive (a)')
-
-  const button = { dataset: { action: 'lazygit' }, closest: () => ({ dataset: { dir: editSession.dir } }) }
-  const target = { closest: (selector) => (selector === 'button[data-action]' ? button : null) }
-  app.elements.get('session-card').dispatch('click', { target })
-  assert.equal(sockets.length, 1)
-})
-
-test('g on the list opens the session page and lazygit', async () => {
-  const { app, sockets, terminals } = await specLazygit()
-  app.context.location.hash = '#/sessions'
-  app.window.dispatch('hashchange')
-  app.run('selectedDir = session.dir')
-
-  assert.ok(press(app, 'g'))
-  assert.equal(app.context.location.hash, app.run('sessionHref(session)'))
-  assert.match(app.elements.get('page').innerHTML, /class="session-page"/)
-  assert.equal(sockets.length, 1)
-  assert.deepEqual(app.elements.get('view').children, [terminals[0].element])
-})
-
-test('bytes flow between the socket and the terminal', async () => {
-  const { app, sockets, terminals } = await specLazygit()
-  press(app, 'g')
-  const [socket] = sockets
-  const [xterm] = terminals
-
-  socket.onmessage({ data: new Uint8Array([104, 105]).buffer })
-  assert.deepEqual(xterm.written.map(bytes), [[104, 105]])
-
-  xterm.handlers.data('q')
-  xterm.handlers.binary('\x80')
-  xterm.handlers.resize({ cols: 90, rows: 20 })
-  assert.deepEqual(socket.sent.map(bytes), [[113], [128], '{"cols":90,"rows":20}'])
-
-  socket.readyState = 0
-  xterm.handlers.data('x')
-  xterm.handlers.resize({ cols: 80, rows: 10 })
-  assert.equal(socket.sent.length, 3, 'a socket that is not open gets no frames')
-})
-
-test('the socket sends the terminal size when it opens', async () => {
-  const { app, sockets, terminals } = await specLazygit()
-  press(app, 'g')
-
-  sockets[0].readyState = 0
-  terminals[0].size = { cols: 100, rows: 27 }
-  app.run('terminal.fit.fit()')
-  assert.deepEqual(sockets[0].sent, [])
-
-  sockets[0].readyState = 1
-  sockets[0].onopen()
-  assert.deepEqual(sockets[0].sent, ['{"cols":100,"rows":27}'])
-})
-
-test('a pane resize refits the terminal and sends its size', async () => {
-  const { app, sockets, terminals, observers } = await specLazygit()
-  press(app, 'g')
-
-  assert.equal(observers.length, 1)
-  assert.equal(observers[0].target, app.elements.get('view'))
-
-  terminals[0].size = { cols: 90, rows: 25 }
-  observers[0].callback()
-  assert.deepEqual(sockets[0].sent, ['{"cols":90,"rows":25}'])
-})
-
-test('keys inside the terminal fire no board shortcut', async () => {
-  const { app, terminals } = await specLazygit()
-  press(app, 'g')
-  const href = app.context.location.hash
-
-  assert.equal(press(app, 'l', {}, terminals[0].element), false)
-  assert.equal(press(app, 'Escape', {}, terminals[0].element), false)
-  assert.equal(app.context.location.hash, href)
-})
-
-test('a poll keeps lazygit', async () => {
-  const { app, sockets, terminals } = await specLazygit()
-  press(app, 'g')
-
-  app.run('render()')
-  await settle()
-  assert.equal(sockets[0].closed, false)
-  assert.equal(terminals[0].disposed, false)
-  assert.deepEqual(app.elements.get('view').children, [terminals[0].element])
-  assert.doesNotMatch(app.elements.get('view').innerHTML, /# Spec/)
-})
-
-test('lazygit exiting shows the file again', async () => {
-  const { app, sockets, terminals } = await specLazygit()
-  press(app, 'g')
-  await settle()
-
-  sockets[0].onclose({ code: 1000, reason: '' })
-  await settle()
-  assert.equal(app.run('terminal'), null)
-  assert.equal(terminals[0].disposed, true)
-  assert.match(app.elements.get('view').innerHTML, /# Spec/)
-  assert.match(app.elements.get('viewer-head').innerHTML, /spec\.md/)
-  assert.equal(app.elements.get('modal').open, undefined)
-})
-
-test('a failed lazygit shows the reason', async () => {
-  const { app, sockets } = await specLazygit()
-  press(app, 'g')
-
-  sockets[0].onclose({ code: 1011, reason: 'session has no worktree' })
-  assert.equal(app.run('terminal'), null)
-  assert.equal(app.elements.get('modal').open, true)
-  assert.equal(app.elements.get('modal-text').textContent, 'lazygit stopped for o/r/main/s: session has no worktree')
-
-  closeModal(app, 'ok')
-  await settle()
-  press(app, 'g')
-  sockets[1].onclose({ code: 1006, reason: '' })
-  assert.equal(app.elements.get('modal-text').textContent, 'lazygit stopped for o/r/main/s: the connection closed')
-})
-
-test('a route change closes lazygit', async () => {
-  const { app, sockets, terminals, observers } = await specLazygit()
-  press(app, 'g')
-
-  app.context.location.hash = '#/'
-  app.window.dispatch('hashchange')
-  assert.equal(sockets[0].closed, true)
-  assert.equal(sockets[0].onclose, null)
-  assert.equal(terminals[0].disposed, true)
-  assert.equal(observers[0].disconnected, true)
-  assert.equal(app.run('terminal'), null)
-})
-
-test('a session that disappears closes lazygit', async () => {
-  const { app, sockets } = await specLazygit()
-  press(app, 'g')
-
-  app.run('state.sessions = []')
-  app.run('render()')
-  assert.equal(sockets[0].closed, true)
-  assert.equal(app.run('terminal'), null)
-  assert.match(app.elements.get('page').innerHTML, /session not found/)
-
-  app.context.location.hash = '#/sessions'
-  app.window.dispatch('hashchange')
-  assert.match(app.elements.get('page').innerHTML, /No sessions yet\./)
-})
-
-test('picking a file closes lazygit', async () => {
-  const { app, sockets } = await specLazygit()
-  press(app, 'g')
-  await settle()
-
-  app.run('openPath(session, "spec.md")')
-  assert.equal(sockets[0].closed, true)
-
-  await settle()
-  assert.match(app.elements.get('view').innerHTML, /# Spec/)
-})
-
-test('g with unsaved editor changes asks to discard first', async () => {
-  const { app, sockets } = await specLazygit()
-
-  press(app, 'w')
-  editor(app).value = '# Typed\n'
-  assert.ok(press(app, 'g'))
-  assert.equal(app.elements.get('modal').open, true)
-  assert.equal(app.elements.get('modal-text').textContent, 'Discard your changes?')
-  assert.equal(sockets.length, 0)
-
-  closeModal(app, 'cancel')
-  await settle()
-  assert.equal(sockets.length, 0)
-  assert.equal(app.run('editing.editor.value()'), '# Typed\n')
-
-  press(app, 'g')
-  closeModal(app, 'ok')
-  await settle()
-  assert.equal(app.run('editing'), null)
-  assert.equal(sockets.length, 1)
-})
-
-test('g while lazygit runs focuses it', async () => {
-  const { app, sockets, terminals } = await specLazygit()
-  press(app, 'g')
-
-  terminals[0].blur()
-  assert.ok(press(app, 'g'))
-  assert.equal(sockets.length, 1)
-  assert.equal(terminals.length, 1)
-  assert.equal(terminals[0].focused, true)
-})
-
-test('a font size change resizes the terminal', async () => {
-  const { app, sockets, terminals } = await specLazygit()
-  press(app, 'g')
-  const [xterm] = terminals
-  const fits = xterm.fits
-
-  xterm.size = { cols: 120, rows: 36 }
-  app.run('stepFontSize(1)')
-  assert.equal(xterm.options.fontSize, Math.round((18 + 1) * 0.8))
-  assert.equal(xterm.fits, fits + 1)
-  assert.deepEqual(sockets[0].sent, ['{"cols":120,"rows":36}'])
-})
-
-test('a late close from an old socket leaves the new lazygit open', async () => {
-  const { app, sockets } = await specLazygit()
-  press(app, 'g')
-  const lateClose = sockets[0].onclose
-
-  app.context.location.hash = '#/'
-  app.window.dispatch('hashchange')
-  app.run('openLazygit(session)')
-  lateClose({ code: 1011, reason: '' })
-
-  assert.equal(sockets.length, 2)
-  assert.equal(sockets[1].closed, false)
-  assert.equal(app.run('terminal.socket'), sockets[1])
-  assert.equal(app.elements.get('modal').open, undefined)
-})
-
-const zoomKeys = { metaKey: true, shiftKey: true }
-
-test('Shift+Cmd+K zooms lazygit in and Shift+Cmd+J zooms it out', async () => {
-  for (const [zoomIn, zoomOut] of [['K', 'J'], ['k', 'j']]) {
-    for (const inside of [true, false]) {
-      const { app, terminals } = await specLazygit()
-      press(app, 'g')
-      const [xterm] = terminals
-      const page = app.elements.get('session-page')
-      const target = inside ? xterm.element : undefined
-      const fits = xterm.fits
-
-      xterm.blur()
-      assert.ok(press(app, zoomIn, zoomKeys, target), `${zoomIn} is taken`)
-      assert.equal(page.classList.contains('zoomed'), true)
-      assert.equal(xterm.fits, fits + 1)
-      assert.equal(xterm.focused, true)
-
-      xterm.blur()
-      assert.ok(press(app, zoomOut, zoomKeys, target), `${zoomOut} is taken`)
-      assert.equal(page.classList.contains('zoomed'), false)
-      assert.equal(xterm.fits, fits + 2)
-      assert.equal(xterm.focused, true)
-    }
-  }
-})
-
-test('the zoom keys do nothing without lazygit', async () => {
-  const { app } = await specLazygit()
-  const page = app.elements.get('session-page')
-
-  assert.equal(press(app, 'K', zoomKeys), false)
-  assert.equal(page.classList.contains('zoomed'), false)
-  assert.equal(press(app, 'J', zoomKeys), false)
-
-  app.run('zoomTerminal(true)')
-  assert.equal(page.classList.contains('zoomed'), false)
-})
-
-test('lazygit exiting leaves the zoom', async () => {
-  const { app, sockets } = await specLazygit()
-  press(app, 'g')
-  press(app, 'K', zoomKeys)
-  const page = app.elements.get('session-page')
-  assert.equal(page.classList.contains('zoomed'), true)
-
-  sockets[0].onclose({ code: 1000, reason: '' })
-  await settle()
-  assert.equal(page.classList.contains('zoomed'), false)
-  assert.match(app.elements.get('view').innerHTML, /# Spec/)
-})
-
-test('the terminal keeps the zoom keys from lazygit', async () => {
-  const { app, terminals } = await specLazygit()
-  press(app, 'g')
-  const { key } = terminals[0].handlers
-  const event = (name, modifiers = {}) => ({ key: name, metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, ...modifiers })
-
-  for (const name of ['K', 'k', 'J', 'j']) assert.equal(key(event(name, zoomKeys)), false, `${name} stays out of lazygit`)
-  assert.equal(key(event('k')), true)
-  assert.equal(key(event('k', { metaKey: true })), true)
-})
-
 const mainPath = '/s/o/r/main'
 const worktreePath = "/s/o/r/work tree's"
 const encodedWorktree = "%2Fs%2Fo%2Fr%2Fwork%20tree's"
@@ -2387,8 +2042,14 @@ const worktreeRepos = {
   ],
 }
 
+// The repos of `worktreeRepos` as `api/repos` lists them: without the main checkout among `worktrees`.
+const linkedRepos = { error: null, repos: [{ ...worktreeRepos.repos[0], worktrees: [worktreeRepos.repos[0].worktrees[1]] }] }
+
 // Returns the hash of the worktree page of `path`.
 const worktreeHashOf = (path) => `#/worktree/${encodeURIComponent(path)}`
+
+// Returns a session `id` of `o/r` in the worktree `worktree`.
+const sessionAt = (id, worktree) => ({ ...session, org: 'o', repo: 'r', id, dir: `api/file/o/r/main/${id}/`, worktree })
 
 // Returns a dashboard on the worktree page of `path` after one poll of an api that lists `sessions`, answers `api/repos` with `reposReply()` and `api/terminals` with `terminalsReply()`, with fake terminal classes, the instances they create and the URLs it posts.
 async function worktreeApp(
@@ -2446,28 +2107,155 @@ const tabNames = (app) => [...app.elements.get('term-tabs').innerHTML.matchAll(/
 // Returns the elements in the terminal pane of the worktree page.
 const shownTerms = (app) => app.elements.get('term-view').children
 
-test('the worktree page lists its sessions as links', async () => {
-  const at = (id, worktree, fields = {}) => ({ ...session, org: 'o', repo: 'r', id, dir: `api/file/o/r/main/${id}/`, worktree, ...fields })
-  const sessions = [at('s1', worktreePath), at('s2', `${worktreePath}/`, { flow: 'review', stage: 'verify' }), at('s3', mainPath)]
+// Returns the items of the worktree bar, each with its decoded link and its text.
+const barLinks = (app) => [...app.elements.get('worktree-bar').innerHTML.matchAll(/<a class="bar-item[^"]*" href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/g)]
+  .map((match) => ({ href: unescapeHtml(match[1]), text: textOf(match[2]) }))
+
+// Returns the decoded links of the worktree bar items that carry `aria-current`.
+const currentBarLinks = (app) => [...app.elements.get('worktree-bar').innerHTML.matchAll(/href="([^"]*)" aria-current="page"/g)]
+  .map((match) => unescapeHtml(match[1]))
+
+// Returns the element ids in the markup of the shown page.
+const pageIds = (app) => [...app.elements.get('page').innerHTML.matchAll(/ id="([^"]+)"/g)].map((match) => match[1])
+
+test('the bar lists the Terminal item, then the sessions of the worktree', async () => {
+  const sessions = [
+    sessionAt('s1', worktreePath),
+    { ...sessionAt('s2', `${worktreePath}/`), flow: 'review', stage: 'verify' },
+    sessionAt('s3', mainPath),
+  ]
   const { app } = await worktreeApp(worktreePath, sessions)
-
-  // Returns the session links of the left pane, each with its decoded link and its text.
-  const links = () => [...app.elements.get('worktree-sessions').innerHTML.matchAll(/<a class="body" href="([^"]*)">([\s\S]*?)<\/a>/g)]
-    .map((match) => ({ href: unescapeHtml(match[1]), text: textOf(match[2]) }))
-
-  assert.deepEqual(links(), [
+  const links = [
+    { href: worktreeHashOf(worktreePath), text: '▣ Terminal' },
     { href: '#/o/r/main/s1', text: 's1 build implement' },
     { href: '#/o/r/main/s2', text: 's2 review verify' },
-  ])
+  ]
+
+  assert.deepEqual(barLinks(app), links)
+  assert.deepEqual(currentBarLinks(app), [worktreeHashOf(worktreePath)])
+
+  navigate(app, '#/o/r/main/s2')
+  await settle()
+  assert.deepEqual(barLinks(app), links)
+  assert.deepEqual(currentBarLinks(app), ['#/o/r/main/s2'])
+
+  sessions[0] = { ...sessions[0], stage: 'blocked', blocked: { stage: 'implement' } }
+  await app.run('poll()')
+  await settle()
+  assert.match(app.elements.get('worktree-bar').innerHTML, /<a class="bar-item blocked" href="#\/o\/r\/main\/s1">/)
+  assert.match(app.elements.get('worktree-bar').innerHTML, /<a class="bar-item" href="#\/o\/r\/main\/s2" aria-current="page">/)
+})
+
+test('the Terminal item shows the tab strip at full width', async () => {
+  const { app } = await worktreeApp(worktreePath, [sessionAt('s1', worktreePath)])
+
+  assert.deepEqual(pageIds(app), ['worktree-card', 'worktree-bar', 'term-tabs', 'term-view'])
+  assert.match(app.elements.get('page').innerHTML, /<div class="session-page terminal-item">/)
+  assert.match(app.elements.get('term-tabs').innerHTML, /<button type="button" class="term-add" data-term="add" title="[^"]*">\+<\/button>/)
+  assert.match(html, /\.session-page\.terminal-item \{\s*grid-template-columns: minmax\(0, 1fr\);\s*grid-template-rows: auto auto minmax\(0, 1fr\);\s*\}/)
+})
+
+test('a session item shows its strip, metro and viewer', async () => {
+  const { app } = await worktreeApp(worktreePath, [sessionAt('s1', worktreePath)])
+  navigate(app, '#/o/r/main/s1')
+  await settle()
+
+  assert.deepEqual(pageIds(app), ['worktree-card', 'worktree-bar', 'session-card', 'metro-pane', 'metro', 'splitter', 'viewer-head', 'view'])
+  assert.match(app.elements.get('page').innerHTML, /<div class="session-page">/)
+
+  const strip = app.elements.get('session-card').innerHTML
+  assert.equal(textOf(strip), 'build default implement')
+  assert.deepEqual([...strip.matchAll(/data-action="([^"]*)"/g)].map((match) => match[1]), ['archive'])
 
   const card = app.elements.get('worktree-card').innerHTML
   assert.equal(textOf(card), "o/r o/r/work tree's feature")
   assert.deepEqual([...card.matchAll(/data-action="([^"]*)"/g)].map((match) => match[1]), ['lazygit', 'iterm', 'zed', 'intellij', 'github'])
-  assert.match(app.elements.get('page').innerHTML, /<div class="session-bar" id="worktree-card"><\/div>[\s\S]*<div id="splitter"><\/div>/)
-  assert.match(app.elements.get('term-tabs').innerHTML, /<button type="button" class="term-add" data-term="add" title="[^"]*">\+<\/button>/)
 
-  navigate(app, worktreeHashOf(mainPath))
-  assert.deepEqual(links(), [{ href: '#/o/r/main/s3', text: 's3 build implement' }])
+  for (const part of ['session-bar', 'worktree-bar', 'session-strip']) {
+    assert.match(html, new RegExp(`\\.${part} \\{[^}]*grid-column: 1 / -1;`), part)
+  }
+})
+
+test('switching items parks the terminal and keeps it running', async () => {
+  const { app, sockets } = await worktreeApp(worktreePath, [sessionAt('s1', worktreePath)])
+  clickTab(app, 'add')
+  const [tab] = tabsOf(app)
+
+  navigate(app, '#/o/r/main/s1')
+  await settle()
+  assert.deepEqual(app.elements.get('term-store').children, [tab.el])
+  assert.equal(sockets[0].closed, false)
+
+  navigate(app, worktreeHashOf(worktreePath))
+  assert.deepEqual(shownTerms(app), [tab.el])
+  assert.deepEqual(tabNames(app), ['shell 1*'])
+  assert.equal(sockets.length, 1)
+})
+
+test('a session on an unlisted worktree renders the page with the reason', async () => {
+  const gone = '/s/o/r/gone'
+  const { app } = await worktreeApp(worktreePath, [sessionAt('s1', gone)])
+  navigate(app, '#/o/r/main/s1')
+  await settle()
+
+  assert.deepEqual(barLinks(app), [
+    { href: worktreeHashOf(gone), text: '▣ Terminal' },
+    { href: '#/o/r/main/s1', text: 's1 build implement' },
+  ])
+  assert.equal(textOf(app.elements.get('worktree-card').innerHTML), `${gone} not a configured worktree`)
+  assert.ok(pageIds(app).includes('metro'))
+
+  navigate(app, worktreeHashOf(gone))
+  assert.deepEqual(pageIds(app), ['worktree-card', 'worktree-bar', 'term-tabs', 'term-view'])
+  assert.deepEqual(currentBarLinks(app), [worktreeHashOf(gone)])
+  assert.equal(textOf(app.elements.get('term-tabs').innerHTML), 'not a configured worktree')
+})
+
+test('a session without a worktree renders its page', async () => {
+  for (const shown of [session, { ...session, worktree: '' }]) {
+    const other = { ...shown, org: 'other', id: 'other', dir: 'api/file/other/repo/main/other/' }
+    const { app } = await worktreeApp(worktreePath, [shown, other])
+    navigate(app, '#/org/repo/main/session')
+    await settle()
+
+    assert.deepEqual(barLinks(app), [{ href: '#/org/repo/main/session', text: 'session build implement' }])
+    assert.deepEqual(currentBarLinks(app), ['#/org/repo/main/session'])
+    assert.doesNotMatch(app.elements.get('worktree-bar').innerHTML, /#\/worktree\//)
+    assert.ok(pageIds(app).includes('metro'))
+
+    for (const hash of ['#/org/repo/main/session', '#/org/repo/main/session/spec.md']) {
+      navigate(app, hash)
+      await settle()
+      assert.ok(pressBar(app, 'next'))
+      assert.ok(pressBar(app, 'previous'))
+      assert.equal(app.context.location.hash, hash)
+    }
+
+    await archive(app, shown)
+    assert.equal(app.context.location.hash, '#/sessions')
+  }
+})
+
+test('switching items with unsaved changes asks to discard them', async () => {
+  const app = dashboard({ fetcher: fileApi({ 'spec.md': '# Spec\n' }).fetcher })
+  terminalStubs(app)
+  app.context.session = { ...editSession, worktree: worktreePath }
+  app.run('state.sessions = [session]')
+  const href = app.run('fileHref(session, "spec.md")')
+  navigate(app, href)
+  await settle()
+
+  press(app, 'w')
+  editor(app).value = '# Typed\n'
+  navigate(app, worktreeHashOf(worktreePath))
+  assert.equal(app.elements.get('modal').open, true)
+  assert.equal(app.elements.get('modal-text').textContent, 'Discard your changes?')
+
+  closeModal(app, 'cancel')
+  await settle()
+  assert.equal(app.context.location.hash, href)
+  assert.equal(app.run('editing.editor.value()'), '# Typed\n')
+  assert.ok(pageIds(app).includes('view'))
 })
 
 test('the worktree buttons show their keys', async () => {
@@ -2958,6 +2746,8 @@ test('a font size change resizes the worktree terminals', async () => {
   assert.deepEqual(sockets[0].sent, ['{"cols":120,"rows":36}'])
 })
 
+const zoomKeys = { metaKey: true, shiftKey: true }
+
 test('Shift+Cmd+K zooms the worktree terminal in and Shift+Cmd+J zooms it out', async () => {
   for (const [zoomIn, zoomOut] of [['K', 'J'], ['k', 'j']]) {
     for (const inside of [true, false]) {
@@ -3038,6 +2828,25 @@ test('the zoom keys leave a parked worktree terminal alone on another page', asy
   assert.equal(terminals[0].focused, false)
 })
 
+test('zoom acts only on the Terminal item', async () => {
+  const { app, terminals } = await worktreeApp(worktreePath, [sessionAt('s1', worktreePath)])
+  clickTab(app, 'add')
+  navigate(app, '#/o/r/main/s1')
+  await settle()
+  terminals[0].blur()
+
+  assert.equal(press(app, 'K', zoomKeys), false)
+  assert.equal(app.elements.get('session-page').classList.contains('zoomed'), false)
+  assert.equal(terminals[0].focused, false)
+})
+
+test('a window resize on the Terminal item is safe', async () => {
+  const { app } = await worktreeApp(worktreePath, [sessionAt('s1', worktreePath)])
+
+  assert.doesNotThrow(() => app.window.dispatch('resize'))
+  assert.equal(app.elements.get('session-page').style.getPropertyValue('--left'), '')
+})
+
 const tabKeyModifiers = { metaKey: true, shiftKey: true }
 const cmd = { metaKey: true }
 
@@ -3097,6 +2906,23 @@ test('the tab keys do nothing without tabs or off the worktree page', async () =
   assert.equal(sockets.length, 0)
 })
 
+test('the tab keys do nothing on a session item', async () => {
+  const { app, sockets } = await worktreeApp(worktreePath, [sessionAt('s1', worktreePath)])
+  clickTab(app, 'add')
+  clickTab(app, 'add')
+  navigate(app, '#/o/r/main/s1')
+  await settle()
+
+  assert.equal(press(app, 't', cmd), false)
+  assert.equal(press(app, 'i', cmd), false)
+  assert.equal(press(app, ']', tabKeyModifiers), false)
+  assert.equal(sockets.length, 2)
+  assert.equal(app.context.location.hash, '#/o/r/main/s1')
+
+  navigate(app, worktreeHashOf(worktreePath))
+  assert.deepEqual(tabNames(app), ['shell 1', 'shell 2*'])
+})
+
 test('worktree terminals keep the tab keys', async () => {
   const { app, terminals } = await worktreeApp()
   clickTab(app, 'add')
@@ -3107,6 +2933,68 @@ test('worktree terminals keep the tab keys', async () => {
   for (const name of ['i', 't']) assert.equal(key(event(name, cmd)), false, `${name} stays out of the terminal`)
   assert.equal(key(event('i')), true)
   assert.equal(key(event('[', cmd)), true)
+})
+
+const barModifiers = { metaKey: true, altKey: true }
+
+// Presses Alt+Cmd+[ when `step` is `previous`, else Alt+Cmd+], with the keys macOS gives under Alt and `modifiers`, on `target`. Returns true when the page took it.
+function pressBar(app, step, target = undefined, modifiers = {}) {
+  const [key, code] = step === 'previous' ? ['“', 'BracketLeft'] : ['‘', 'BracketRight']
+  return press(app, key, { ...barModifiers, code, ...modifiers }, target)
+}
+
+test('Alt+Cmd+[ and Alt+Cmd+] step through the bar and wrap', async () => {
+  const { app } = await worktreeApp(worktreePath, [sessionAt('s1', worktreePath), sessionAt('s2', worktreePath)])
+
+  // Presses the bar key of `direction`, follows the new hash, and returns it.
+  const step = async (direction) => {
+    assert.ok(pressBar(app, direction), `${direction} is taken`)
+    app.window.dispatch('hashchange')
+    await settle()
+    return app.context.location.hash
+  }
+
+  assert.equal(await step('next'), '#/o/r/main/s1')
+  assert.equal(await step('next'), '#/o/r/main/s2')
+  assert.equal(await step('next'), worktreeHashOf(worktreePath))
+  assert.equal(await step('previous'), '#/o/r/main/s2')
+  assert.deepEqual(currentBarLinks(app), ['#/o/r/main/s2'])
+  assert.equal(await step('previous'), '#/o/r/main/s1')
+})
+
+test('Alt+Cmd+] with only the Terminal item stays put', async () => {
+  const { app } = await worktreeApp()
+
+  assert.ok(pressBar(app, 'next'))
+  assert.ok(pressBar(app, 'previous'))
+  assert.equal(app.context.location.hash, worktreeHashOf(worktreePath))
+  assert.deepEqual(currentBarLinks(app), [worktreeHashOf(worktreePath)])
+})
+
+test('a worktree terminal passes Alt+Cmd+[ / ] to the board', async () => {
+  const { app, terminals } = await worktreeApp(worktreePath, [sessionAt('s1', worktreePath)])
+  clickTab(app, 'add')
+  const { key } = terminals[0].handlers
+  const event = (name, code, modifiers) => ({ key: name, code, metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, ...modifiers })
+
+  assert.equal(key(event('“', 'BracketLeft', barModifiers)), false)
+  assert.equal(key(event('‘', 'BracketRight', barModifiers)), false)
+  assert.equal(key(event('“', 'BracketLeft', { altKey: true })), true)
+
+  assert.ok(pressBar(app, 'next', terminals[0].element))
+  assert.equal(app.context.location.hash, '#/o/r/main/s1')
+})
+
+test('the bar keys do nothing off the worktree page or with Shift or Ctrl', async () => {
+  const { app } = await worktreeApp(worktreePath, [sessionAt('s1', worktreePath)])
+
+  for (const modifiers of [{ shiftKey: true }, { ctrlKey: true }]) assert.equal(pressBar(app, 'next', undefined, modifiers), false)
+  assert.equal(app.context.location.hash, worktreeHashOf(worktreePath))
+
+  navigate(app, '#/sessions')
+  assert.equal(pressBar(app, 'next'), false)
+  assert.equal(pressBar(app, 'previous'), false)
+  assert.equal(app.context.location.hash, '#/sessions')
 })
 
 test('Cmd+I edits the active tab name and Enter saves it', async () => {
@@ -3329,47 +3217,199 @@ test("the worktree card's lazygit button still opens a new tab", async () => {
 
 const worktreeSession = { ...session, org: 'o', repo: 'r', id: 's1', dir: 'api/file/o/r/main/s1/', worktree: worktreePath }
 
-// Goes from `from` to the page of `worktreeSession` and returns the hash a back key then sets.
-async function backFromSession(app, from) {
-  navigate(app, from)
-  navigate(app, '#/o/r/main/s1')
-  await settle()
-
-  assert.ok(press(app, 'Escape'))
-  return app.context.location.hash
+// Returns a dashboard on the sessions page with `shown` selected, after one poll of an api that answers `api/repos` with `reposReply()`, with fake terminal classes and the instances they create.
+async function sessionsListApp(shown = worktreeSession, reposReply = undefined) {
+  const stubs = await worktreeApp(worktreePath, [shown], reposReply)
+  navigate(stubs.app, '#/sessions')
+  stubs.app.run(`selectedDir = ${JSON.stringify(shown.dir)}`)
+  return stubs
 }
 
-test('a back key on a session opened from a worktree page returns to it', async () => {
-  const { app } = await worktreeApp(worktreePath, [worktreeSession])
+test('g on the list opens the worktree page with a lazygit tab', async () => {
+  const { app, sockets } = await sessionsListApp()
+
+  assert.ok(press(app, 'g'))
+  assert.equal(app.context.location.hash, worktreeHashOf(worktreePath))
+  assert.deepEqual(tabNames(app), ['lazygit*'])
+  assert.equal(sockets[0].url, `ws://127.0.0.1:8731/api/terminal?path=${encodedWorktree}&program=lazygit&name=lazygit&cols=100&rows=30`)
+})
+
+test('the lazygit row button opens a lazygit tab', async () => {
+  const { app } = await sessionsListApp()
+  assert.match(app.elements.get('page').innerHTML, /data-action="lazygit" title="Open lazygit in a tab \(g\)"/)
+
+  const button = { dataset: { action: 'lazygit' }, closest: () => ({ dataset: { dir: worktreeSession.dir } }) }
+  const target = { closest: (selector) => (selector === 'button[data-action]' ? button : null) }
+  app.elements.get('list').dispatch('click', { target })
+  assert.equal(app.context.location.hash, worktreeHashOf(worktreePath))
+  assert.deepEqual(tabNames(app), ['lazygit*'])
+})
+
+test('g and the lazygit row button on a session without a listed worktree tell the user', async () => {
+  for (const worktree of [undefined, '', '/s/o/r/gone', mainPath]) {
+    const shown = { ...worktreeSession, worktree }
+    const { app, sockets } = await sessionsListApp(shown, () => response(JSON.stringify(linkedRepos)))
+
+    assert.ok(press(app, 'g'), `g on worktree ${JSON.stringify(worktree)}`)
+    assert.equal(app.elements.get('modal').open, true)
+    assert.equal(app.elements.get('modal-text').textContent, 'Terminals open only in a linked worktree.')
+    closeModal(app, '')
+
+    const button = { dataset: { action: 'lazygit' }, closest: () => ({ dataset: { dir: shown.dir } }) }
+    const target = { closest: (selector) => (selector === 'button[data-action]' ? button : null) }
+    app.elements.get('list').dispatch('click', { target })
+    assert.equal(app.elements.get('modal').open, true)
+    assert.equal(app.elements.get('modal-text').textContent, 'Terminals open only in a linked worktree.')
+
+    assert.equal(app.context.location.hash, '#/sessions')
+    assert.equal(sockets.length, 0)
+  }
+})
+
+// Returns a dashboard on the item of `s1` of the worktree page of `worktreePath`, after one poll of an api that lists `sessions` and answers `api/repos` with `reposReply()`, with fake terminal classes, the instances they create and the URLs it posts.
+async function sessionItemApp(sessions = [worktreeSession], reposReply = undefined) {
+  const stubs = await worktreeApp(worktreePath, sessions, reposReply)
+  navigate(stubs.app, '#/o/r/main/s1')
+  await settle()
+  return stubs
+}
+
+test('g on a session item selects the Terminal item with a lazygit tab', async () => {
+  const { app, posts } = await sessionItemApp()
+
+  assert.ok(press(app, 'g'))
+  assert.equal(app.context.location.hash, worktreeHashOf(worktreePath))
+  assert.deepEqual(currentBarLinks(app), [worktreeHashOf(worktreePath)])
+  assert.deepEqual(tabNames(app), ['lazygit*'])
+  assert.deepEqual(posts, [])
+})
+
+test("the worktree card's lazygit button on a session item selects the Terminal item with a lazygit tab", async () => {
+  const { app, posts, sockets } = await sessionItemApp()
+
+  clickCard(app, 'lazygit')
+  assert.equal(app.context.location.hash, worktreeHashOf(worktreePath))
+  assert.deepEqual(currentBarLinks(app), [worktreeHashOf(worktreePath)])
+  assert.deepEqual(tabNames(app), ['lazygit*'])
+  assert.equal(sockets.length, 1)
+  assert.deepEqual(posts, [])
+})
+
+test('t on a session item selects the Terminal item with a shell tab', async () => {
+  const { app, posts, sockets } = await sessionItemApp()
+
+  assert.ok(press(app, 't'))
+  await settle()
+  assert.equal(app.context.location.hash, worktreeHashOf(worktreePath))
+  assert.deepEqual(currentBarLinks(app), [worktreeHashOf(worktreePath)])
+  assert.deepEqual(tabNames(app), ['shell 1*'])
+  assert.equal(sockets[0].url, `ws://127.0.0.1:8731/api/terminal?path=${encodedWorktree}&program=shell&name=shell%201&cols=100&rows=30`)
+  assert.deepEqual(posts, [])
+})
+
+test('g with unsaved editor changes asks to discard first', async () => {
+  const app = await openFile(fileApi({ 'spec.md': '# Spec\n' }), 'spec.md')
+  const { sockets } = terminalStubs(app)
+  const shown = app.context.location.hash
+  app.context.session = { ...editSession, worktree: worktreePath }
+  app.context.repos = worktreeRepos
+  app.run('state.sessions = [session]')
+  app.run('reposState = repos')
+
+  press(app, 'w')
+  editor(app).value = '# Typed\n'
+  assert.ok(press(app, 'g'))
+  assert.equal(app.elements.get('modal-text').textContent, 'Discard your changes?')
+
+  closeModal(app, 'cancel')
+  await settle()
+  assert.equal(app.context.location.hash, shown)
+  assert.equal(app.run('editing.editor.value()'), '# Typed\n')
+  assert.equal(sockets.length, 0)
+
+  press(app, 'g')
+  closeModal(app, 'ok')
+  await settle()
+  assert.equal(app.run('editing'), null)
+  assert.equal(app.context.location.hash, worktreeHashOf(worktreePath))
+  assert.deepEqual(tabNames(app), ['lazygit*'])
+})
+
+test('a click or Enter on a Sessions row shows the worktree page with that session', async () => {
+  const { app } = await sessionsListApp()
   navigate(app, '#/o/r/main/s1')
   await settle()
 
-  assert.ok(press(app, 'Escape'))
-  assert.equal(app.context.location.hash, worktreeHashOf(worktreePath))
-  assert.equal(app.run('selectedDir'), worktreeSession.dir)
+  assert.deepEqual(currentBarLinks(app), ['#/o/r/main/s1'])
+  assert.ok(pageIds(app).includes('metro'))
+
+  navigate(app, '#/sessions')
+  assert.ok(press(app, 'Enter'))
+  assert.equal(app.context.location.hash, '#/o/r/main/s1')
+  app.window.dispatch('hashchange')
+  await settle()
+  assert.deepEqual(currentBarLinks(app), ['#/o/r/main/s1'])
 })
 
-test('a file of that session keeps the origin', async () => {
+const otherSession = sessionAt('s2', worktreePath)
+
+test('back from a page entered from the Sessions tab returns there', async () => {
+  for (const [key, modifiers] of [['Escape'], ['l'], ['[', { metaKey: true }]]) {
+    const { app } = await worktreeApp(worktreePath, [worktreeSession, otherSession])
+    navigate(app, '#/sessions')
+    navigate(app, '#/o/r/main/s1')
+    await settle()
+    navigate(app, worktreeHashOf(worktreePath))
+    navigate(app, '#/o/r/main/s2')
+    await settle()
+
+    assert.ok(press(app, key, modifiers), `${key} is taken`)
+    assert.equal(app.context.location.hash, '#/sessions')
+    assert.equal(app.run('selectedDir'), otherSession.dir)
+  }
+})
+
+test('back from a page entered from the Repos tab returns there', async () => {
+  for (const from of ['#/', '#/terminals']) {
+    const { app } = await worktreeApp(worktreePath, [worktreeSession])
+    navigate(app, from)
+    navigate(app, worktreeHashOf(worktreePath))
+    navigate(app, '#/o/r/main/s1')
+    await settle()
+
+    assert.ok(press(app, 'Escape'))
+    assert.equal(app.context.location.hash, '#/', `from ${from}`)
+    assert.equal(app.run('selectedWorktree'), worktreePath)
+  }
+})
+
+test('files and items of the same page keep the origin', async () => {
   const { app } = await worktreeApp(worktreePath, [worktreeSession])
+  navigate(app, '#/sessions')
+  app.run('selectedDir = null')
   navigate(app, '#/o/r/main/s1')
   await settle()
   navigate(app, '#/o/r/main/s1/spec.md')
   await settle()
+  navigate(app, worktreeHashOf(worktreePath))
 
   assert.ok(press(app, 'Escape'))
-  assert.equal(app.context.location.hash, worktreeHashOf(worktreePath))
+  assert.equal(app.context.location.hash, '#/sessions')
+  assert.equal(app.run('selectedDir'), worktreeSession.dir)
 })
 
-test('a session opened elsewhere returns to the sessions tab', async () => {
+test('a page entered again from another page takes the new origin', async () => {
   const { app } = await worktreeApp(worktreePath, [worktreeSession])
-
-  assert.equal(await backFromSession(app, '#/sessions'), '#/sessions')
-  assert.equal(await backFromSession(app, '#/'), '#/sessions')
-
-  navigate(app, worktreeHashOf(worktreePath))
+  navigate(app, '#/sessions')
   navigate(app, '#/o/r/main/s1')
   await settle()
-  assert.equal(await backFromSession(app, '#/sessions'), '#/sessions')
+  navigate(app, '#/')
+  navigate(app, '#/o/r/main/s1')
+  await settle()
+
+  assert.ok(press(app, 'Escape'))
+  assert.equal(app.context.location.hash, '#/')
+  assert.equal(app.run('selectedWorktree'), worktreePath)
 })
 
 const prList = [
@@ -4042,12 +4082,13 @@ test('a failed refresh tells the error and keeps the row', async () => {
   assert.deepEqual(prNumbers(app), [12, 7])
 })
 
-test('a back key on a worktree page opened from the PRs page returns to it with its selection and filter', async () => {
+test('back from a page entered from a PRs page restores its selection and filter', async () => {
   const repos = plain(selectRepos)
   repos.repos[0].worktrees.push(fixLogin)
+  const fixSession = { ...session, org: 'akka', repo: 'sdk', branch: 'fix-login', id: 's2', dir: 'api/file/akka/sdk/fix-login/s2/', worktree: fixLogin.path }
 
   for (const [key, modifiers] of [['l'], ['Escape'], ['[', { metaKey: true }]]) {
-    const { app } = await checkoutApp(repos)
+    const { app } = await checkoutApp(repos, undefined, [fixSession])
     typePrFilter(app, 'fix')
     press(app, 'ArrowDown')
 
@@ -4057,6 +4098,10 @@ test('a back key on a worktree page opened from the PRs page returns to it with 
     assert.equal(app.context.location.hash, worktreeHashOf(fixLogin.path))
     assert.equal(app.run('prFilter'), '')
 
+    navigate(app, '#/akka/sdk/fix-login/s2')
+    await settle()
+    navigate(app, worktreeHashOf(fixLogin.path))
+
     assert.ok(press(app, key, modifiers), `${key} is taken`)
     assert.equal(app.context.location.hash, prsHashOf(sdkMain))
     app.window.dispatch('hashchange')
@@ -4065,27 +4110,6 @@ test('a back key on a worktree page opened from the PRs page returns to it with 
     assert.deepEqual(prClasses(app), ['row pr selected'])
     assert.equal(app.run('selectedPr'), 12)
   }
-})
-
-test('the PRs page origin survives a session opened from the worktree page', async () => {
-  const repos = plain(selectRepos)
-  repos.repos[0].worktrees.push(fixLogin)
-  const fixSession = { ...session, org: 'akka', repo: 'sdk', branch: 'fix-login', id: 's2', dir: 'api/file/akka/sdk/fix-login/s2/', worktree: fixLogin.path }
-  const { app } = await checkoutApp(repos, undefined, [fixSession])
-  press(app, 'ArrowDown')
-
-  assert.ok(press(app, 'c'))
-  await settle()
-  app.window.dispatch('hashchange')
-
-  navigate(app, '#/akka/sdk/fix-login/s2')
-  await settle()
-  assert.ok(press(app, 'Escape'))
-  assert.equal(app.context.location.hash, worktreeHashOf(fixLogin.path))
-  app.window.dispatch('hashchange')
-
-  assert.ok(press(app, 'Escape'))
-  assert.equal(app.context.location.hash, prsHashOf(sdkMain))
 })
 
 test('a worktree page opened another way returns to the repos page', async () => {
@@ -4129,9 +4153,6 @@ async function standaloneApp(hash, sessions = [], repos = worktreeRepos) {
 
 // Returns true when `app` may show the page of `hash`.
 const scoped = (app, hash) => app.run(`inScope(parseRoute(${JSON.stringify(hash)}))`)
-
-// Returns a session `id` of `o/r` in the worktree `worktree`.
-const sessionAt = (id, worktree) => ({ ...session, org: 'o', repo: 'r', id, dir: `api/file/o/r/main/${id}/`, worktree })
 
 test('the main window keeps the header and every route', () => {
   const app = dashboard()
@@ -4349,11 +4370,22 @@ test('Cmd+click on a sessions page row opens the session in a new app window', a
   assert.equal(app.context.location.hash, '#/sessions')
 })
 
-test('Cmd+click on a worktree page session row opens the session in a new app window', async () => {
+// Clicks the bar item link `href` with `modifiers`, and returns true when the page prevented the default.
+function clickBarItem(app, href, modifiers = {}) {
+  let prevented = false
+  const link = { getAttribute: (name) => (name === 'href' ? href : null) }
+  const target = { closest: (selector) => (selector.includes('a.bar-item') ? link : null) }
+
+  app.elements.get('worktree-bar').dispatch('click', { target, ...modifiers, preventDefault: () => { prevented = true } })
+  return prevented
+}
+
+test('Cmd+click on a bar item opens it in a new app window', async () => {
   const { app } = await worktreeApp(worktreePath, [worktreeSession])
   const opened = appOpener(app)
 
-  assert.ok(clickRow(app, 'session', '#/o/r/main/s1', { metaKey: true }, 'worktree-sessions'))
+  assert.equal(clickBarItem(app, '#/o/r/main/s1'), false)
+  assert.ok(clickBarItem(app, '#/o/r/main/s1', { metaKey: true }))
   await settle()
 
   assert.deepEqual(opened, ['#/o/r/main/s1'])
@@ -4365,7 +4397,7 @@ test('Cmd+click in a standalone window opens another window and stays put', asyn
   const app = await standaloneApp(root, [worktreeSession])
   const opened = appOpener(app)
 
-  assert.ok(clickRow(app, 'session', '#/o/r/main/s1', { metaKey: true }, 'worktree-sessions'))
+  assert.ok(clickBarItem(app, '#/o/r/main/s1', { metaKey: true }))
   await settle()
 
   assert.deepEqual(opened, ['#/o/r/main/s1'])
@@ -4379,54 +4411,123 @@ async function sessionPageApp(shown = worktreeSession, repos = worktreeRepos) {
   return app
 }
 
-// The repos of `worktreeRepos` as `api/repos` lists them: without the main checkout among `worktrees`.
-const linkedRepos = { error: null, repos: [{ ...worktreeRepos.repos[0], worktrees: [worktreeRepos.repos[0].worktrees[1]] }] }
+test('o, i and e on a session item post to the worktree open route', async () => {
+  const { app, posts, sockets } = await sessionItemApp()
 
-test('c on a session page goes to its worktree page', async () => {
-  const app = await sessionPageApp()
-
-  assert.ok(press(app, 'c'))
-  assert.equal(app.context.location.hash, worktreeHashOf(worktreePath))
+  for (const key of ['o', 'i', 'e']) assert.ok(press(app, key), `${key} is taken`)
+  await settle()
+  assert.deepEqual(posts, ['github', 'intellij', 'zed'].map((tool) => `api/open/${tool}?path=${encodedWorktree}`))
+  assert.equal(app.context.location.hash, '#/o/r/main/s1')
+  assert.equal(sockets.length, 0)
 })
 
-test('the session card button goes to the worktree page', async () => {
-  const app = await sessionPageApp()
+test('c on a session item does nothing', async () => {
+  const { app, posts } = await sessionItemApp()
 
-  const button = { dataset: { action: 'worktree' }, closest: () => ({ dataset: { dir: worktreeSession.dir } }) }
+  assert.equal(press(app, 'c'), false)
+  await settle()
+  assert.equal(app.context.location.hash, '#/o/r/main/s1')
+  assert.deepEqual(posts, [])
+})
+
+test('a, w and the arrows still act on a session item', async () => {
+  const api = fileApi({ 'walk.json': walkJson, 'overview.md': '# Overview\n', 'steps/01.md': '## 1\n' })
+  const app = await openSession(api, { ...walkSession('walk'), worktree: worktreePath })
+  app.context.repos = worktreeRepos
+  app.run('reposState = repos')
+  app.context.messages = []
+  app.run('ask = async (message) => { messages.push(message); return false }')
+
+  assert.ok(press(app, 'a'))
+  await settle()
+  assert.deepEqual(app.context.messages, ['Archive o/r/main/s? The dashboard will no longer list it.'])
+
+  assert.equal(app.run('sessionView.selected'), 0)
+  assert.ok(press(app, 'ArrowDown'))
+  assert.equal(app.run('sessionView.selected'), 1)
+  app.window.dispatch('hashchange')
+  await settle()
+
+  assert.ok(press(app, 'w'))
+  assert.equal(app.run('editing.path'), 'steps/01.md')
+  assert.equal(editor(app).tagName, 'TEXTAREA')
+})
+
+test('the session strip button archives the session', async () => {
+  const app = await sessionPageApp()
+  app.context.messages = []
+  app.run('ask = async (message) => { messages.push(message); return false }')
+
+  const button = { dataset: { action: 'archive' }, closest: () => ({ dataset: { dir: worktreeSession.dir } }) }
   const target = { closest: (selector) => (selector === 'button[data-action]' ? button : null) }
   app.elements.get('session-card').dispatch('click', { target })
-  assert.equal(app.context.location.hash, worktreeHashOf(worktreePath))
+  await settle()
+  assert.deepEqual(app.context.messages, ['Archive o/r/main/s1? The dashboard will no longer list it.'])
 })
 
-test('c on a session without a worktree does nothing', async () => {
-  for (const worktree of [undefined, '']) {
-    const app = await sessionPageApp({ ...worktreeSession, worktree })
+test('o, i and e on a session item without a listed worktree post to the session open route', async () => {
+  for (const worktree of [undefined, '', '/s/o/r/gone', mainPath]) {
+    const { app, posts, sockets } = await sessionItemApp([{ ...worktreeSession, worktree }], () => response(JSON.stringify(linkedRepos)))
 
-    press(app, 'c')
-    assert.equal(app.context.location.hash, '#/o/r/main/s1', `worktree ${JSON.stringify(worktree)}`)
+    for (const key of ['o', 'i', 'e']) assert.ok(press(app, key), `${key} on worktree ${JSON.stringify(worktree)}`)
+    await settle()
+    assert.deepEqual(posts, ['github', 'intellij', 'zed'].map((tool) => `api/open/${tool}/o/r/main/s1`))
+    assert.equal(app.context.location.hash, '#/o/r/main/s1')
+    assert.equal(sockets.length, 0)
   }
 })
 
-test('c in a standalone session window goes to its worktree page', async () => {
-  const app = await standaloneApp('#/o/r/main/s1', [worktreeSession])
+test('g and t on a session item without a listed worktree tell the user', async () => {
+  for (const worktree of [undefined, '', '/s/o/r/gone', mainPath]) {
+    const { app, posts, sockets } = await sessionItemApp([{ ...worktreeSession, worktree }], () => response(JSON.stringify(linkedRepos)))
 
-  assert.ok(press(app, 'c'))
+    for (const key of ['g', 't']) {
+      assert.ok(press(app, key), `${key} on worktree ${JSON.stringify(worktree)}`)
+      assert.equal(app.elements.get('modal').open, true)
+      assert.equal(app.elements.get('modal-text').textContent, 'Terminals open only in a linked worktree.')
+      closeModal(app, '')
+    }
+
+    await settle()
+    assert.equal(app.context.location.hash, '#/o/r/main/s1')
+    assert.deepEqual(posts, [])
+    assert.equal(sockets.length, 0)
+  }
+})
+
+test('the card of a main checkout page names the checkout', async () => {
+  const { app } = await sessionItemApp([{ ...worktreeSession, worktree: mainPath }], () => response(JSON.stringify(linkedRepos)))
+  const card = () => app.elements.get('worktree-card').innerHTML
+
+  assert.equal(textOf(card()), 'o/r o/r/main main checkout')
+  assert.doesNotMatch(card(), /data-action/)
+
+  navigate(app, worktreeHashOf(mainPath))
+  assert.deepEqual(currentBarLinks(app), [worktreeHashOf(mainPath)])
+  assert.equal(textOf(card()), 'o/r o/r/main main checkout')
+})
+
+test('t in a standalone session window selects the Terminal item', async () => {
+  const app = await standaloneApp('#/o/r/main/s1', [worktreeSession])
+  terminalStubs(app)
+
+  assert.ok(press(app, 't'))
   app.window.dispatch('hashchange')
   assert.equal(app.context.location.hash, worktreeHashOf(worktreePath))
+  assert.deepEqual(tabNames(app), ['shell 1*'])
 })
 
-test('c on a session with a trailing slash goes to the listed worktree page', async () => {
-  const app = await sessionPageApp({ ...worktreeSession, worktree: `${worktreePath}/` }, linkedRepos)
+test('the worktree keys on a session with a trailing slash act on the listed worktree', async () => {
+  const sessions = [{ ...worktreeSession, worktree: `${worktreePath}/` }]
+  const { app, posts } = await sessionItemApp(sessions, () => response(JSON.stringify(linkedRepos)))
 
-  assert.ok(press(app, 'c'))
+  assert.ok(press(app, 'o'))
+  await settle()
+  assert.deepEqual(posts, [`api/open/github?path=${encodedWorktree}`])
+
+  assert.ok(press(app, 'g'))
   assert.equal(app.context.location.hash, worktreeHashOf(worktreePath))
-})
-
-test('c on a session in the main checkout does nothing', async () => {
-  const app = await sessionPageApp({ ...worktreeSession, worktree: mainPath }, linkedRepos)
-
-  press(app, 'c')
-  assert.equal(app.context.location.hash, '#/o/r/main/s1')
+  assert.deepEqual(tabNames(app), ['lazygit*'])
 })
 
 test('a standalone session window with a trailing slash has the listed worktree page in scope', async () => {
@@ -4436,10 +4537,11 @@ test('a standalone session window with a trailing slash has the listed worktree 
   assert.equal(scoped(app, worktreeHashOf(worktreePath)), true)
 })
 
-test('the session card shows the worktree button with its key', async () => {
+test('the session strip shows the archive button with its key', async () => {
   const app = await sessionPageApp()
 
-  assert.match(app.elements.get('session-card').innerHTML, /data-action="worktree" title="Go to worktree page \(c\)"/)
+  assert.match(app.elements.get('session-card').innerHTML, /data-action="archive" title="Archive \(a\)"/)
+  assert.doesNotMatch(app.elements.get('session-card').innerHTML, /data-action="worktree"/)
 })
 
 // Archives `archived` in `app` once the user confirms, and fires the hash change the archive makes.
@@ -4453,14 +4555,15 @@ async function archive(app, archived) {
   await settle()
 }
 
-test('archiving a session in a standalone window goes back to its worktree page', async () => {
-  const root = worktreeHashOf(worktreePath)
-  const app = await standaloneApp(root, [worktreeSession])
-  navigate(app, '#/o/r/main/s1')
-  await settle()
+test('archiving a session in a standalone window shows the root', async () => {
+  for (const [root, archived] of [[worktreeHashOf(worktreePath), worktreeSession], ['#/o/r/main/s1', otherSession]]) {
+    const app = await standaloneApp(root, [worktreeSession, otherSession])
+    navigate(app, `#/o/r/main/${archived.id}`)
+    await settle()
 
-  await archive(app, worktreeSession)
-  assert.equal(app.context.location.hash, root)
+    await archive(app, archived)
+    assert.equal(app.context.location.hash, root)
+  }
 })
 
 test('archiving the root session of a standalone window closes it', async () => {
@@ -4492,14 +4595,14 @@ test('a back key on a missing session page of a standalone window goes to the ro
   }
 })
 
-test('archiving a session in the main window goes to the sessions page', async () => {
+test('archiving a session in the main window shows its worktree page', async () => {
   const { app } = await worktreeApp(worktreePath, [worktreeSession])
   navigate(app, '#/o/r/main/s1')
   await settle()
   const closes = appWindow(app)
 
   await archive(app, worktreeSession)
-  assert.equal(app.context.location.hash, '#/sessions')
+  assert.equal(app.context.location.hash, worktreeHashOf(worktreePath))
   assert.equal(closes.count, 0)
 })
 
@@ -4649,5 +4752,12 @@ test('leaving the page during a creation stays where the user went', async () =>
   navigate(app, '#/sessions')
   await finishCreate(stubs)
 
+  assert.equal(app.context.location.hash, '#/sessions')
+})
+
+test('archiving a session from the Sessions tab stays there', async () => {
+  const { app } = await sessionsListApp()
+
+  await archive(app, worktreeSession)
   assert.equal(app.context.location.hash, '#/sessions')
 })
