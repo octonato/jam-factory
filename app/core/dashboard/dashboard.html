@@ -309,7 +309,7 @@
 
   #pr-card { margin-bottom: 16px; }
 
-  .session-bar .row.pr { margin-top: 8px; cursor: default; }
+  .session-bar .row.pr { cursor: default; }
 
   .session-bar .row.pr:hover {
     border-color: var(--line);
@@ -2050,8 +2050,11 @@ function routePage(route) {
   return session === undefined ? null : sessionWorktree(session) ?? sessionHref(session)
 }
 
-// Returns the worktree card: the checkout's name, the worktree's short path and branch, and its actions. The row of the open PR on its branch follows the card.
+// Returns the worktree card: the row of the open PR on its branch, or the checkout's name, the worktree's short path and branch, and its actions.
 function worktreeCardHtml(repo, worktree) {
+  const pr = worktreePr(repo, worktree)
+  if (pr !== undefined) return worktreePrHtml(repo, worktree, pr)
+
   return `
     <div class="session-card">
       <div class="name">
@@ -2060,7 +2063,7 @@ function worktreeCardHtml(repo, worktree) {
       </div>
       <div class="facts"><span class="pill">${escape(worktree.branch ?? worktree.head ?? '')}</span></div>
       <div class="actions">${actionButtons(WORKTREE_ACTIONS)}</div>
-    </div>${worktreePrHtml(repo, worktree)}`
+    </div>`
 }
 
 // Returns the open PR of `repo` on the branch of `worktree`, or undefined.
@@ -2069,14 +2072,18 @@ function worktreePr(repo, worktree) {
   return worktreePrs.prs?.find((pr) => pr.branch === worktree.branch)
 }
 
-// Returns the row of the open PR on the branch of `worktree` as the PRs page shows it, without the marker and the icons, or nothing without an open PR.
-function worktreePrHtml(repo, worktree) {
-  const pr = worktreePr(repo, worktree)
-  if (pr === undefined) return ''
+// Returns the row of `pr` as the PRs page shows it, with the reviewed and draft chips and the worktree actions.
+function worktreePrHtml(repo, worktree, pr) {
+  const chips = []
+  if (pr.reviewers.length > 0) chips.push('<span class="pr-chip reviewed">reviewed</span>')
+  if (pr.draft) chips.push('<span class="pr-chip draft">draft</span>')
 
   return `
-    <div class="row pr">${prBodyHtml(pr, '')}
-      <div class="foot"><div class="pr-chips">${prChips(pr)}</div></div>
+    <div class="row pr">${prBodyHtml(pr, prMarker(repo, pr, worktree))}
+      <div class="foot">
+        <div class="pr-chips">${chips.join('')}</div>
+        <div class="actions">${actionButtons(WORKTREE_ACTIONS)}</div>
+      </div>
     </div>`
 }
 

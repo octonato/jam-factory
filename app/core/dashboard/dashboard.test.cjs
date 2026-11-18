@@ -3539,12 +3539,14 @@ const prRepos = () => {
   return repos
 }
 
-test('the worktree card shows the open PR of its branch as the PRs page does', async () => {
+test('the worktree card is the row of the open PR of its branch as the PRs page shows it', async () => {
   const app = await prsApp(prRepos(), prsJson(prList), worktreeHashOf(fixLogin.path))
   const card = app.elements.get('worktree-card').innerHTML
 
-  assert.equal(worktreeCardText(app), `akka/sdk akka/sdk/fix-login alice/fix-login ${prTexts[0]} reviewed`)
-  assert.match(card, /<div class="row pr">\s*<div class="body">/)
+  assert.equal(worktreeCardText(app), '#12 Fix login alice · +10 −3 ● akka/sdk/fix-login CI passing · approved reviewed')
+  assert.match(card, /^\s*<div class="row pr">\s*<div class="body">/)
+  assert.doesNotMatch(card, /session-card/)
+  assert.deepEqual([...card.matchAll(/data-action="([^"]+)"/g)].map((match) => match[1]), ['lazygit', 'iterm', 'zed', 'intellij', 'github'])
   assert.match(card, /<span class="ci passing">CI passing<\/span> · <span class="review approved" title="Reviewed by carol \(approved\), dan \(commented\)">approved<\/span>/)
   assert.doesNotMatch(card, /data-number=/)
   assert.deepEqual(prsCalls(app), ['api/prs?path=%2Fs%2Fakka%2Fsdk%2Fmain'])
@@ -3556,7 +3558,7 @@ test('the worktree card shows the open PR of its branch as the PRs page does', a
 
   navigate(app, worktreeHashOf('/s/akka/sdk/docs'))
   await settle()
-  assert.equal(worktreeCardText(app), `akka/sdk akka/sdk/docs docs ${prTexts[1]} to review draft`)
+  assert.equal(worktreeCardText(app), '#7 Add <b>docs</b> bob · +5 −0 ● akka/sdk/docs no CI · no reviews draft')
   assert.doesNotMatch(app.elements.get('worktree-card').innerHTML, /<b>/)
   assert.equal(prsCalls(app).length, 1)
 
