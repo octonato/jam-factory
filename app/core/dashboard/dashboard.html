@@ -432,6 +432,48 @@
 
   #modal button:hover { border-color: var(--accent); }
 
+  #shortcuts {
+    width: min(640px, calc(100vw - 32px));
+    max-height: calc(100vh - 64px);
+    padding: 16px 20px;
+    overflow-y: auto;
+    color: var(--ink);
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+  }
+
+  #shortcuts::backdrop { background: rgb(0 0 0 / 40%); }
+
+  #shortcuts h2 { margin: 0 0 4px; font-size: 1.143rem; }
+
+  #shortcuts h3 {
+    margin: 16px 0 6px;
+    color: var(--ink-2);
+    font-size: 0.857rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  #shortcuts dl {
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
+    gap: 4px 16px;
+    margin: 0;
+  }
+
+  #shortcuts dt { white-space: nowrap; }
+  #shortcuts dd { margin: 0; color: var(--ink-2); }
+
+  #shortcuts kbd {
+    padding: 0 6px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.857rem;
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+  }
+
   #view {
     flex: 1;
     min-height: 0;
@@ -987,6 +1029,10 @@
     </div>
   </form>
 </dialog>
+<dialog id="shortcuts" aria-labelledby="shortcuts-title">
+  <h2 id="shortcuts-title">Keyboard shortcuts</h2>
+  <div id="shortcuts-list"></div>
+</dialog>
 
 <script src="marked.min.js"></script>
 <script src="purify.min.js"></script>
@@ -1152,6 +1198,116 @@ const ACTION_KEYS = { c: 'worktree', a: 'archive', t: 'iterm', e: 'zed', i: 'int
 const WORKTREE_KEYS = { o: 'github', i: 'intellij', e: 'zed', g: 'lazygit', t: 'shell' }
 const PR_KEYS = { c: 'worktree', Enter: 'worktree', r: 'claude', e: 'zed', i: 'intellij', o: 'github', u: 'refresh' }
 const BACK_KEYS = ['l', 'Escape', 'Meta+[']
+// The sections of the shortcuts dialog, each with its rows of keys and what they do.
+const SHORTCUTS = [
+  {
+    title: 'Everywhere',
+    rows: [
+      { keys: ['?'], text: 'Show or hide the shortcuts' },
+      { keys: ['⌘ click'], text: 'Open a row or bar item in a new window' },
+    ],
+  },
+  {
+    title: 'Repos',
+    rows: [
+      { keys: ['↑', '↓'], text: 'Move the selection' },
+      { keys: ['/'], text: 'Filter the checkouts' },
+      { keys: ['Enter'], text: 'Open the selected row' },
+      { keys: ['b'], text: 'Create a worktree of the selected main checkout' },
+      { keys: ['d'], text: 'Remove the selected worktree' },
+      { keys: ['e'], text: 'Open the selected worktree in Zed' },
+      { keys: ['i'], text: 'Open the selected worktree in IntelliJ' },
+      { keys: ['o'], text: 'Open the selected worktree on GitHub' },
+      { keys: ['g'], text: 'Open lazygit in a tab of the selected worktree' },
+      { keys: ['t'], text: 'Open a shell in a tab of the selected worktree' },
+    ],
+  },
+  {
+    title: 'Filter field',
+    rows: [
+      { keys: ['↑', '↓'], text: 'Leave the field and move the selection' },
+      { keys: ['Enter'], text: 'Open the selected row, or the first one' },
+      { keys: ['Esc'], text: 'Leave the field' },
+    ],
+  },
+  {
+    title: 'Sessions',
+    rows: [
+      { keys: ['↑', '↓'], text: 'Move the selection' },
+      { keys: ['Enter'], text: 'Open the selected session' },
+      { keys: ['c'], text: 'Go to the worktree page' },
+      { keys: ['a'], text: 'Archive the session' },
+      { keys: ['t'], text: 'Open in iTerm' },
+      { keys: ['e'], text: 'Open in Zed' },
+      { keys: ['i'], text: 'Open in IntelliJ' },
+      { keys: ['o'], text: 'Open on GitHub' },
+      { keys: ['g'], text: 'Open lazygit in a tab' },
+    ],
+  },
+  {
+    title: 'Terminals',
+    rows: [
+      { keys: ['↑', '↓'], text: 'Move the selection' },
+      { keys: ['Enter'], text: 'Show the selected tab on its worktree page' },
+    ],
+  },
+  {
+    title: 'Worktree page',
+    rows: [
+      { keys: ['l', 'Esc', '⌘['], text: 'Go back' },
+      { keys: ['d'], text: 'Remove the worktree' },
+      { keys: ['e'], text: 'Open in Zed' },
+      { keys: ['i'], text: 'Open in IntelliJ' },
+      { keys: ['o'], text: 'Open on GitHub' },
+      { keys: ['g'], text: 'Open lazygit in a tab' },
+      { keys: ['t'], text: 'Open a shell in a tab' },
+      { keys: ['⌥⌘[', '⌥⌘]'], text: 'Go to the previous or next bar item' },
+    ],
+  },
+  {
+    title: 'Terminal item',
+    rows: [
+      { keys: ['⌘T'], text: 'Open a shell in a new tab' },
+      { keys: ['⌘I'], text: 'Rename the tab' },
+      { keys: ['⇧⌘[', '⇧⌘]'], text: 'Show the previous or next tab' },
+      { keys: ['⇧⌘K'], text: 'Show the terminal alone' },
+      { keys: ['⇧⌘J'], text: 'Show the whole page again' },
+    ],
+  },
+  {
+    title: 'Session item',
+    rows: [
+      { keys: ['l', 'Esc', '⌘['], text: 'Go back' },
+      { keys: ['↑', '↓'], text: 'Select the previous or next stop' },
+      { keys: ['w'], text: 'Edit the shown file' },
+      { keys: ['⌘S'], text: 'Save the edited file' },
+      { keys: ['Esc'], text: 'Save the edited file and stop editing' },
+      { keys: ['a'], text: 'Archive the session' },
+      { keys: ['d'], text: 'Remove the worktree' },
+      { keys: ['e'], text: 'Open in Zed' },
+      { keys: ['i'], text: 'Open in IntelliJ' },
+      { keys: ['o'], text: 'Open on GitHub' },
+      { keys: ['g'], text: 'Open lazygit in a tab' },
+      { keys: ['t'], text: 'Open a shell in a tab' },
+    ],
+  },
+  {
+    title: 'PRs page',
+    rows: [
+      { keys: ['l', 'Esc', '⌘['], text: 'Go back to the repos' },
+      { keys: ['↑', '↓'], text: 'Move the selection' },
+      { keys: ['/'], text: 'Filter the PRs' },
+      { keys: ['b'], text: 'Create a worktree' },
+      { keys: ['c', 'Enter'], text: 'Check out the PR and open its worktree page' },
+      { keys: ['⌘ click'], text: 'Check out the PR and open its worktree page in a new window' },
+      { keys: ['r'], text: 'Check out the PR and open Claude in a tab' },
+      { keys: ['e'], text: 'Check out the PR and open it in Zed' },
+      { keys: ['i'], text: 'Check out the PR and open it in IntelliJ' },
+      { keys: ['o'], text: 'Open the PR on GitHub' },
+      { keys: ['u'], text: 'Refresh the PR' },
+    ],
+  },
+]
 const TABS = [
   { kind: 'repos', label: 'Repos', href: '#/' },
   { kind: 'sessions', label: 'Sessions', href: '#/sessions' },
@@ -2475,6 +2631,7 @@ function shownPr(number) {
 }
 
 // Runs the action of the clicked PR icon, or selects the PR whose row was clicked.
+// Cmd+click on a row in the app also opens the PR's worktree page in a new window, after its checkout.
 function onPrListClick(event) {
   const button = event.target.closest('button[data-action]')
   if (button) {
@@ -2488,6 +2645,11 @@ function onPrListClick(event) {
 
   selectedPr = Number(row.dataset.number)
   renderPrsPage(prsView.path)
+
+  if (!event.metaKey || window.__TAURI__ === undefined) return
+
+  const pr = shownPr(selectedPr)
+  if (pr !== undefined) runPrAction(prsView.path, pr, 'window')
 }
 
 // Moves the selection by `step` shown PRs and stops at the first and last PRs.
@@ -3334,6 +3496,26 @@ async function askText(message) {
   return answer === 'ok' ? $('modal-input').value.trim() : null
 }
 
+// Returns the sections of the shortcuts dialog: a heading, then each key with what it does.
+function shortcutsHtml() {
+  return SHORTCUTS.map(({ title, rows }) => {
+    const items = rows.map(({ keys, text }) => {
+      const kbds = keys.map((key) => `<kbd>${escape(key)}</kbd>`).join(' ')
+      return `<dt>${kbds}</dt><dd>${escape(text)}</dd>`
+    })
+    return `<h3>${escape(title)}</h3><dl>${items.join('')}</dl>`
+  }).join('')
+}
+
+// Opens the shortcuts dialog, or closes it when it is open.
+function toggleShortcuts() {
+  const dialog = $('shortcuts')
+  if (dialog.open) return dialog.close()
+
+  $('shortcuts-list').innerHTML = shortcutsHtml()
+  dialog.showModal()
+}
+
 // Closes the modal with OK on `Enter` in its text field.
 function onModalInputKey(event) {
   if (event.key !== 'Enter') return
@@ -4055,6 +4237,7 @@ async function runPrAction(path, pr, action) {
   if (folder === null) return
 
   if (action === 'zed' || action === 'intellij') return openWorktreeTool(folder, action)
+  if (action === 'window') return openWindow(worktreeHash(folder))
 
   const route = parseRoute(location.hash)
   if (route.kind !== 'prs' || route.path !== path) return
@@ -4638,6 +4821,14 @@ function barKey(event) {
 function onKey(event) {
   if (editorKey(event)) return
 
+  if ($('shortcuts').open) {
+    if (event.key === '?') {
+      event.preventDefault()
+      toggleShortcuts()
+    }
+    return
+  }
+
   const zoom = zoomKey(event)
   if (zoom !== null && zoomWorktreeTerminal(zoom)) {
     event.preventDefault()
@@ -4670,6 +4861,12 @@ function onKey(event) {
 
   if (event.target.closest('input, textarea, select, [contenteditable]')) return
   if (key === 'Enter' && event.target.closest('button, a')) return
+
+  if (key === '?') {
+    event.preventDefault()
+    toggleShortcuts()
+    return
+  }
 
   const route = parseRoute(location.hash)
   if (route.kind === 'repos') {

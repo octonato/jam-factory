@@ -149,13 +149,14 @@ function dashboard({ script = source, pageWidth = 1200, pageLeft = 0, splitterWi
     return el
   }
 
-  for (const id of ['board-header', 'tabs', 'page', 'term-store', 'status', 'problems', 'font-down', 'font-up', 'font-value', 'modal', 'modal-text', 'modal-input', 'modal-cancel']) element(id)
-  const modal = elements.get('modal')
-  modal.showModal = () => { modal.open = true }
-  modal.close = (value = '') => {
-    modal.returnValue = value
-    modal.open = false
-    modal.dispatch('close')
+  for (const id of ['board-header', 'tabs', 'page', 'term-store', 'status', 'problems', 'font-down', 'font-up', 'font-value', 'modal', 'modal-text', 'modal-input', 'modal-cancel', 'shortcuts', 'shortcuts-list']) element(id)
+  for (const dialog of [elements.get('modal'), elements.get('shortcuts')]) {
+    dialog.showModal = () => { dialog.open = true }
+    dialog.close = (value = '') => {
+      dialog.returnValue = value
+      dialog.open = false
+      dialog.dispatch('close')
+    }
   }
 
   let pageHtml = ''
@@ -1045,6 +1046,68 @@ test('other modified keys, an open dialog, the list and the repos page ignore th
   app.context.location.hash = '#/'
   assert.equal(press(app, 'Escape'), false)
   assert.equal(press(app, 'l'), false)
+})
+
+const shortcutsDialog = (app) => app.elements.get('shortcuts')
+const shortcutsText = (app) => textOf(app.elements.get('shortcuts-list').innerHTML)
+
+test('? opens the shortcuts dialog on every page, and ? closes it', () => {
+  for (const hash of ['#/', '#/sessions', '#/terminals', '#/worktree/%2Fa', prsHashOf(sdkMain)]) {
+    const app = dashboard()
+    app.context.location.hash = hash
+
+    assert.ok(press(app, '?', { shiftKey: true }), `? is taken on ${hash}`)
+    assert.equal(shortcutsDialog(app).open, true)
+    assert.match(shortcutsText(app), /^Everywhere \? Show or hide the shortcuts/)
+    assert.match(shortcutsText(app), /PRs page l Esc ⌘\[ Go back to the repos/)
+
+    assert.ok(press(app, '?', { shiftKey: true }))
+    assert.equal(shortcutsDialog(app).open, false)
+    assert.equal(app.context.location.hash, hash)
+  }
+})
+
+test('the open shortcuts dialog keeps the page keys from the page', () => {
+  const app = dashboard()
+  app.context.location.hash = '#/worktree/%2Fa'
+  press(app, '?', { shiftKey: true })
+
+  assert.equal(press(app, 'l'), false)
+  assert.equal(press(app, '[', { metaKey: true }), false)
+  assert.equal(app.context.location.hash, '#/worktree/%2Fa')
+  assert.equal(shortcutsDialog(app).open, true)
+})
+
+test('? in a text field, a terminal or an open dialog opens no shortcuts', () => {
+  const app = dashboard()
+  app.context.location.hash = '#/'
+  const field = { closest: (selector) => (selector.includes('input') ? {} : null) }
+  const terminal = { closest: (selector) => (selector === '#term-view' ? {} : null) }
+
+  assert.equal(press(app, '?', { shiftKey: true }, field), false)
+  assert.equal(press(app, '?', { shiftKey: true }, terminal), false)
+
+  app.elements.get('modal').open = true
+  assert.equal(press(app, '?', { shiftKey: true }), false)
+  assert.notEqual(shortcutsDialog(app).open, true)
+})
+
+test('the shortcuts dialog lists every key of the key tables', () => {
+  const app = dashboard()
+  const sections = plain(app.run('SHORTCUTS'))
+  const keysOf = (title) => sections.find((section) => section.title === title).rows.flatMap((row) => row.keys)
+  const tables = plain(app.run('({ ACTION_KEYS, WORKTREE_KEYS, PR_KEYS, keys: [NEW_WORKTREE_KEY, REMOVE_WORKTREE_KEY] })'))
+
+  const expected = [
+    ['Sessions', Object.keys(tables.ACTION_KEYS)],
+    ['Repos', [...Object.keys(tables.WORKTREE_KEYS), ...tables.keys]],
+    ['Worktree page', [...Object.keys(tables.WORKTREE_KEYS), tables.keys[1]]],
+    ['Session item', [...Object.keys(tables.WORKTREE_KEYS), tables.keys[1]]],
+    ['PRs page', [...Object.keys(tables.PR_KEYS), tables.keys[0]]],
+  ]
+  for (const [title, keys] of expected) {
+    for (const key of keys) assert.ok(keysOf(title).includes(key), `${title} lists ${key}`)
+  }
 })
 
 const [pathA, pathB, pathC] = ['/s/akka/sdk/alpha', '/s/akka/sdk/beta', '/s/o/r/gamma']
@@ -3467,11 +3530,11 @@ function typePrFilter(app, text) {
   field.dispatch('input')
 }
 
-// Clicks the row of PR `number`, or outside every row when `number` is null.
-function clickPr(app, number) {
+// Clicks the row of PR `number` with `modifiers`, or outside every row when `number` is null.
+function clickPr(app, number, modifiers = {}) {
   const row = { dataset: { number: String(number) } }
   const target = { closest: (selector) => (selector === '.row.pr' && number !== null ? row : null) }
-  app.elements.get('pr-list').dispatch('click', { target })
+  app.elements.get('pr-list').dispatch('click', { target, ...modifiers })
 }
 
 const prTexts = ['#12 Fix login alice · +10 −3 CI passing · approved', '#7 Add <b>docs</b> bob · +5 −0 no CI · no reviews']
@@ -4042,6 +4105,50 @@ test('the row icons run the same actions', async () => {
   await finishCheckout(stubs, docs)
   assert.equal(app.context.location.hash, worktreeHashOf(docs.path))
   assert.equal(app.run('selectedPr'), 7)
+})
+
+test('Cmd+click on a checked-out PR opens its worktree page in a new app window', async () => {
+  const repos = plain(selectRepos)
+  repos.repos[0].worktrees.push(fixLogin)
+  const { app, posts } = await checkoutApp(repos)
+  const opened = appOpener(app)
+
+  clickPr(app, 12, { metaKey: true })
+  await settle()
+  assert.deepEqual(opened, [worktreeHashOf(fixLogin.path)])
+  assert.deepEqual(posts, [])
+  assert.equal(app.context.location.hash, prsHashOf(sdkMain))
+  assert.equal(app.run('selectedPr'), 12)
+})
+
+test('Cmd+click on a new PR checks it out, then opens its worktree page in a new app window', async () => {
+  const stubs = await checkoutApp()
+  const { app, posts } = stubs
+  const opened = appOpener(app)
+
+  clickPr(app, 12, { metaKey: true })
+  await settle()
+  assert.deepEqual(posts, [checkoutUrl(12)])
+  assert.deepEqual(prClasses(app), ['row pr selected busy', 'row pr'])
+  assert.deepEqual(opened, [])
+
+  clickPr(app, 12, { metaKey: true })
+  await settle()
+  assert.deepEqual(posts, [checkoutUrl(12)])
+
+  await finishCheckout(stubs)
+  assert.deepEqual(opened, [worktreeHashOf(fixLogin.path)])
+  assert.equal(app.context.location.hash, prsHashOf(sdkMain))
+})
+
+test('Cmd+click on a PR in a browser only selects it', async () => {
+  const { app, posts } = await checkoutApp()
+
+  clickPr(app, 12, { metaKey: true })
+  await settle()
+  assert.deepEqual(posts, [])
+  assert.equal(app.run('selectedPr'), 12)
+  assert.equal(app.context.location.hash, prsHashOf(sdkMain))
 })
 
 test('a failed checkout tells the error and clears the busy state', async () => {

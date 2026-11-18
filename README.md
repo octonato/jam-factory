@@ -135,6 +135,8 @@ just install
 
 `jam-factory-server` serves the dashboard at `http://127.0.0.1:8731/dashboard.html`. The port in that URL follows `port` in `~/.jam-factory/config.json`.
 
+Press `?` on any Jam Board page to list the keyboard shortcuts of every page. Press `?` or `Esc` to close the list.
+
 To stop the agent and remove it with `jam-factory-server`, run this in `app/`:
 
 ```sh
