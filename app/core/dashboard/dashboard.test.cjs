@@ -3529,6 +3529,71 @@ test('a PR row shows its chips, its CI and review states, and its reviewers on h
   assert.match(html, /<span class="ci pending">CI running<\/span>/)
 })
 
+// Returns the text of the worktree card.
+const worktreeCardText = (app) => textOf(app.elements.get('worktree-card').innerHTML)
+
+// The repos of `selectRepos` with worktrees on the branches of both PRs of `prList`.
+const prRepos = () => {
+  const repos = plain(selectRepos)
+  repos.repos[0].worktrees.push(fixLogin, { path: '/s/akka/sdk/docs', branch: 'docs', head: null })
+  return repos
+}
+
+test('the worktree card shows the open PR of its branch as the PRs page does', async () => {
+  const app = await prsApp(prRepos(), prsJson(prList), worktreeHashOf(fixLogin.path))
+  const card = app.elements.get('worktree-card').innerHTML
+
+  assert.equal(worktreeCardText(app), `akka/sdk akka/sdk/fix-login alice/fix-login ${prTexts[0]} reviewed`)
+  assert.match(card, /<div class="row pr">\s*<div class="body">/)
+  assert.match(card, /<span class="ci passing">CI passing<\/span> · <span class="review approved" title="Reviewed by carol \(approved\), dan \(commented\)">approved<\/span>/)
+  assert.doesNotMatch(card, /data-number=/)
+  assert.deepEqual(prsCalls(app), ['api/prs?path=%2Fs%2Fakka%2Fsdk%2Fmain'])
+  assert.deepEqual(cachedCalls(app), ['api/prs/cached?path=%2Fs%2Fakka%2Fsdk%2Fmain'])
+
+  await app.run('poll()')
+  await settle()
+  assert.equal(prsCalls(app).length, 1)
+
+  navigate(app, worktreeHashOf('/s/akka/sdk/docs'))
+  await settle()
+  assert.equal(worktreeCardText(app), `akka/sdk akka/sdk/docs docs ${prTexts[1]} to review draft`)
+  assert.doesNotMatch(app.elements.get('worktree-card').innerHTML, /<b>/)
+  assert.equal(prsCalls(app).length, 1)
+
+  navigate(app, '#/')
+  navigate(app, worktreeHashOf(fixLogin.path))
+  await settle()
+  assert.equal(prsCalls(app).length, 2)
+})
+
+test('the worktree card shows no PR without an open PR on its branch', async () => {
+  const app = await prsApp(prRepos(), prsJson(prList), worktreeHashOf(pathA))
+  assert.equal(worktreeCardText(app), 'akka/sdk akka/sdk/alpha alpha')
+  assert.doesNotMatch(app.elements.get('worktree-card').innerHTML, /row pr/)
+
+  const failed = await prsApp(prRepos(), prsJson([], 'not logged in'), worktreeHashOf(fixLogin.path))
+  assert.equal(worktreeCardText(failed), 'akka/sdk akka/sdk/fix-login alice/fix-login')
+
+  const main = await prsApp(prRepos(), prsJson(prList), worktreeHashOf(sdkMain))
+  assert.deepEqual(prsCalls(main), [])
+  assert.deepEqual(cachedCalls(main), [])
+})
+
+test('the worktree card shows the cached PR until the fresh list lands', async () => {
+  let release
+  const pending = new Promise((resolve) => { release = resolve })
+  const stale = [{ ...prList[0], ci: 'pending' }]
+  const app = await prsApp(prRepos(), () => pending, worktreeHashOf(fixLogin.path), prsJson(stale))
+
+  assert.match(worktreeCardText(app), /CI running · approved/)
+  release(response(JSON.stringify({ error: null, prs: prList })))
+  await settle()
+  assert.match(worktreeCardText(app), /CI passing · approved/)
+
+  const failed = await prsApp(prRepos(), prsJson([], 'offline'), worktreeHashOf(fixLogin.path), prsJson(stale))
+  assert.match(worktreeCardText(failed), /CI running · approved/)
+})
+
 test('the row icons show their keys', async () => {
   const repos = plain(selectRepos)
   repos.repos[0].worktrees.push(fixLogin)

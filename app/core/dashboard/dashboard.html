@@ -309,6 +309,13 @@
 
   #pr-card { margin-bottom: 16px; }
 
+  .session-bar .row.pr { margin-top: 8px; cursor: default; }
+
+  .session-bar .row.pr:hover {
+    border-color: var(--line);
+    border-left-color: var(--tone, var(--accent));
+  }
+
   .steps { display: flex; align-items: center; }
 
   .steps .line {
@@ -1169,6 +1176,9 @@ let reposState = null
 // The PRs of the shown PRs page: `{ path, prs, error, loading, refreshing }`, or null.
 // `loading` holds until the cached or the fresh list lands. `refreshing` holds until the fresh list lands.
 let prsState = null
+// The PRs of the main checkout of the shown worktree page: `{ path, prs, fresh }`, or null.
+// `prs` is null until the cached or the fresh list lands. `fresh` holds once the fresh list lands.
+let worktreePrs = null
 let tabsHtml = ''
 let listView = { html: '', el: null }
 let reposView = { el: null, list: '' }
@@ -1420,6 +1430,32 @@ async function loadCachedPrs(state) {
 
   state.prs = prs
   state.loading = false
+  render()
+}
+
+// Shows the cached PRs of the main checkout at `path` in `worktreePrs`, then the fresh list, unless the shown page changed meanwhile.
+// A failed fetch keeps the shown list.
+function loadWorktreePrs(path) {
+  const state = { path, prs: null, fresh: false }
+  worktreePrs = state
+
+  const query = encodeURIComponent(path)
+  showWorktreePrs(state, `api/prs/cached?path=${query}`, false)
+  showWorktreePrs(state, `api/prs?path=${query}`, true)
+}
+
+// Stores the PR list of `url` in `state` and renders, unless the fetch fails, the shown page changed or the fresh list landed first.
+async function showWorktreePrs(state, url, fresh) {
+  let reply
+  try {
+    reply = JSON.parse(await fetchText(url))
+  } catch {
+    return
+  }
+  if (worktreePrs !== state || state.fresh || stringOrNull(reply?.error) !== null ||!Array.isArray(reply?.prs)) return
+
+  state.prs = reply.prs
+  state.fresh = fresh
   render()
 }
 
@@ -2014,7 +2050,7 @@ function routePage(route) {
   return session === undefined ? null : sessionWorktree(session) ?? sessionHref(session)
 }
 
-// Returns the worktree card: the checkout's name, the worktree's short path and branch, and its actions.
+// Returns the worktree card: the checkout's name, the worktree's short path and branch, and its actions. The row of the open PR on its branch follows the card.
 function worktreeCardHtml(repo, worktree) {
   return `
     <div class="session-card">
@@ -2024,6 +2060,23 @@ function worktreeCardHtml(repo, worktree) {
       </div>
       <div class="facts"><span class="pill">${escape(worktree.branch ?? worktree.head ?? '')}</span></div>
       <div class="actions">${actionButtons(WORKTREE_ACTIONS)}</div>
+    </div>${worktreePrHtml(repo, worktree)}`
+}
+
+// Returns the open PR of `repo` on the branch of `worktree`, or undefined.
+function worktreePr(repo, worktree) {
+  if (worktreePrs?.path !== repo.path) return undefined
+  return worktreePrs.prs?.find((pr) => pr.branch === worktree.branch)
+}
+
+// Returns the row of the open PR on the branch of `worktree` as the PRs page shows it, without the marker and the icons, or nothing without an open PR.
+function worktreePrHtml(repo, worktree) {
+  const pr = worktreePr(repo, worktree)
+  if (pr === undefined) return ''
+
+  return `
+    <div class="row pr">${prBodyHtml(pr, '')}
+      <div class="foot"><div class="pr-chips">${prChips(pr)}</div></div>
     </div>`
 }
 
@@ -2125,6 +2178,8 @@ function renderWorktreePage(path, session, file) {
     $('page').innerHTML = `<div class="column"><p>${missingWorktreeHtml()}</p></div>`
     return
   }
+
+  if (found !== null && worktreePrs?.path !== found.repo.path) loadWorktreePrs(found.repo.path)
 
   const item = session?.dir ?? null
   if (worktreeView.el !== $('page').firstElementChild || worktreeView.path !== path || worktreeView.item !== item) {
@@ -2288,26 +2343,30 @@ function prMarker(repo, pr, worktree) {
   return ''
 }
 
-// Returns the row of `pr` in `repo`, outlined when `selected`: number, title, author and line counts; checkout or refresh state or worktree marker, CI and review states; chips and icons.
+// Returns the body of the row of `pr`: number, title, author and line counts; `marker`, CI and review states.
+function prBodyHtml(pr, marker) {
+  const lines = `<span class="added">+${escape(pr.additions)}</span> <span class="deleted">−${escape(pr.deletions)}</span>`
+  const ci = `<span class="ci ${escape(pr.ci)}">${escape(CI_LABELS[pr.ci] ?? pr.ci)}</span>`
+  const review = `<span class="review ${escape(pr.review)}" title="${escape(reviewersTitle(pr))}">${escape(REVIEW_LABELS[pr.review] ?? pr.review)}</span>`
+
+  return `
+      <div class="body">
+        <span class="name"><span class="id">#${escape(pr.number)}</span> ${escape(pr.title)}</span>
+        <span class="label">${escape(pr.author)} · ${lines}</span>
+        <span class="label">${marker}</span>
+        <span class="label">${ci} · ${review}</span>
+      </div>`
+}
+
+// Returns the row of `pr` in `repo`, outlined when `selected`: its body with the checkout or refresh state or worktree marker; chips and icons.
 function prRowHtml(repo, pr, selected) {
   const worktree = prWorktree(repo, pr)
   const key = prBusyKey(repo.path, pr)
   const busy = prBusy.has(key) || prRefreshing.has(key)
   const number = escape(pr.number)
 
-  const lines = `<span class="added">+${escape(pr.additions)}</span> <span class="deleted">−${escape(pr.deletions)}</span>`
-  const checkout = prMarker(repo, pr, worktree)
-  const ci = `<span class="ci ${escape(pr.ci)}">${escape(CI_LABELS[pr.ci] ?? pr.ci)}</span>`
-  const review = `<span class="review ${escape(pr.review)}" title="${escape(reviewersTitle(pr))}">${escape(REVIEW_LABELS[pr.review] ?? pr.review)}</span>`
-
   return `
-    <div class="row pr${selected ? ' selected' : ''}${busy ? ' busy' : ''}" data-number="${number}">
-      <div class="body">
-        <span class="name"><span class="id">#${number}</span> ${escape(pr.title)}</span>
-        <span class="label">${escape(pr.author)} · ${lines}</span>
-        <span class="label">${checkout}</span>
-        <span class="label">${ci} · ${review}</span>
-      </div>
+    <div class="row pr${selected ? ' selected' : ''}${busy ? ' busy' : ''}" data-number="${number}">${prBodyHtml(pr, prMarker(repo, pr, worktree))}
       <div class="foot">
         <div class="pr-chips">${prChips(pr)}</div>
         <div class="actions">${actionButtons(prActions(worktree !== undefined), ` data-number="${number}"`)}</div>
@@ -4145,12 +4204,14 @@ function renderTabs(kind) {
 // Shows the page of the route and syncs the window title. While the editor is open, shows only the edited file.
 // A route off the Terminal item parks the shown worktree terminal. A route off the Terminal item of the edited tab name drops the edit.
 // A route into a worktree page records its origin. A route off the PRs page drops its PRs, selection and filter.
+// A route off the worktree pages drops their PRs.
 function render() {
   const route = parseRoute(location.hash)
   if (editing !== null && !routeShows(route, editing)) return
   if (route.kind !== 'worktree') parkWorktreeTerminal()
   if (renaming !== null && (route.kind !== 'worktree' || route.path !== renaming.path)) renaming = null
   recordPageOrigin(route)
+  if (routePage(route) === null) worktreePrs = null
 
   if (route.kind !== 'prs') {
     prsState = null
