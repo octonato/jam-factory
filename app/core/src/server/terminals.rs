@@ -363,6 +363,22 @@ impl Terminals {
         true
     }
 
+    /// Kills the terminals that run in `dir`.
+    pub fn kill_in(&self, dir: &Path) {
+        let mut entries = lock(&self.entries);
+
+        let open = mem::take(&mut entries.open);
+        let (killed, kept): (BTreeMap<_, _>, _) =
+            open.into_iter().partition(|(_, entry)| entry.path == dir);
+
+        entries.open = kept;
+        drop(entries);
+
+        for entry in killed.values() {
+            entry.terminal.kill();
+        }
+    }
+
     /// Kills every terminal.
     pub fn kill_all(&self) {
         let open = mem::take(&mut lock(&self.entries).open);
@@ -646,6 +662,34 @@ mod tests {
         assert!(terminals.get(id).is_none());
         assert!(!terminals.kill(id));
         assert!(!terminals.rename(id, "gone"));
+    }
+
+    #[test]
+    fn kill_in_ends_only_the_terminals_of_the_folder() {
+        let gone = tempfile::tempdir().unwrap();
+        let kept = tempfile::tempdir().unwrap();
+        let terminals = Terminals::default();
+        let program = sh("echo $$; exec sleep 60");
+
+        let (first, terminal) = terminals
+            .open(gone.path(), "shell", &program, "shell 1", 80, 24)
+            .unwrap();
+        let pid: u32 = read_until(&terminal.view(), "\n").trim().parse().unwrap();
+        let (second, _) = terminals
+            .open(gone.path(), "shell", &program, "shell 2", 80, 24)
+            .unwrap();
+        let (other, _) = terminals
+            .open(kept.path(), "shell", &program, "shell 1", 80, 24)
+            .unwrap();
+
+        terminals.kill_in(gone.path());
+
+        assert_ends(pid);
+        assert!(terminals.get(first).is_none());
+        assert!(terminals.get(second).is_none());
+        assert!(terminals.get(other).is_some());
+
+        terminals.kill_all();
     }
 
     #[test]

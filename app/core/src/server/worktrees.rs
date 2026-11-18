@@ -12,36 +12,47 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Creates a worktree on a new branch next to a configured main checkout.
-//! Route: `POST /api/worktrees?path=<main checkout>&name=<name>`.
+//! Creates and removes the linked worktrees of the configured main checkouts.
+//! Routes: `POST /api/worktrees?path=<main checkout>&name=<name>` and `POST /api/worktrees/remove?path=<worktree>`.
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde_json::json;
 
 use super::api::{json_response, query_field, same_origin, segments};
 use super::http::{Request, Response};
 use super::prs::{Runner, SystemRunner, configured_main, worktree_folder};
-use super::repos::RepoList;
+use super::repos::{RepoList, list};
+use super::terminals::Terminals;
 
 const TEXT: &str = "text/plain; charset=utf-8";
 
-/// Answers `POST /api/worktrees` with `repos`.
-pub fn post(repos: &dyn RepoList, request: &Request) -> Response {
-    post_with(repos, request, &SystemRunner { bin: None })
+/// Answers `POST /api/worktrees` and `POST /api/worktrees/remove` with `repos` and `terminals`.
+pub fn post(repos: &dyn RepoList, terminals: &Terminals, request: &Request) -> Response {
+    post_with(repos, terminals, request, &SystemRunner { bin: None })
 }
 
-/// Answers `POST /api/worktrees` with `repos`, running `git` with `runner`.
-pub fn post_with(repos: &dyn RepoList, request: &Request, runner: &dyn Runner) -> Response {
+/// Answers `POST /api/worktrees` and `POST /api/worktrees/remove` with `repos` and `terminals`, running `git` with `runner`.
+pub fn post_with(
+    repos: &dyn RepoList,
+    terminals: &Terminals,
+    request: &Request,
+    runner: &dyn Runner,
+) -> Response {
     if !same_origin(request) {
         return Response::error(403);
     }
 
-    if segments(&request.target)[..] != ["", "api", "worktrees"] {
-        return Response::error(404);
+    match segments(&request.target)[..] {
+        ["", "api", "worktrees"] => add(repos, request, runner),
+        ["", "api", "worktrees", "remove"] => remove(repos, terminals, request, runner),
+        _ => Response::error(404),
     }
+}
 
+/// Creates the worktree named by the `name` query field of `request` for the main checkout of its `path` field.
+fn add(repos: &dyn RepoList, request: &Request, runner: &dyn Runner) -> Response {
     let Some(main) = configured_main(repos, &request.target) else {
         return Response::error(404);
     };
@@ -108,6 +119,50 @@ fn create(main: &Path, branch: &str, runner: &dyn Runner) -> Response {
     json_response(&json!({ "path": listed.to_string_lossy() }))
 }
 
+/// Removes the linked worktree named by the `path` query field of `request`, deletes its branch when merged, and kills its terminals.
+fn remove(
+    repos: &dyn RepoList,
+    terminals: &Terminals,
+    request: &Request,
+    runner: &dyn Runner,
+) -> Response {
+    let Some(path) = query_field(&request.target, "path") else {
+        return Response::error(404);
+    };
+
+    let Some((main, branch)) = linked_worktree(repos, Path::new(&path)) else {
+        return Response::error(404);
+    };
+
+    let remove = ["worktree", "remove", path.as_str()];
+
+    if let Err(error) = runner.run(&main, "git", &remove) {
+        return text_response(409, &error);
+    }
+
+    if let Some(branch) = branch {
+        let _ = runner.run(&main, "git", &["branch", "-d", &branch]);
+    }
+
+    terminals.kill_in(Path::new(&path));
+
+    Response::new(204, TEXT, Vec::new())
+}
+
+/// The main checkout of `repos` that lists the linked worktree at `path`, with the branch of that worktree.
+fn linked_worktree(repos: &dyn RepoList, path: &Path) -> Option<(PathBuf, Option<String>)> {
+    let paths = repos.paths().ok()?;
+
+    list(&paths).into_iter().find_map(|repo| {
+        let worktree = repo
+            .worktrees
+            .into_iter()
+            .find(|worktree| Path::new(&worktree.path) == path)?;
+
+        Some((PathBuf::from(repo.path), worktree.branch))
+    })
+}
+
 /// A plain-text reply with `status` and the body `text`.
 fn text_response(status: u16, text: &str) -> Response {
     Response::new(status, TEXT, text.as_bytes().to_vec())
@@ -122,6 +177,7 @@ mod tests {
     use serde_json::Value;
 
     use super::*;
+    use crate::server::pty::Program;
     use crate::server::repos::{find_main, is_worktree};
 
     /// The main checkouts `paths` with the GitHub user `user`.
@@ -236,7 +292,7 @@ mod tests {
         };
         let repos = repos(&main, Some("octonato"));
 
-        let response = post(&repos, &request(&main, " fix-it "));
+        let response = post(&repos, &Terminals::default(), &request(&main, " fix-it "));
 
         assert_eq!(response.status, 200, "{}", text(&response));
 
@@ -260,7 +316,7 @@ mod tests {
         };
         let repos = repos(&main, None);
 
-        let response = post(&repos, &request(&main, "fix-it"));
+        let response = post(&repos, &Terminals::default(), &request(&main, "fix-it"));
 
         assert_eq!(response.status, 200, "{}", text(&response));
 
@@ -289,7 +345,7 @@ mod tests {
             ("taken", 409),
             ("busy", 409),
         ] {
-            let response = post(&repos, &request(&main, name));
+            let response = post(&repos, &Terminals::default(), &request(&main, name));
 
             assert_eq!(response.status, status, "{name:?}: {}", text(&response));
         }
@@ -307,21 +363,199 @@ mod tests {
         foreign
             .headers
             .push(("Origin".to_string(), "http://evil".to_string()));
-        assert_eq!(post(&repos(&main, None), &foreign).status, 403);
+        assert_eq!(
+            post(&repos(&main, None), &Terminals::default(), &foreign).status,
+            403
+        );
 
         let mut other_route = request(&main, "x");
         other_route.target = other_route.target.replace("worktrees", "worktrees/x");
-        assert_eq!(post(&repos(&main, None), &other_route).status, 404);
+        assert_eq!(
+            post(&repos(&main, None), &Terminals::default(), &other_route).status,
+            404
+        );
 
         let unlisted = repos(&main.parent().unwrap().join("other"), None);
-        assert_eq!(post(&unlisted, &request(&main, "x")).status, 404);
+        assert_eq!(
+            post(&unlisted, &Terminals::default(), &request(&main, "x")).status,
+            404
+        );
 
         let broken = UserRepos {
             paths: vec![main.clone()],
             user: Err("bad config".to_string()),
         };
-        let response = post(&broken, &request(&main, "x"));
+        let response = post(&broken, &Terminals::default(), &request(&main, "x"));
         assert_eq!(response.status, 500);
         assert_eq!(text(&response), "bad config");
+    }
+
+    /// A `POST` on `/api/worktrees/remove` for the worktree at `path`, from the board's host.
+    fn remove_request(path: &Path) -> Request {
+        let path = utf8_percent_encode(&path.to_string_lossy(), NON_ALPHANUMERIC).to_string();
+
+        Request {
+            method: "POST".to_string(),
+            target: format!("/api/worktrees/remove?path={path}"),
+            headers: vec![("Host".to_string(), "127.0.0.1:1".to_string())],
+            body: Vec::new(),
+        }
+    }
+
+    /// Adds the linked worktree `name` on the new branch `name` next to `main`, and returns its folder.
+    fn add_worktree(main: &Path, name: &str) -> PathBuf {
+        let folder = main.parent().unwrap().join(name);
+
+        git(
+            main,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                name,
+                &folder.to_string_lossy(),
+            ],
+        );
+
+        folder
+    }
+
+    /// Whether the main checkout `main` holds the branch `branch`.
+    fn has_branch(main: &Path, branch: &str) -> bool {
+        Command::new("git")
+            .arg("-C")
+            .arg(main)
+            .args([
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                &format!("refs/heads/{branch}"),
+            ])
+            .stdout(Stdio::null())
+            .status()
+            .unwrap()
+            .success()
+    }
+
+    #[test]
+    fn removes_a_worktree_with_its_merged_branch_and_its_terminals() {
+        let dir = tempfile::tempdir().unwrap();
+        let Some(main) = main_checkout(dir.path()) else {
+            eprintln!("skipped: git is missing");
+            return;
+        };
+        let repos = repos(&main, None);
+        let folder = add_worktree(&main, "fix");
+        let other = add_worktree(&main, "other");
+
+        let terminals = Terminals::default();
+        let program = Program {
+            name: "sh".to_string(),
+            args: vec!["-c".to_string(), "exec sleep 60".to_string()],
+        };
+        let (gone, _) = terminals
+            .open(&folder, "shell", &program, "shell 1", 80, 24)
+            .unwrap();
+        let (kept, _) = terminals
+            .open(&other, "shell", &program, "shell 1", 80, 24)
+            .unwrap();
+
+        let response = post(&repos, &terminals, &remove_request(&folder));
+
+        assert_eq!(response.status, 204, "{}", text(&response));
+        assert!(!folder.exists());
+        assert!(!has_branch(&main, "fix"));
+        assert!(terminals.get(gone).is_none());
+        assert!(terminals.get(kept).is_some());
+
+        terminals.kill_all();
+    }
+
+    #[test]
+    fn keeps_an_unmerged_branch() {
+        let dir = tempfile::tempdir().unwrap();
+        let Some(main) = main_checkout(dir.path()) else {
+            eprintln!("skipped: git is missing");
+            return;
+        };
+        let folder = add_worktree(&main, "fix");
+
+        git(
+            &folder,
+            &[
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                "work",
+            ],
+        );
+
+        let response = post(
+            &repos(&main, None),
+            &Terminals::default(),
+            &remove_request(&folder),
+        );
+
+        assert_eq!(response.status, 204, "{}", text(&response));
+        assert!(!folder.exists());
+        assert!(has_branch(&main, "fix"));
+    }
+
+    #[test]
+    fn refuses_a_dirty_worktree() {
+        let dir = tempfile::tempdir().unwrap();
+        let Some(main) = main_checkout(dir.path()) else {
+            eprintln!("skipped: git is missing");
+            return;
+        };
+        let folder = add_worktree(&main, "fix");
+
+        fs::write(folder.join("draft.txt"), "draft").unwrap();
+
+        let response = post(
+            &repos(&main, None),
+            &Terminals::default(),
+            &remove_request(&folder),
+        );
+
+        assert_eq!(response.status, 409);
+        assert!(text(&response).contains("untracked"), "{}", text(&response));
+        assert!(folder.join("draft.txt").exists());
+        assert!(has_branch(&main, "fix"));
+    }
+
+    #[test]
+    fn refuses_the_main_checkout_and_unlisted_folders() {
+        let dir = tempfile::tempdir().unwrap();
+        let Some(main) = main_checkout(dir.path()) else {
+            eprintln!("skipped: git is missing");
+            return;
+        };
+        let repos = repos(&main, None);
+        let terminals = Terminals::default();
+
+        for path in [main.clone(), main.parent().unwrap().join("unknown")] {
+            let response = post(&repos, &terminals, &remove_request(&path));
+
+            assert_eq!(response.status, 404, "{}", path.display());
+        }
+
+        let mut no_path = remove_request(&main);
+        no_path.target = "/api/worktrees/remove".to_string();
+        assert_eq!(post(&repos, &terminals, &no_path).status, 404);
+
+        let mut foreign = remove_request(&main);
+        foreign
+            .headers
+            .push(("Origin".to_string(), "http://evil".to_string()));
+        assert_eq!(post(&repos, &terminals, &foreign).status, 403);
+
+        assert!(main.exists());
     }
 }

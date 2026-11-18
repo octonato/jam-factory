@@ -4761,3 +4761,177 @@ test('archiving a session from the Sessions tab stays there', async () => {
   await archive(app, worktreeSession)
   assert.equal(app.context.location.hash, '#/sessions')
 })
+
+// The `api/worktrees/remove` URL of `pathA`.
+const removeAlphaUrl = `api/worktrees/remove?path=${encodeURIComponent(pathA)}`
+
+// The confirm question for the removal of `pathA`.
+const removeAlphaQuestion = 'Remove the worktree akka/sdk/alpha? Its terminals close. Git deletes the branch alpha when it is merged.'
+
+// Returns a dashboard on `hash` after one poll of an api that lists `selectRepos` and `sessions`, with fake terminals, the POST URLs and the pending `api/worktrees/remove` replies.
+async function removeWorktreeApp(hash, sessions = [], search = '') {
+  const posts = []
+  const removals = []
+  const repos = plain(selectRepos)
+  const app = dashboard({
+    search,
+    hash,
+    fetcher: (url, options) => {
+      if (options?.method === 'POST') {
+        posts.push(url)
+        if (url.startsWith('api/worktrees/remove')) return new Promise((resolve) => removals.push(resolve))
+        return response('', true, { status: 204 })
+      }
+      if (url === 'api/repos') return response(JSON.stringify(repos))
+      if (url === 'api/sessions') return sessionsReply(sessions.map(sessionEntry))
+      return response('', false, { status: 404 })
+    },
+  })
+  const stubs = terminalStubs(app)
+  app.context.location.hash = hash
+  await app.run('poll()')
+  await settle()
+  return { app, posts, removals, repos, ...stubs }
+}
+
+// Confirms the open removal question and waits for the POST.
+async function confirmRemoval(app) {
+  assert.equal(app.elements.get('modal').open, true)
+  assert.equal(app.elements.get('modal-text').textContent, removeAlphaQuestion)
+  assert.equal(app.elements.get('modal-input').hidden, true)
+
+  closeModal(app, 'ok')
+  await settle()
+}
+
+// Answers the first pending removal with success, after which `api/repos` no longer lists `pathA`, and waits for the board.
+async function finishRemoval({ removals, repos }) {
+  repos.repos[0].worktrees = repos.repos[0].worktrees.filter((worktree) => worktree.path !== pathA)
+  removals.shift()(response('', true, { status: 204 }))
+  await settle()
+}
+
+test('d on a worktree row asks, removes the worktree and selects its main row', async () => {
+  const stubs = await removeWorktreeApp('#/')
+  const { app, posts } = stubs
+  press(app, 'ArrowDown')
+  press(app, 'ArrowDown')
+  assert.equal(app.run('selectedWorktree'), pathA)
+
+  assert.ok(press(app, 'd'))
+  await confirmRemoval(app)
+  assert.deepEqual(posts, [removeAlphaUrl])
+  assert.equal(app.run('removingWorktree'), true)
+
+  await finishRemoval(stubs)
+  assert.equal(app.context.location.hash, '#/')
+  assert.equal(app.run('selectedWorktree'), sdkMain)
+  assert.equal(app.run('removingWorktree'), false)
+  assert.doesNotMatch(app.elements.get('repo-list').innerHTML, /alpha/)
+})
+
+test('d on a worktree page removes the worktree, drops its tabs and returns to the repos page', async () => {
+  const stubs = await removeWorktreeApp(worktreeHashOf(pathA))
+  const { app, posts, sockets } = stubs
+  clickTab(app, 'add')
+  assert.equal(tabsOf(app, pathA).length, 1)
+
+  assert.ok(press(app, 'd'))
+  await confirmRemoval(app)
+  await finishRemoval(stubs)
+
+  assert.deepEqual(posts, [removeAlphaUrl])
+  assert.equal(app.context.location.hash, '#/')
+  assert.equal(app.run('selectedWorktree'), sdkMain)
+  assert.equal(app.run(`worktreeTerms.has(${JSON.stringify(pathA)})`), false)
+  assert.equal(sockets[0].closed, true)
+})
+
+test('d on a session item removes its worktree and returns to the repos page', async () => {
+  const stubs = await removeWorktreeApp('#/o/r/main/s1', [sessionAt('s1', pathA)])
+  const { app, posts } = stubs
+
+  assert.ok(press(app, 'd'))
+  await confirmRemoval(app)
+  await finishRemoval(stubs)
+
+  assert.deepEqual(posts, [removeAlphaUrl])
+  assert.equal(app.context.location.hash, '#/')
+})
+
+test('d does nothing on a main row or a session without a listed worktree', async () => {
+  const main = await removeWorktreeApp('#/')
+  press(main.app, 'ArrowDown')
+  assert.equal(main.app.run('selectedWorktree'), sdkMain)
+  assert.equal(press(main.app, 'd'), false)
+  assert.notEqual(main.app.elements.get('modal').open, true)
+
+  const unlisted = await removeWorktreeApp('#/o/r/main/s1', [sessionAt('s1', '/s/elsewhere')])
+  assert.equal(press(unlisted.app, 'd'), false)
+  assert.notEqual(unlisted.app.elements.get('modal').open, true)
+  assert.deepEqual([...main.posts, ...unlisted.posts], [])
+})
+
+test('a cancelled removal posts nothing', async () => {
+  const { app, posts } = await removeWorktreeApp(worktreeHashOf(pathA))
+
+  press(app, 'd')
+  closeModal(app, 'cancel')
+  await settle()
+
+  assert.deepEqual(posts, [])
+  assert.equal(app.run('removingWorktree'), false)
+  assert.equal(app.context.location.hash, worktreeHashOf(pathA))
+})
+
+test('a second d during a removal asks nothing', async () => {
+  const stubs = await removeWorktreeApp(worktreeHashOf(pathA))
+  const { app, posts } = stubs
+
+  press(app, 'd')
+  await confirmRemoval(app)
+  press(app, 'd')
+  assert.notEqual(app.elements.get('modal').open, true)
+
+  await finishRemoval(stubs)
+  assert.deepEqual(posts, [removeAlphaUrl])
+})
+
+test('a failed removal tells the error and stays on the page', async () => {
+  const { app, removals } = await removeWorktreeApp(worktreeHashOf(pathA))
+
+  press(app, 'd')
+  await confirmRemoval(app)
+  removals.shift()(response('fatal: contains modified or untracked files', false, { status: 409 }))
+  await settle()
+
+  assert.equal(app.elements.get('modal').open, true)
+  assert.equal(app.elements.get('modal-text').textContent, 'Could not remove the worktree akka/sdk/alpha: fatal: contains modified or untracked files')
+  assert.equal(app.context.location.hash, worktreeHashOf(pathA))
+  assert.equal(app.run('removingWorktree'), false)
+})
+
+test('leaving the page during a removal stays where the user went', async () => {
+  const stubs = await removeWorktreeApp(worktreeHashOf(pathA))
+  const { app } = stubs
+
+  press(app, 'd')
+  await confirmRemoval(app)
+  navigate(app, '#/sessions')
+  await finishRemoval(stubs)
+
+  assert.equal(app.context.location.hash, '#/sessions')
+})
+
+test('removing the worktree of a standalone window closes it', async () => {
+  const stubs = await removeWorktreeApp(worktreeHashOf(pathA), [], '?standalone')
+  const { app } = stubs
+  const closes = appWindow(app)
+
+  press(app, 'd')
+  await confirmRemoval(app)
+  await finishRemoval(stubs)
+
+  assert.equal(closes.count, 1)
+  assert.equal(app.context.location.hash, worktreeHashOf(pathA))
+})

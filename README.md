@@ -166,6 +166,8 @@ To create a worktree, select a main row on the Repos tab and press `b`, or press
 { "githubUser": "octonato" }
 ```
 
+To remove a worktree, select its row on the Repos tab and press `d`, or press `d` on its worktree page. Confirm in the dialog. Jam Board runs `git worktree remove`, which refuses a worktree with modified or untracked files. It then deletes the branch when it is merged, and closes the worktree's terminals. From the worktree page, Jam Board then returns to the Repos tab. A standalone window closes.
+
 Restart `jam-factory-server` after you change `root` or `port`:
 
 ```sh

@@ -1128,6 +1128,8 @@ const PRS_CARD_ACTIONS = [
 ]
 // The key that creates a worktree of a main checkout.
 const NEW_WORKTREE_KEY = 'b'
+// The key that removes a linked worktree.
+const REMOVE_WORKTREE_KEY = 'd'
 // The title of the worktree icon of a PR that no worktree holds.
 const PR_CHECKOUT_TITLE = 'Check out and open worktree page (c)'
 const CI_LABELS = { none: 'no CI', pending: 'CI running', passing: 'CI passing', failing: 'CI failing' }
@@ -1207,6 +1209,8 @@ let prFilter = ''
 const prBusy = new Set()
 // True while the board asks for a worktree name or creates the worktree.
 let creatingWorktree = false
+// True while the board asks to confirm a worktree removal or removes the worktree.
+let removingWorktree = false
 // The `${path}#${number}` keys of the PRs whose refresh runs.
 const prRefreshing = new Set()
 let pendingDiffs = []
@@ -3865,6 +3869,58 @@ async function createWorktree(path) {
   if (location.hash === hash) location.hash = worktreeHash(folder)
 }
 
+// Posts the removal of the linked worktree at `path`.
+async function postRemoveWorktree(path) {
+  const res = await fetch(`api/worktrees/remove?path=${encodeURIComponent(path)}`, { method: 'POST' })
+  if (!res.ok) throw new Error((await res.text()).trim() || `${res.status} ${res.statusText}`)
+}
+
+// Closes the terminal tabs of the worktree at `path` and forgets the worktree's tab state.
+function dropWorktreeTerminals(path) {
+  for (const tab of [...(worktreeTerms.get(path)?.tabs ?? [])]) closeWorktreeTerminal(path, tab.id, false)
+  worktreeTerms.delete(path)
+}
+
+// Returns the confirm question for the removal of the linked worktree `worktree`.
+function removeWorktreeQuestion(worktree) {
+  const question = `Remove the worktree ${shortPath(worktree.path)}? Its terminals close.`
+  if (!worktree.branch) return question
+  return `${question} Git deletes the branch ${worktree.branch} when it is merged.`
+}
+
+// Removes the linked worktree at `path` once the user confirms, reloads the repos and selects the worktree's main row.
+// With `leave`, then goes to the repos page, or closes a standalone window, unless the page changed meanwhile.
+// Does nothing while a removal runs. Tells the user the error.
+async function removeWorktree(path, leave) {
+  const found = findWorktree(path)
+  if (found === null || removingWorktree) return
+
+  removingWorktree = true
+  if (!(await ask(removeWorktreeQuestion(found.worktree)))) {
+    removingWorktree = false
+    return
+  }
+
+  const hash = location.hash
+  let problem = null
+  try {
+    await postRemoveWorktree(path)
+  } catch (err) {
+    problem = err.message
+  }
+
+  removingWorktree = false
+  if (problem !== null) return tell(`Could not remove the worktree ${shortPath(path)}: ${problem}`)
+
+  await loadRepos()
+  dropWorktreeTerminals(path)
+  selectedWorktree = found.repo.path
+
+  if (!leave || location.hash !== hash) return render()
+  if (standaloneRoot !== null) return closeWindow()
+  confirmDiscard(() => { location.hash = '#/' })
+}
+
 // Resolves to the path of the worktree that holds `pr` of the main checkout at `path`, after a checkout and a repos reload when none holds it. Resolves to null after it tells the user the error.
 async function prCheckout(path, pr) {
   const repo = findRepo(path)
@@ -4297,6 +4353,11 @@ function reposKey(key) {
   }
 
   if (row.worktree === null) return false
+
+  if (key === REMOVE_WORKTREE_KEY) {
+    removeWorktree(row.path, false)
+    return true
+  }
   return worktreeAction(row.path, key)
 }
 
@@ -4355,6 +4416,14 @@ function sessionKey(key, session) {
     return true
   }
 
+  if (key === REMOVE_WORKTREE_KEY) {
+    const path = sessionWorktree(session)
+    if (findWorktree(path) === null) return false
+
+    removeWorktree(path, true)
+    return true
+  }
+
   if (!Object.hasOwn(WORKTREE_KEYS, key)) return false
 
   const action = WORKTREE_KEYS[key]
@@ -4381,6 +4450,11 @@ function worktreeKey(key, path) {
   }
 
   if (findWorktree(path) === null) return false
+
+  if (key === REMOVE_WORKTREE_KEY) {
+    removeWorktree(path, true)
+    return true
+  }
   return worktreeAction(path, key)
 }
 

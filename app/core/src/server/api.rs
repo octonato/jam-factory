@@ -72,7 +72,7 @@ pub fn post(
         ["", "api", "open", ..] => open::post(store, repos, request),
         ["", "api", "prs", ..] => prs::post(repos, request),
         ["", "api", "terminals", ..] => terminals::post(terminals, request),
-        ["", "api", "worktrees", ..] => worktrees::post(repos, request),
+        ["", "api", "worktrees", ..] => worktrees::post(repos, terminals, request),
         _ => Response::error(404),
     }
 }
