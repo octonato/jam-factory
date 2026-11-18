@@ -86,7 +86,7 @@ pub fn branch_name(user: Option<&str>, name: &str) -> String {
     }
 }
 
-/// Creates the branch `branch` at the HEAD of the main checkout `main`, in a new sibling worktree.
+/// Updates the main checkout `main`, then creates the branch `branch` at its HEAD, in a new sibling worktree.
 fn create(main: &Path, branch: &str, runner: &dyn Runner) -> Response {
     let check = ["check-ref-format", "--branch", branch];
 
@@ -107,6 +107,13 @@ fn create(main: &Path, branch: &str, runner: &dyn Runner) -> Response {
         return text_response(409, &format!("{} already exists", folder.display()));
     }
 
+    if let Err(error) = refresh(main, runner) {
+        return text_response(
+            409,
+            &format!("Could not update {}: {error}", main.display()),
+        );
+    }
+
     let folder_arg = folder.to_string_lossy();
     let add = ["worktree", "add", "-b", branch, &folder_arg, "HEAD"];
 
@@ -117,6 +124,22 @@ fn create(main: &Path, branch: &str, runner: &dyn Runner) -> Response {
     let listed = fs::canonicalize(&folder).unwrap_or_else(|_| folder.clone());
 
     json_response(&json!({ "path": listed.to_string_lossy() }))
+}
+
+/// Fast-forwards the checked-out branch of the main checkout `main` to its upstream, when it has one.
+fn refresh(main: &Path, runner: &dyn Runner) -> Result<(), String> {
+    let upstream = [
+        "rev-parse",
+        "--abbrev-ref",
+        "--symbolic-full-name",
+        "@{upstream}",
+    ];
+
+    if runner.run(main, "git", &upstream).is_err() {
+        return Ok(());
+    }
+
+    runner.run(main, "git", &["pull", "--ff-only"]).map(|_| ())
 }
 
 /// Removes the linked worktree named by the `path` query field of `request`, deletes its branch when merged, and kills its terminals.
@@ -323,6 +346,119 @@ mod tests {
         let folder = main.parent().unwrap().join("fix-it");
 
         assert_eq!(branch_of(&repos, &main, &folder).as_deref(), Some("fix-it"));
+    }
+
+    /// Commits an empty commit with the message `message` in `dir`.
+    fn commit(dir: &Path, message: &str) {
+        git(
+            dir,
+            &[
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                message,
+            ],
+        );
+    }
+
+    /// The full sha of `revision` in `dir`.
+    fn sha(dir: &Path, revision: &str) -> String {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(["rev-parse", revision])
+            .output()
+            .unwrap();
+
+        String::from_utf8(output.stdout).unwrap().trim().to_string()
+    }
+
+    /// Makes `main` track the bare remote `remote.git` next to it, and returns a clone that pushes to that remote.
+    fn track_remote(main: &Path) -> PathBuf {
+        let dir = main.parent().unwrap().parent().unwrap();
+        let remote = dir.join("remote.git");
+        let pusher = dir.join("pusher");
+
+        git(
+            dir,
+            &[
+                "clone",
+                "-q",
+                "--bare",
+                &main.to_string_lossy(),
+                "remote.git",
+            ],
+        );
+        git(
+            main,
+            &["remote", "add", "origin", &remote.to_string_lossy()],
+        );
+        git(main, &["fetch", "-q", "origin"]);
+        git(main, &["branch", "-q", "-u", "origin/main"]);
+        git(dir, &["clone", "-q", &remote.to_string_lossy(), "pusher"]);
+
+        pusher
+    }
+
+    #[test]
+    fn starts_the_worktree_at_the_remote_head() {
+        let dir = tempfile::tempdir().unwrap();
+        let Some(main) = main_checkout(dir.path()) else {
+            eprintln!("skipped: git is missing");
+            return;
+        };
+        let pusher = track_remote(&main);
+
+        commit(&pusher, "remote work");
+        git(&pusher, &["push", "-q", "origin", "main"]);
+
+        let response = post(
+            &repos(&main, None),
+            &Terminals::default(),
+            &request(&main, "fix"),
+        );
+
+        assert_eq!(response.status, 200, "{}", text(&response));
+
+        let folder = main.parent().unwrap().join("fix");
+        let remote_head = sha(&pusher, "HEAD");
+
+        assert_eq!(sha(&main, "HEAD"), remote_head);
+        assert_eq!(sha(&folder, "HEAD"), remote_head);
+    }
+
+    #[test]
+    fn refuses_when_main_cannot_fast_forward() {
+        let dir = tempfile::tempdir().unwrap();
+        let Some(main) = main_checkout(dir.path()) else {
+            eprintln!("skipped: git is missing");
+            return;
+        };
+        let pusher = track_remote(&main);
+
+        commit(&pusher, "remote work");
+        git(&pusher, &["push", "-q", "origin", "main"]);
+        commit(&main, "local work");
+
+        let response = post(
+            &repos(&main, None),
+            &Terminals::default(),
+            &request(&main, "fix"),
+        );
+
+        assert_eq!(response.status, 409, "{}", text(&response));
+        assert!(
+            text(&response).starts_with("Could not update"),
+            "{}",
+            text(&response)
+        );
+        assert!(!main.parent().unwrap().join("fix").exists());
+        assert!(!has_branch(&main, "fix"));
     }
 
     #[test]
