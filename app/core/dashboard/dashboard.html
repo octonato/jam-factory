@@ -208,7 +208,8 @@
   .row.card.selected,
   .row.main.selected,
   .row.worktree.selected,
-  .row.pr.selected {
+  .row.pr.selected,
+  .row.jump.selected {
     outline: 2px solid var(--ink-2);
     outline-offset: 3px;
   }
@@ -225,7 +226,8 @@
 
   .row.main .body,
   .row.worktree .body,
-  .row.pr .body {
+  .row.pr .body,
+  .row.jump .body {
     grid-template-columns: minmax(0, 1fr) auto;
   }
 
@@ -473,6 +475,43 @@
     border: 1px solid var(--line);
     border-radius: 4px;
   }
+
+  #jump {
+    width: min(640px, calc(100vw - 32px));
+    margin-top: 15vh;
+    padding: 16px 20px;
+    color: var(--ink);
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+  }
+
+  #jump::backdrop { background: rgb(0 0 0 / 40%); }
+
+  #jump-input {
+    display: block;
+    width: 100%;
+    margin-bottom: 12px;
+    padding: 6px 10px;
+    color: var(--ink);
+    font: inherit;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+  }
+
+  #jump-input:focus { border-color: var(--accent); outline: none; }
+
+  #jump-list {
+    display: grid;
+    gap: 8px;
+    max-height: 60vh;
+    margin: 0 -5px;
+    padding: 5px;
+    overflow-y: auto;
+  }
+
+  #jump-list .empty { margin: 0; }
 
   #view {
     flex: 1;
@@ -1033,6 +1072,10 @@
   <h2 id="shortcuts-title">Keyboard shortcuts</h2>
   <div id="shortcuts-list"></div>
 </dialog>
+<dialog id="jump" aria-label="Jump to">
+  <input id="jump-input" autocomplete="off" spellcheck="false">
+  <div id="jump-list"></div>
+</dialog>
 
 <script src="marked.min.js"></script>
 <script src="purify.min.js"></script>
@@ -1198,6 +1241,8 @@ const ACTION_KEYS = { c: 'worktree', a: 'archive', t: 'iterm', e: 'zed', i: 'int
 const WORKTREE_KEYS = { o: 'github', i: 'intellij', e: 'zed', g: 'lazygit', t: 'shell' }
 const PR_KEYS = { c: 'worktree', Enter: 'worktree', r: 'claude', e: 'zed', i: 'intellij', o: 'github', u: 'refresh' }
 const BACK_KEYS = ['l', 'Escape', 'Meta+[']
+// The pop-up kind each Cmd key opens.
+const JUMP_KEYS = { k: 'worktrees', b: 'checkouts' }
 // The sections of the shortcuts dialog, each with its rows of keys and what they do.
 const SHORTCUTS = [
   {
@@ -1205,6 +1250,17 @@ const SHORTCUTS = [
     rows: [
       { keys: ['?'], text: 'Show or hide the shortcuts' },
       { keys: ['⌘ click'], text: 'Open a row or bar item in a new window' },
+      { keys: ['⌘K'], text: 'Jump to a worktree' },
+      { keys: ['⌘B'], text: 'Jump to the PRs of a main checkout' },
+    ],
+  },
+  {
+    title: 'Pop-up',
+    rows: [
+      { keys: ['↑', '↓'], text: 'Move the selection' },
+      { keys: ['Enter'], text: 'Open the selected row' },
+      { keys: ['⌘Enter'], text: 'Open the selected row in its own window' },
+      { keys: ['Esc'], text: 'Close the pop-up' },
     ],
   },
   {
@@ -1371,6 +1427,8 @@ let orgFilter = null
 let repoFilter = ''
 let selectedPr = null
 let prFilter = ''
+// The open pop-up: `{ kind, filter, selected }`, where `selected` is the path of the selected row or null. Null while no pop-up is open.
+let jump = null
 // The `${path}#${number}` keys of the PRs whose checkout runs.
 const prBusy = new Set()
 // True while the board asks for a worktree name or creates the worktree.
@@ -3524,6 +3582,94 @@ function onModalInputKey(event) {
   $('modal').close('ok')
 }
 
+// Returns the rows of the `kind` pop-up in config order as `{ path, title, detail, hash }`: the linked worktrees for `worktrees`, the main checkouts for `checkouts`. A checkout with an error has no rows.
+function jumpRows(kind) {
+  const repos = (reposState?.repos ?? []).filter((repo) => repo.error === null)
+
+  if (kind === 'checkouts') {
+    return repos.map((repo) => ({
+      path: repo.path,
+      title: `${repo.org}/${repo.repo}`,
+      detail: shortPath(repo.path),
+      hash: prsHash(repo.path),
+    }))
+  }
+
+  return repos.flatMap((repo) => repo.worktrees.map((worktree) => ({
+    path: worktree.path,
+    title: worktree.branch ?? worktree.head ?? '',
+    detail: shortPath(worktree.path),
+    hash: worktreeHash(worktree.path),
+  })))
+}
+
+// Returns the rows of the open pop-up that hold every word of its filter.
+function shownJumpRows() {
+  const words = filterWords(jump.filter)
+  return jumpRows(jump.kind).filter((row) => holdsWords(`${row.title} ${row.detail} ${row.path}`, words))
+}
+
+// Returns the pop-up row of `row`, outlined when `selected`: its title and its detail.
+function jumpRowHtml(row, selected) {
+  return `
+    <div class="row jump${selected ? ' selected' : ''}">
+      <div class="body">
+        <span class="name"><span class="id">${escape(row.title)}</span> <span class="path">${escape(row.detail)}</span></span>
+      </div>
+    </div>`
+}
+
+// Opens the `kind` pop-up with an empty filter and its first row selected.
+function openJump(kind) {
+  jump = { kind, filter: '', selected: null }
+  $('jump-input').value = ''
+
+  $('jump').showModal()
+  $('jump-input').focus()
+  renderJump()
+}
+
+function closeJump() {
+  jump = null
+  $('jump').close()
+}
+
+// Draws the shown rows of the open pop-up, or `No match.`. Selects the first row when the selected row is no longer shown.
+function renderJump() {
+  const rows = shownJumpRows()
+  if (!rows.some((row) => row.path === jump.selected)) jump.selected = rows[0]?.path ?? null
+
+  $('jump-list').innerHTML = rows.length > 0
+    ? rows.map((row) => jumpRowHtml(row, row.path === jump.selected)).join('')
+    : '<p class="empty">No match.</p>'
+  $('jump-list').querySelector('.row.selected')?.scrollIntoView({ block: 'nearest' })
+}
+
+// Moves the pop-up selection by `step` rows and stops at the first and last rows.
+function moveJumpSelection(step) {
+  const paths = shownJumpRows().map((row) => row.path)
+  if (paths.length === 0) return
+
+  const current = paths.indexOf(jump.selected)
+  jump.selected = paths[Math.min(paths.length - 1, Math.max(0, current + step))]
+  renderJump()
+}
+
+// Closes the pop-up and opens the page of `row` in its own app window for `newWindow` or a standalone window, else in this window.
+function openJumpRow(row, newWindow) {
+  closeJump()
+
+  if (window.__TAURI__ !== undefined && (newWindow || standaloneRoot !== null)) return openWindow(row.hash)
+  location.hash = row.hash
+}
+
+// Shows the pop-up rows that match the typed filter and selects the first one.
+function onJumpInput(event) {
+  jump.filter = event.currentTarget.value
+  jump.selected = shownJumpRows()[0]?.path ?? null
+  renderJump()
+}
+
 // Returns an editor over `text` in `container`.
 function createEditor(container, text) {
   const textarea = document.createElement('textarea')
@@ -4394,8 +4540,10 @@ function renderTabs(kind) {
 // Shows the page of the route and syncs the window title. While the editor is open, shows only the edited file.
 // A route off the Terminal item parks the shown worktree terminal. A route off the Terminal item of the edited tab name drops the edit.
 // A route into a worktree page records its origin. A route off the PRs page drops its PRs, selection and filter.
-// A route off the worktree pages drops their PRs.
+// A route off the worktree pages drops their PRs. Redraws the open pop-up.
 function render() {
+  if (jump !== null) renderJump()
+
   const route = parseRoute(location.hash)
   if (editing !== null && !routeShows(route, editing)) return
   if (route.kind !== 'worktree') parkWorktreeTerminal()
@@ -4817,8 +4965,55 @@ function barKey(event) {
   return null
 }
 
-// Dispatches a shortcut key to the shown page.
+// Returns the pop-up kind of `event`: `worktrees` for Cmd+K, `checkouts` for Cmd+B, and null for any other key.
+function jumpShortcut(event) {
+  if (!event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return null
+
+  const key = event.key.toLowerCase()
+  return Object.hasOwn(JUMP_KEYS, key) ? JUMP_KEYS[key] : null
+}
+
+// Handles `event` in the open pop-up and returns true when it acted.
+function jumpKey(event) {
+  const kind = jumpShortcut(event)
+  if (kind !== null) {
+    if (kind === jump.kind) closeJump()
+    return true
+  }
+
+  if (event.key === 'Escape') {
+    closeJump()
+    return true
+  }
+
+  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    moveJumpSelection(event.key === 'ArrowDown' ? 1 : -1)
+    return true
+  }
+
+  if (event.key !== 'Enter') return false
+
+  const row = shownJumpRows().find((shown) => shown.path === jump.selected)
+  if (row === undefined) return false
+
+  openJumpRow(row, event.metaKey)
+  return true
+}
+
+// Dispatches a shortcut key to the open pop-up, or else to the shown page. Leaves every key to the modal above the pop-up.
 function onKey(event) {
+  if (jump !== null) {
+    if (!$('modal').open && jumpKey(event)) event.preventDefault()
+    return
+  }
+
+  const jumpKind = jumpShortcut(event)
+  if (jumpKind !== null && !$('modal').open && !$('shortcuts').open) {
+    event.preventDefault()
+    openJump(jumpKind)
+    return
+  }
+
   if (editorKey(event)) return
 
   if ($('shortcuts').open) {
@@ -4978,6 +5173,8 @@ orgFilter = readOrgFilter()
 if (standaloneRoot !== null) $('board-header').hidden = true
 
 $('modal-input').addEventListener('keydown', onModalInputKey)
+$('jump-input').addEventListener('input', onJumpInput)
+$('jump').addEventListener('close', () => { jump = null })
 
 window.addEventListener('hashchange', onHashChange)
 window.addEventListener('beforeunload', onBeforeUnload)

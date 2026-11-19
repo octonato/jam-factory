@@ -149,8 +149,8 @@ function dashboard({ script = source, pageWidth = 1200, pageLeft = 0, splitterWi
     return el
   }
 
-  for (const id of ['board-header', 'tabs', 'page', 'term-store', 'status', 'problems', 'font-down', 'font-up', 'font-value', 'modal', 'modal-text', 'modal-input', 'modal-cancel', 'shortcuts', 'shortcuts-list']) element(id)
-  for (const dialog of [elements.get('modal'), elements.get('shortcuts')]) {
+  for (const id of ['board-header', 'tabs', 'page', 'term-store', 'status', 'problems', 'font-down', 'font-up', 'font-value', 'modal', 'modal-text', 'modal-input', 'modal-cancel', 'shortcuts', 'shortcuts-list', 'jump', 'jump-input', 'jump-list']) element(id)
+  for (const dialog of [elements.get('modal'), elements.get('shortcuts'), elements.get('jump')]) {
     dialog.showModal = () => { dialog.open = true }
     dialog.close = (value = '') => {
       dialog.returnValue = value
@@ -5108,4 +5108,366 @@ test('removing the worktree of a standalone window closes it', async () => {
 
   assert.equal(closes.count, 1)
   assert.equal(app.context.location.hash, worktreeHashOf(pathA))
+})
+
+const jumpDialog = (app) => app.elements.get('jump')
+const jumpText = (app) => textOf(app.elements.get('jump-list').innerHTML)
+
+// Returns the text of each outlined row of the pop-up.
+const selectedJumpText = (app) => [...app.elements.get('jump-list').innerHTML.matchAll(/<div class="row jump selected">([\s\S]*?)<\/div>\s*<\/div>/g)]
+  .map((match) => textOf(match[1]))
+
+// Returns the paths of the rows the pop-up shows.
+const jumpPaths = (app) => plain(app.run('shownJumpRows().map((row) => row.path)'))
+
+// Types `text` into the field of the pop-up.
+function typeJump(app, text) {
+  const field = app.elements.get('jump-input')
+  field.value = text
+  field.dispatch('input')
+}
+
+// The repos of `selectRepos` and a checkout with an error.
+const jumpRepos = {
+  error: null,
+  repos: [
+    ...selectRepos.repos,
+    { org: 'x', repo: 'broken', path: '/s/x/broken', branch: null, error: 'not a git checkout', worktrees: [{ path: '/s/x/wt', branch: 'wt', head: null }] },
+  ],
+}
+
+test('Cmd+K lists the linked worktrees and Cmd+B the main checkouts', async () => {
+  const worktrees = await reposApp(jumpRepos)
+
+  assert.ok(press(worktrees, 'k', cmd))
+  assert.equal(jumpDialog(worktrees).open, true)
+  assert.equal(worktrees.elements.get('jump-input').focused, true)
+  assert.equal(jumpText(worktrees), 'alpha akka/sdk/alpha beta akka/sdk/beta gamma o/r/gamma')
+  assert.deepEqual(plain(worktrees.run('jumpRows("worktrees")')), [
+    { path: pathA, title: 'alpha', detail: 'akka/sdk/alpha', hash: worktreeHashOf(pathA) },
+    { path: pathB, title: 'beta', detail: 'akka/sdk/beta', hash: worktreeHashOf(pathB) },
+    { path: pathC, title: 'gamma', detail: 'o/r/gamma', hash: worktreeHashOf(pathC) },
+  ])
+
+  const checkouts = await reposApp(jumpRepos)
+
+  assert.ok(press(checkouts, 'b', cmd))
+  assert.equal(jumpDialog(checkouts).open, true)
+  assert.equal(jumpText(checkouts), 'akka/sdk akka/sdk/main o/r o/r/main')
+  assert.deepEqual(plain(checkouts.run('jumpRows("checkouts")')), [
+    { path: sdkMain, title: 'akka/sdk', detail: 'akka/sdk/main', hash: prsHashOf(sdkMain) },
+    { path: orMain, title: 'o/r', detail: 'o/r/main', hash: prsHashOf(orMain) },
+  ])
+})
+
+test('Cmd+K with Shift, Ctrl or Alt opens no pop-up', async () => {
+  const app = await reposApp(selectRepos)
+
+  for (const modifiers of [{ shiftKey: true }, { ctrlKey: true }, { altKey: true }]) {
+    press(app, 'k', { ...cmd, ...modifiers })
+    assert.equal(app.run('jump'), null)
+  }
+  assert.notEqual(jumpDialog(app).open, true)
+})
+
+test('typing in the pop-up filters its rows and selects the first one', async () => {
+  const app = await reposApp(selectRepos)
+  press(app, 'k', cmd)
+  press(app, 'ArrowDown')
+  press(app, 'ArrowDown')
+  assert.equal(app.run('jump.selected'), pathC)
+
+  typeJump(app, 'AKKA')
+  assert.deepEqual(jumpPaths(app), [pathA, pathB])
+  assert.equal(app.run('jump.selected'), pathA)
+  assert.equal(jumpText(app), 'alpha akka/sdk/alpha beta akka/sdk/beta')
+
+  typeJump(app, 'sdk  ETA')
+  assert.deepEqual(jumpPaths(app), [pathB])
+  assert.equal(app.run('jump.selected'), pathB)
+
+  typeJump(app, 'nothing')
+  assert.deepEqual(jumpPaths(app), [])
+  assert.equal(app.run('jump.selected'), null)
+  assert.equal(jumpText(app), 'No match.')
+})
+
+test('arrows move the pop-up selection and stop at the ends', async () => {
+  const app = await reposApp(selectRepos)
+  press(app, 'k', cmd)
+  assert.equal(app.run('jump.selected'), pathA)
+  assert.deepEqual(selectedJumpText(app), ['alpha akka/sdk/alpha'])
+
+  assert.ok(press(app, 'ArrowUp'))
+  assert.equal(app.run('jump.selected'), pathA)
+
+  for (const path of [pathB, pathC, pathC]) {
+    assert.ok(press(app, 'ArrowDown'))
+    assert.equal(app.run('jump.selected'), path)
+  }
+  assert.deepEqual(selectedJumpText(app), ['gamma o/r/gamma'])
+
+  assert.ok(press(app, 'ArrowUp'))
+  assert.equal(app.run('jump.selected'), pathB)
+})
+
+test('Enter in the pop-up goes to the selected page and closes it', async () => {
+  const app = await reposApp(selectRepos)
+
+  press(app, 'k', cmd)
+  press(app, 'ArrowDown')
+  assert.ok(press(app, 'Enter'))
+  assert.equal(app.context.location.hash, worktreeHashOf(pathB))
+  assert.equal(app.run('jump'), null)
+  assert.equal(jumpDialog(app).open, false)
+
+  app.window.dispatch('hashchange')
+  press(app, 'b', cmd)
+  assert.ok(press(app, 'Enter'))
+  assert.equal(app.context.location.hash, prsHashOf(sdkMain))
+  assert.equal(app.run('jump'), null)
+  assert.equal(jumpDialog(app).open, false)
+})
+
+test('Esc and the same shortcut close the pop-up; the other shortcut does nothing', async () => {
+  const app = await reposApp(selectRepos)
+
+  press(app, 'k', cmd)
+  assert.ok(press(app, 'b', cmd))
+  assert.equal(app.run('jump.kind'), 'worktrees')
+  assert.equal(jumpDialog(app).open, true)
+
+  assert.ok(press(app, 'k', cmd))
+  assert.equal(app.run('jump'), null)
+  assert.equal(jumpDialog(app).open, false)
+
+  press(app, 'b', cmd)
+  assert.ok(press(app, 'k', cmd))
+  assert.equal(app.run('jump.kind'), 'checkouts')
+
+  assert.ok(press(app, 'Escape'))
+  assert.equal(app.run('jump'), null)
+  assert.equal(jumpDialog(app).open, false)
+  assert.equal(app.context.location.hash, '#/')
+
+  press(app, 'b', cmd)
+  jumpDialog(app).close()
+  assert.equal(app.run('jump'), null, 'a native Esc clears the pop-up')
+})
+
+test('Cmd+K opens the pop-up from a terminal tab and from the editor', async () => {
+  const terminal = { closest: (selector) => (selector === '#term-view' ? {} : null) }
+  for (const key of ['k', 'b']) {
+    const app = await reposApp(selectRepos, [], worktreeHashOf(pathA))
+
+    assert.ok(press(app, key, cmd, terminal))
+    assert.equal(jumpDialog(app).open, true)
+  }
+
+  const api = fileApi({ 'spec.md': '# Spec\n' })
+  const app = await openFile(api, 'spec.md')
+  press(app, 'w')
+  editor(app).value = '# Typed\n'
+
+  assert.ok(press(app, 'k', cmd, editor(app)))
+  await settle()
+  assert.equal(jumpDialog(app).open, true)
+  assert.equal(app.run('jump.kind'), 'worktrees')
+  assert.deepEqual(api.puts, [])
+  assert.equal(app.run('editing.editor.value()'), '# Typed\n')
+})
+
+test('keys in the pop-up do not reach the page', async () => {
+  const app = await reposApp(selectRepos)
+  press(app, 'ArrowDown')
+  press(app, 'ArrowDown')
+  assert.equal(app.run('selectedWorktree'), pathA)
+
+  press(app, 'k', cmd)
+  assert.equal(press(app, 'd'), false)
+  assert.notEqual(app.elements.get('modal').open, true)
+  assert.equal(app.run('removingWorktree'), false)
+
+  assert.ok(press(app, 'ArrowDown'))
+  assert.equal(app.run('jump.selected'), pathB)
+  assert.equal(app.run('selectedWorktree'), pathA)
+
+  assert.equal(press(app, '?', { shiftKey: true }), false)
+  assert.notEqual(shortcutsDialog(app).open, true)
+
+  const { app: page, sockets } = await worktreeApp()
+  press(page, 'k', cmd)
+  assert.equal(press(page, 't', cmd), false)
+  assert.equal(sockets.length, 0)
+})
+
+test('Cmd+K does nothing while the modal is open', async () => {
+  const app = await reposApp(selectRepos)
+
+  app.elements.get('modal').open = true
+  assert.equal(press(app, 'k', cmd), false)
+  assert.equal(app.run('jump'), null)
+  assert.notEqual(jumpDialog(app).open, true)
+
+  app.elements.get('modal').open = false
+  press(app, '?', { shiftKey: true })
+  assert.equal(press(app, 'b', cmd), false)
+  assert.equal(app.run('jump'), null)
+  assert.notEqual(jumpDialog(app).open, true)
+})
+
+test('the modal above the pop-up keeps its keys', async () => {
+  const app = await reposApp(selectRepos)
+  const opened = appOpener(app)
+
+  press(app, 'k', cmd)
+  app.run('tell("Could not refresh.")')
+  assert.equal(app.elements.get('modal').open, true)
+
+  assert.equal(press(app, 'Enter'), false)
+  assert.equal(press(app, 'Enter', cmd), false)
+  await settle()
+  assert.equal(app.context.location.hash, '#/')
+  assert.deepEqual(opened, [])
+
+  assert.equal(press(app, 'Escape'), false)
+  assert.equal(press(app, 'k', cmd), false)
+  assert.equal(app.run('jump.kind'), 'worktrees')
+  assert.equal(jumpDialog(app).open, true)
+
+  closeModal(app, '')
+  assert.ok(press(app, 'Escape'))
+  assert.equal(app.run('jump'), null)
+  assert.equal(jumpDialog(app).open, false)
+})
+
+test('Enter on the discard prompt above the pop-up opens no row', async () => {
+  const app = await openFile(fileApi({ 'spec.md': '# Spec\n' }), 'spec.md')
+  const closes = appWindow(app)
+  const href = app.context.location.hash
+  app.context.repos = selectRepos
+  app.run('reposState = repos')
+
+  press(app, 'w')
+  editor(app).value = '# Typed\n'
+  press(app, 'k', cmd, editor(app))
+  assert.equal(app.run('onCloseRequested()'), false)
+  assert.equal(app.elements.get('modal-text').textContent, 'Discard your changes?')
+
+  assert.equal(press(app, 'Enter'), false)
+  closeModal(app, 'cancel')
+  await settle()
+  assert.equal(app.context.location.hash, href)
+  assert.equal(closes.count, 0)
+  assert.equal(app.run('editing.editor.value()'), '# Typed\n')
+  assert.equal(jumpDialog(app).open, true)
+})
+
+test('the pop-up is empty and Enter does nothing before the repos load', () => {
+  const app = dashboard()
+  app.context.location.hash = '#/'
+
+  assert.ok(press(app, 'k', cmd))
+  assert.equal(jumpText(app), 'No match.')
+  assert.equal(app.run('jump.selected'), null)
+
+  assert.equal(press(app, 'Enter'), false)
+  assert.equal(app.context.location.hash, '#/')
+  assert.equal(jumpDialog(app).open, true)
+})
+
+test('a poll keeps the pop-up filter and selection', async () => {
+  const repos = plain(selectRepos)
+  const app = await reposApp(repos)
+  press(app, 'k', cmd)
+  typeJump(app, 'akka')
+  press(app, 'ArrowDown')
+
+  await app.run('poll()')
+  assert.equal(app.run('jump.filter'), 'akka')
+  assert.equal(app.run('jump.selected'), pathB)
+  assert.deepEqual(selectedJumpText(app), ['beta akka/sdk/beta'])
+
+  repos.repos[0].worktrees = repos.repos[0].worktrees.filter((worktree) => worktree.path !== pathB)
+  await app.run('poll()')
+  assert.equal(app.run('jump.selected'), pathA)
+  assert.equal(jumpText(app), 'alpha akka/sdk/alpha')
+})
+
+test('Enter on a worktree row while the editor holds unsaved changes asks to discard them', async () => {
+  const app = await openFile(fileApi({ 'spec.md': '# Spec\n' }), 'spec.md')
+  terminalStubs(app)
+  const href = app.context.location.hash
+  app.context.repos = selectRepos
+  app.run('reposState = repos')
+
+  press(app, 'w')
+  editor(app).value = '# Typed\n'
+  press(app, 'k', cmd, editor(app))
+  assert.ok(press(app, 'Enter'))
+  app.window.dispatch('hashchange')
+  assert.equal(app.elements.get('modal').open, true)
+  assert.equal(app.elements.get('modal-text').textContent, 'Discard your changes?')
+
+  closeModal(app, 'cancel')
+  await settle()
+  assert.equal(app.context.location.hash, href)
+  assert.equal(app.run('editing.editor.value()'), '# Typed\n')
+
+  press(app, 'k', cmd, editor(app))
+  press(app, 'Enter')
+  app.window.dispatch('hashchange')
+  closeModal(app, 'ok')
+  await settle()
+  assert.equal(app.run('editing'), null)
+  assert.equal(app.context.location.hash, worktreeHashOf(pathA))
+})
+
+test('Cmd+Enter in the main window opens the row in its own window', async () => {
+  const app = await reposApp(selectRepos)
+  const opened = appOpener(app)
+
+  press(app, 'k', cmd)
+  assert.ok(press(app, 'Enter', cmd))
+  await settle()
+
+  assert.deepEqual(opened, [worktreeHashOf(pathA)])
+  assert.equal(app.context.location.hash, '#/')
+  assert.equal(app.run('jump'), null)
+  assert.equal(jumpDialog(app).open, false)
+})
+
+test('Enter in a standalone window opens the row in its own window and keeps the page', async () => {
+  const root = worktreeHashOf(pathA)
+  const app = await standaloneApp(root, [], selectRepos)
+  const opened = appOpener(app)
+
+  press(app, 'b', cmd)
+  assert.ok(press(app, 'Enter'))
+  await settle()
+
+  assert.deepEqual(opened, [prsHashOf(sdkMain)])
+  assert.equal(app.context.location.hash, root)
+  assert.equal(app.run('jump'), null)
+  assert.equal(jumpDialog(app).open, false)
+})
+
+test('Cmd+Enter in a browser behaves like Enter', async () => {
+  const app = await reposApp(selectRepos)
+
+  press(app, 'k', cmd)
+  assert.ok(press(app, 'Enter', cmd))
+
+  assert.equal(app.context.location.hash, worktreeHashOf(pathA))
+  assert.equal(app.run('jump'), null)
+  assert.equal(jumpDialog(app).open, false)
+})
+
+test('the shortcuts dialog lists Cmd+K, Cmd+B and the pop-up keys', () => {
+  const app = dashboard()
+  app.context.location.hash = '#/'
+  press(app, '?', { shiftKey: true })
+
+  assert.match(shortcutsText(app), /^Everywhere \? Show or hide the shortcuts ⌘ click Open a row or bar item in a new window ⌘K Jump to a worktree ⌘B Jump to the PRs of a main checkout Pop-up /)
+  assert.match(shortcutsText(app), /Pop-up ↑ ↓ Move the selection Enter Open the selected row ⌘Enter Open the selected row in its own window Esc Close the pop-up Repos /)
 })
