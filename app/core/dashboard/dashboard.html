@@ -2564,10 +2564,21 @@ function prWorktree(repo, pr) {
   return repo.worktrees.find((worktree) => worktree.branch === pr.branch)
 }
 
-// Returns the PRs of the shown PRs page whose `#{number} {title} {author} {branch}` holds every filter word.
+// Returns the group of `pr` in the PR list: 0 checked out in `repo`, 1 open without reviews, 2 open with reviews, 3 draft.
+function prGroup(repo, pr) {
+  if (repo !== undefined && prWorktree(repo, pr) !== undefined) return 0
+  if (pr.draft) return 3
+  return pr.reviewers.length === 0 ? 1 : 2
+}
+
+// Returns the PRs of the shown PRs page whose `#{number} {title} {author} {branch}` holds every filter word, sorted by `prGroup`.
 function shownPrs() {
   const words = filterWords(prFilter)
-  return (prsState?.prs ?? []).filter((pr) => holdsWords(`#${pr.number} ${pr.title} ${pr.author} ${pr.branch}`, words))
+  const repo = findRepo(prsState?.path)
+
+  return (prsState?.prs ?? [])
+    .filter((pr) => holdsWords(`#${pr.number} ${pr.title} ${pr.author} ${pr.branch}`, words))
+    .sort((a, b) => prGroup(repo, a) - prGroup(repo, b))
 }
 
 // Returns the icons of a PR row, with the checkout title on the worktree icon when the PR is not `checkedOut`.

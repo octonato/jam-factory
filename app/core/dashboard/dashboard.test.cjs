@@ -3582,7 +3582,7 @@ test('a PR row shows its chips, its CI and review states, and its reviewers on h
   const app = await prsApp(selectRepos, prsJson([...prList, failing, idle]))
   const html = app.elements.get('pr-list').innerHTML
 
-  assert.deepEqual(prRows(app).map((row) => [row.number, row.chips]), [[12, 'reviewed'], [7, 'to review draft'], [3, 'reviewed draft'], [2, '']])
+  assert.deepEqual(prRows(app).map((row) => [row.number, row.chips]), [[2, ''], [12, 'reviewed'], [7, 'to review draft'], [3, 'reviewed draft']])
   assert.match(html, /<span class="pr-chip reviewed">reviewed<\/span>/)
   assert.match(html, /<span class="pr-chip to-review">to review<\/span><span class="pr-chip draft">draft<\/span>/)
 
@@ -3590,6 +3590,30 @@ test('a PR row shows its chips, its CI and review states, and its reviewers on h
   assert.match(html, /<span class="ci none">no CI<\/span> · <span class="review none" title="No reviews yet">no reviews<\/span>/)
   assert.match(html, /<span class="ci failing">CI failing<\/span> · <span class="review changes-requested" title="Reviewed by erin \(changes requested\)">changes requested<\/span>/)
   assert.match(html, /<span class="ci pending">CI running<\/span>/)
+})
+
+test('the PR list shows checked-out PRs, then open PRs without reviews, then open PRs with reviews, then drafts', async () => {
+  const pr = (number, fields) => ({ ...prList[1], number, branch: `pr-${number}`, draft: false, reviewers: [], reviewRequested: false, ...fields })
+  const reviewed = [{ login: 'carol', state: 'approved' }]
+  const prs = [
+    pr(1, { draft: true }),
+    pr(2, { reviewers: reviewed }),
+    pr(3, {}),
+    pr(4, { draft: true, branch: 'alice/fix-login' }),
+    pr(5, { reviewRequested: true }),
+    pr(6, { reviewers: reviewed, branch: 'docs' }),
+    pr(7, { reviewers: reviewed }),
+    pr(8, { draft: true, reviewers: reviewed }),
+  ]
+  const repos = plain(selectRepos)
+  repos.repos[0].worktrees.push(fixLogin, { path: '/s/akka/sdk/docs', branch: 'docs', head: null })
+  const app = await prsApp(repos, prsJson(prs))
+
+  assert.deepEqual(prNumbers(app), [4, 6, 3, 5, 2, 7, 1, 8])
+
+  assert.ok(press(app, 'ArrowDown'))
+  assert.ok(press(app, 'ArrowDown'))
+  assert.equal(app.run('selectedPr'), 6)
 })
 
 // Returns the text of the worktree card.
@@ -3822,7 +3846,7 @@ test('arrow keys select PRs and stop at the ends', async () => {
 test('slash focuses the PR filter and the filter narrows the rows', async () => {
   const bump = {
     number: 3, title: 'Bump deps', author: 'alice', branch: 'deps', draft: false, additions: 1, deletions: 1, url: 'https://github.com/akka/sdk/pull/3',
-    ci: 'passing', review: 'none', reviewers: [], reviewRequested: false,
+    ci: 'passing', review: 'commented', reviewers: [{ login: 'carol', state: 'commented' }], reviewRequested: false,
   }
   const app = await prsApp(selectRepos, prsJson([...prList, bump]))
   const field = app.elements.get('pr-filter')
