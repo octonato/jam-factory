@@ -4,5 +4,16 @@
 <dict>
   <key>NSAppleEventsUsageDescription</key>
   <string>Jam Board opens session worktrees in iTerm.</string>
+  <key>CFBundleURLTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleURLName</key>
+      <string>io.cavalcanti.jam-board</string>
+      <key>CFBundleURLSchemes</key>
+      <array>
+        <string>jam-board</string>
+      </array>
+    </dict>
+  </array>
 </dict>
 </plist>

@@ -32,6 +32,11 @@ fn main() {
             windows::open_board_window(app.handle());
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running Jam Board");
+        .build(tauri::generate_context!())
+        .expect("error while building Jam Board")
+        .run(|app, event| {
+            if let tauri::RunEvent::Opened { urls } = event {
+                windows::open_links(app, &urls);
+            }
+        });
 }

@@ -1551,6 +1551,7 @@ name = "jam-board"
 version = "0.1.0"
 dependencies = [
  "jam-factory-store",
+ "percent-encoding",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
@@ -1627,6 +1628,16 @@ dependencies = [
  "gobject-sys",
  "libc",
  "system-deps",
+]
+
+[[package]]
+name = "jb"
+version = "0.1.0"
+dependencies = [
+ "jam-board-core",
+ "jam-factory-store",
+ "tempfile",
+ "url",
 ]
 
 [[package]]

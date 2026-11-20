@@ -129,7 +129,7 @@ mise install
 just install
 ```
 
-`just install` builds Jam Board, `jam-factory-mcp` and `jam-factory-server`. It copies both binaries to `~/.local/bin`, which must be on your `PATH`.
+`just install` builds Jam Board, `jam-factory-mcp`, `jam-factory-server` and `jb`. It copies the three binaries to `~/.local/bin`, which must be on your `PATH`.
 
 `just install` also installs a launchd agent that keeps `jam-factory-server` running on port 8731. Jam Board and the editors read sessions from `jam-factory-server`. Jam Board shows an error when `jam-factory-server` is down. The log is `~/.jam-factory/logs/server.log`.
 
@@ -166,6 +166,12 @@ To create a worktree, select a main row on the Repos tab and press `b`, or press
 
 ```json
 { "githubUser": "octonato" }
+```
+
+To open a worktree from a terminal, run `jb` in it, or pass its path or a folder inside it. `jb` opens the worktree in its own Jam Board window, or focuses the window when it is open. It starts Jam Board when it is not running. The worktree must be a linked worktree of a checkout in `repos`:
+
+```sh
+jb ~/Sources/octonato/jam-factory/rate-limit
 ```
 
 To remove a worktree, select its row on the Repos tab and press `d`, or press `d` on its worktree page. Confirm in the dialog. Jam Board runs `git worktree remove`, which refuses a worktree with modified or untracked files. It then deletes the branch when it is merged, and closes the worktree's terminals. From the worktree page, Jam Board then returns to the Repos tab. A standalone window closes.

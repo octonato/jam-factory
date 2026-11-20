@@ -25,6 +25,7 @@ use tauri::{
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 
 use jam_factory_store::root::resolve_port;
+use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 
 use crate::navigation::{self, Navigation};
 use crate::probe;
@@ -43,6 +44,22 @@ static ROOTS: LazyLock<Mutex<HashMap<String, String>>> = LazyLock::new(Mutex::de
 const SERVER_DEADLINE: Duration = Duration::from_secs(3);
 
 const ASK_PAGE_TO_CLOSE: &str = "onCloseRequested()";
+
+const LINK_SCHEME: &str = "jam-board";
+
+const LINK_HOST: &str = "open";
+
+/// The bytes that `encodeURIComponent` encodes.
+const URI_COMPONENT: &AsciiSet = &NON_ALPHANUMERIC
+    .remove(b'-')
+    .remove(b'_')
+    .remove(b'.')
+    .remove(b'!')
+    .remove(b'~')
+    .remove(b'*')
+    .remove(b'\'')
+    .remove(b'(')
+    .remove(b')');
 
 /// Opens the board window, or shows an error dialog and exits.
 pub fn open_board_window(app: &AppHandle) {
@@ -100,9 +117,55 @@ fn main_url(mut url: Url) -> Url {
 /// Focuses the standalone window rooted at `hash`, or opens one on the dashboard that `window` shows.
 #[tauri::command]
 pub async fn open_window(window: WebviewWindow, hash: String) -> Result<(), String> {
-    let app = window.app_handle();
+    let dashboard = window.url().map_err(|e| e.to_string())?;
 
-    let known = window_with_root(&roots(), &hash);
+    open_standalone(window.app_handle(), dashboard, &hash)
+}
+
+/// Opens or focuses the standalone window of the worktree that each `jam-board://open?path=…` link in `urls` names.
+pub fn open_links(app: &AppHandle, urls: &[Url]) {
+    for url in urls {
+        if let Err(message) = open_link(app, url) {
+            app.dialog()
+                .message(message)
+                .kind(MessageDialogKind::Error)
+                .show(|_| {});
+        }
+    }
+}
+
+/// Opens or focuses the standalone window of the worktree that `url` names, on the dashboard of the configured port.
+fn open_link(app: &AppHandle, url: &Url) -> Result<(), String> {
+    let path = linked_worktree(url).ok_or_else(|| format!("Cannot open the link {url}"))?;
+
+    let home = app.path().home_dir().map_err(|e| e.to_string())?;
+    let port = resolve_port(&home).map_err(|e| e.to_string())?;
+    let dashboard = Url::parse(&format!("http://127.0.0.1:{port}/dashboard.html"))
+        .map_err(|e| e.to_string())?;
+
+    open_standalone(app, dashboard, &worktree_hash(&path))
+}
+
+/// Returns the absolute worktree path of a `jam-board://open?path=…` link.
+fn linked_worktree(url: &Url) -> Option<String> {
+    if url.scheme() != LINK_SCHEME || url.host_str() != Some(LINK_HOST) {
+        return None;
+    }
+
+    url.query_pairs()
+        .find(|(key, _)| key == "path")
+        .map(|(_, path)| path.into_owned())
+        .filter(|path| path.starts_with('/'))
+}
+
+/// Returns the dashboard hash of the worktree page of `path`, encoded as `encodeURIComponent` does.
+fn worktree_hash(path: &str) -> String {
+    format!("#/worktree/{}", utf8_percent_encode(path, URI_COMPONENT))
+}
+
+/// Focuses the standalone window rooted at `hash`, or opens one on `dashboard`.
+fn open_standalone(app: &AppHandle, dashboard: Url, hash: &str) -> Result<(), String> {
+    let known = window_with_root(&roots(), hash);
     if let Some(label) = known {
         if let Some(open) = app.get_webview_window(&label) {
             return focus(&open);
@@ -110,7 +173,7 @@ pub async fn open_window(window: WebviewWindow, hash: String) -> Result<(), Stri
         forget_window(&mut roots(), &label);
     }
 
-    let url = standalone_url(window.url().map_err(|e| e.to_string())?, &hash);
+    let url = standalone_url(dashboard, hash);
     let port = url
         .port_or_known_default()
         .ok_or("The board window has no port")?;
@@ -121,7 +184,7 @@ pub async fn open_window(window: WebviewWindow, hash: String) -> Result<(), Stri
     );
     let opened = build_board_window(app, &label, url, port)?;
 
-    roots().insert(label, root_of(&hash).to_string());
+    roots().insert(label, root_of(hash).to_string());
     forget_on_destroy(&opened);
 
     Ok(())
@@ -291,6 +354,42 @@ mod tests {
                 format!("http://127.0.0.1:{port}/dashboard.html")
             );
         }
+    }
+
+    #[test]
+    fn a_link_names_an_absolute_worktree_path() {
+        let path = |link: &str| linked_worktree(&Url::parse(link).unwrap());
+
+        assert_eq!(
+            path("jam-board://open?path=%2Fa%2Ffeature+x%2By"),
+            Some("/a/feature x+y".to_string())
+        );
+        assert_eq!(path("jam-board://open?path=rel"), None);
+        assert_eq!(path("jam-board://open"), None);
+        assert_eq!(path("jam-board://close?path=%2Fa"), None);
+        assert_eq!(path("https://open?path=%2Fa"), None);
+    }
+
+    #[test]
+    fn the_worktree_hash_encodes_as_the_dashboard_does() {
+        assert_eq!(
+            worktree_hash("/a/feature x+y/(1)!~*'_-."),
+            "#/worktree/%2Fa%2Ffeature%20x%2By%2F(1)!~*'_-."
+        );
+    }
+
+    #[test]
+    fn the_dashboard_builds_worktree_hashes_with_encode_uri_component() {
+        let dashboard = include_str!("../../core/dashboard/dashboard.html");
+
+        assert!(dashboard.contains("return `#/worktree/${encodeURIComponent(path)}`"));
+    }
+
+    #[test]
+    fn the_app_registers_the_link_scheme() {
+        let plist = include_str!("../Info.plist");
+
+        assert!(plist.contains(&format!("<string>{LINK_SCHEME}</string>")));
     }
 
     #[test]

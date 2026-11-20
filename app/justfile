@@ -33,7 +33,7 @@ test:
 # Run the full CI quality-gate set: fmt, clippy, test.
 build: check test
 
-# Run the gates, copy the app bundle to /Applications and both servers to ~/.local/bin, then reload the server agent.
+# Run the gates, copy the app bundle to /Applications and both servers and jb to ~/.local/bin, then reload the server agent.
 install: build
     #!/usr/bin/env bash
     set -euo pipefail
@@ -59,6 +59,10 @@ install: build
     cargo build --release -p jam-factory-server
     rm -f "$HOME/.local/bin/jam-factory-server"
     cp target/release/jam-factory-server "$HOME/.local/bin/"
+
+    cargo build --release -p jb
+    rm -f "$HOME/.local/bin/jb"
+    cp target/release/jb "$HOME/.local/bin/"
 
     mkdir -p "$HOME/.jam-factory/logs" "$HOME/Library/LaunchAgents"
 

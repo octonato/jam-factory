@@ -1,0 +1,17 @@
+[package]
+name = "jb"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "jb"
+path = "src/main.rs"
+
+[dependencies]
+jam-board-core = { path = "../core" }
+jam-factory-store = { path = "../store" }
+url = "2"
+
+[dev-dependencies]
+tempfile = "3"
