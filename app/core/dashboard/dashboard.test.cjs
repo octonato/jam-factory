@@ -149,7 +149,7 @@ function dashboard({ script = source, pageWidth = 1200, pageLeft = 0, splitterWi
     return el
   }
 
-  for (const id of ['board-header', 'standalone-header', 'open-board', 'detach-worktree', 'tabs', 'page', 'term-store', 'status', 'problems', 'font-down', 'font-up', 'font-value', 'modal', 'modal-text', 'modal-input', 'modal-cancel', 'shortcuts', 'shortcuts-list', 'jump', 'jump-tabs', 'jump-input', 'jump-list']) element(id)
+  for (const id of ['board-header', 'tabs', 'page', 'term-store', 'status', 'problems', 'font-down', 'font-up', 'font-value', 'modal', 'modal-text', 'modal-input', 'modal-cancel', 'shortcuts', 'shortcuts-list', 'jump', 'jump-tabs', 'jump-input', 'jump-list']) element(id)
   for (const dialog of [elements.get('modal'), elements.get('shortcuts'), elements.get('jump')]) {
     dialog.showModal = () => { dialog.open = true }
     dialog.close = (value = '') => {
@@ -4628,7 +4628,10 @@ test('a standalone window hides the header', () => {
   assert.deepEqual(plain(app.run('standaloneRoot')), { kind: 'worktree', path: worktreePath })
 })
 
-test('standalone app windows open the main board without navigating away', async () => {
+// Returns the actions of the icons on the worktree card.
+const cardActions = (app) => [...app.elements.get('worktree-card').innerHTML.matchAll(/data-action="([^"]*)"/g)].map((match) => match[1])
+
+test('Cmd+0 in a standalone app window opens the main board without navigating away', async () => {
   for (const hash of [worktreeHashOf(worktreePath), '#/o/r/main/s1', prsHashOf(sdkMain)]) {
     const commands = []
     const app = dashboard({
@@ -4637,18 +4640,17 @@ test('standalone app windows open the main board without navigating away', async
       tauri: { core: { invoke: async (command) => { commands.push(command) } } },
     })
 
-    assert.equal(app.elements.get('standalone-header').hidden, false)
-    app.elements.get('open-board').dispatch('click')
+    assert.equal(press(app, '0', cmd), true, hash)
     await settle()
     assert.deepEqual(commands, ['open_main_window'])
     assert.equal(app.context.location.hash, hash)
   }
 })
 
-test('the main app window and browser pages hide the open-board button', () => {
+test('Cmd+0 does nothing in the main app window or a browser page', () => {
   for (const options of [{ tauri: {} }, {}, { search: '?standalone', hash: '#/o/r/main/s1' }]) {
     const app = dashboard(options)
-    assert.equal(app.elements.get('standalone-header').hidden, true)
+    assert.equal(press(app, '0', cmd), false)
   }
 })
 
@@ -4660,13 +4662,13 @@ test('a failure to open the main board shows an error and keeps the standalone p
     tauri: { core: { invoke: async () => { throw new Error('denied') } } },
   })
 
-  app.elements.get('open-board').dispatch('click')
+  press(app, '0', cmd)
   await settle()
   assert.equal(app.elements.get('modal-text').textContent, 'Could not open Jam Board: Error: denied')
   assert.equal(app.context.location.hash, hash)
 })
 
-test('a main-window worktree page opens standalone before returning to Repos', async () => {
+test('the new-window icon opens a main-window worktree page standalone before returning to Repos', async () => {
   const { app } = await worktreeApp()
   const hash = app.context.location.hash
   const opened = []
@@ -4682,8 +4684,9 @@ test('a main-window worktree page opens standalone before returning to Repos', a
   }
   app.run('render()')
 
-  assert.equal(app.elements.get('detach-worktree').hidden, false)
-  app.elements.get('detach-worktree').dispatch('click')
+  assert.deepEqual(cardActions(app), ['lazygit', 'iterm', 'zed', 'intellij', 'github', 'detach'])
+  assert.match(app.elements.get('worktree-card').innerHTML, /data-action="detach" title="Open in a new window \(⌘N\)"/)
+  clickCard(app, 'detach')
   assert.deepEqual(opened, [hash])
   assert.equal(app.context.location.hash, hash)
 
@@ -4691,26 +4694,37 @@ test('a main-window worktree page opens standalone before returning to Repos', a
   await settle()
   assert.equal(app.context.location.hash, '#/')
   app.window.dispatch('hashchange')
-  assert.equal(app.elements.get('detach-worktree').hidden, true)
   assert.match(app.elements.get('page').innerHTML, /id="repo-list"/)
 })
 
-test('the detach button shows only on worktree pages of the main app window', async () => {
+test('Cmd+N opens a main-window worktree page in its own window', async () => {
   const { app } = await worktreeApp()
-  assert.equal(app.elements.get('detach-worktree').hidden, true, 'hidden in a browser')
+  const hash = app.context.location.hash
+  const opened = []
+  app.window.__TAURI__ = { core: { invoke: async (command, args) => { opened.push(`${command} ${args.hash}`) } } }
+
+  assert.equal(press(app, 'n', cmd), true)
+  await settle()
+  assert.deepEqual(opened, [`open_window ${hash}`])
+  assert.equal(app.context.location.hash, '#/')
+})
+
+test('the new-window icon and Cmd+N apply only to worktree pages of the main app window', async () => {
+  const { app } = await worktreeApp()
+  assert.ok(!cardActions(app).includes('detach'), 'no icon in a browser')
+  assert.equal(press(app, 'n', cmd), false, 'no shortcut in a browser')
 
   app.window.__TAURI__ = { core: { invoke: async () => {} } }
-  app.run('render()')
-  assert.equal(app.elements.get('detach-worktree').hidden, false)
   for (const hash of ['#/', '#/sessions', '#/terminals', prsHashOf(mainPath)]) {
     navigate(app, hash)
-    assert.equal(app.elements.get('detach-worktree').hidden, true, hash)
+    assert.equal(press(app, 'n', cmd), false, hash)
   }
 
   const standalone = await standaloneApp(worktreeHashOf(worktreePath))
   standalone.window.__TAURI__ = { core: { invoke: async () => {} } }
   standalone.run('render()')
-  assert.equal(standalone.elements.get('detach-worktree').hidden, true)
+  assert.ok(!cardActions(standalone).includes('detach'))
+  assert.equal(press(standalone, 'n', cmd), false)
 })
 
 test('a failed detach keeps the main window on the worktree and reports the error', async () => {
@@ -4718,7 +4732,7 @@ test('a failed detach keeps the main window on the worktree and reports the erro
   const hash = app.context.location.hash
   app.window.__TAURI__ = { core: { invoke: async () => { throw new Error('denied') } } }
 
-  app.elements.get('detach-worktree').dispatch('click')
+  clickCard(app, 'detach')
   await settle()
   assert.equal(app.context.location.hash, hash)
   assert.equal(app.elements.get('modal-text').textContent, 'Could not open a window: Error: denied')
@@ -4729,7 +4743,7 @@ test('detaching a worktree leaves a page visited while opening it in place', asy
   let finish
   app.window.__TAURI__ = { core: { invoke: () => new Promise((resolve) => { finish = resolve }) } }
 
-  app.elements.get('detach-worktree').dispatch('click')
+  clickCard(app, 'detach')
   navigate(app, '#/sessions')
   finish()
   await settle()
