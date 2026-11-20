@@ -24,7 +24,10 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .menu(menu::build)
         .on_menu_event(menu::on_event)
-        .invoke_handler(tauri::generate_handler![windows::open_window])
+        .invoke_handler(tauri::generate_handler![
+            windows::open_window,
+            windows::open_main_window
+        ])
         .setup(|app| {
             windows::open_board_window(app.handle());
             Ok(())

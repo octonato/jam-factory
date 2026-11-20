@@ -44,7 +44,7 @@ function cardRows(html) {
   }))
 }
 
-function dashboard({ script = source, pageWidth = 1200, pageLeft = 0, splitterWidth = 6, fetcher, storage = new Map(), search = '', hash = '' } = {}) {
+function dashboard({ script = source, pageWidth = 1200, pageLeft = 0, splitterWidth = 6, fetcher, storage = new Map(), search = '', hash = '', tauri } = {}) {
   const elements = new Map()
   const calls = []
   const geometry = { pageWidth, pageLeft, splitterWidth }
@@ -149,7 +149,7 @@ function dashboard({ script = source, pageWidth = 1200, pageLeft = 0, splitterWi
     return el
   }
 
-  for (const id of ['board-header', 'tabs', 'page', 'term-store', 'status', 'problems', 'font-down', 'font-up', 'font-value', 'modal', 'modal-text', 'modal-input', 'modal-cancel', 'shortcuts', 'shortcuts-list', 'jump', 'jump-tabs', 'jump-input', 'jump-list']) element(id)
+  for (const id of ['board-header', 'standalone-header', 'open-board', 'detach-worktree', 'tabs', 'page', 'term-store', 'status', 'problems', 'font-down', 'font-up', 'font-value', 'modal', 'modal-text', 'modal-input', 'modal-cancel', 'shortcuts', 'shortcuts-list', 'jump', 'jump-tabs', 'jump-input', 'jump-list']) element(id)
   for (const dialog of [elements.get('modal'), elements.get('shortcuts'), elements.get('jump')]) {
     dialog.showModal = () => { dialog.open = true }
     dialog.close = (value = '') => {
@@ -181,6 +181,7 @@ function dashboard({ script = source, pageWidth = 1200, pageLeft = 0, splitterWi
     hasFocus() { return this.focused },
   })
   const window = new Target()
+  if (tauri !== undefined) window.__TAURI__ = tauri
   const context = vm.createContext({
     document,
     window,
@@ -4625,6 +4626,114 @@ test('a standalone window hides the header', () => {
 
   assert.equal(app.elements.get('board-header').hidden, true)
   assert.deepEqual(plain(app.run('standaloneRoot')), { kind: 'worktree', path: worktreePath })
+})
+
+test('standalone app windows open the main board without navigating away', async () => {
+  for (const hash of [worktreeHashOf(worktreePath), '#/o/r/main/s1', prsHashOf(sdkMain)]) {
+    const commands = []
+    const app = dashboard({
+      search: '?standalone',
+      hash,
+      tauri: { core: { invoke: async (command) => { commands.push(command) } } },
+    })
+
+    assert.equal(app.elements.get('standalone-header').hidden, false)
+    app.elements.get('open-board').dispatch('click')
+    await settle()
+    assert.deepEqual(commands, ['open_main_window'])
+    assert.equal(app.context.location.hash, hash)
+  }
+})
+
+test('the main app window and browser pages hide the open-board button', () => {
+  for (const options of [{ tauri: {} }, {}, { search: '?standalone', hash: '#/o/r/main/s1' }]) {
+    const app = dashboard(options)
+    assert.equal(app.elements.get('standalone-header').hidden, true)
+  }
+})
+
+test('a failure to open the main board shows an error and keeps the standalone page', async () => {
+  const hash = '#/o/r/main/s1'
+  const app = dashboard({
+    search: '?standalone',
+    hash,
+    tauri: { core: { invoke: async () => { throw new Error('denied') } } },
+  })
+
+  app.elements.get('open-board').dispatch('click')
+  await settle()
+  assert.equal(app.elements.get('modal-text').textContent, 'Could not open Jam Board: Error: denied')
+  assert.equal(app.context.location.hash, hash)
+})
+
+test('a main-window worktree page opens standalone before returning to Repos', async () => {
+  const { app } = await worktreeApp()
+  const hash = app.context.location.hash
+  const opened = []
+  let finish
+  app.window.__TAURI__ = {
+    core: {
+      invoke: (command, args) => {
+        assert.equal(command, 'open_window')
+        opened.push(args.hash)
+        return new Promise((resolve) => { finish = resolve })
+      },
+    },
+  }
+  app.run('render()')
+
+  assert.equal(app.elements.get('detach-worktree').hidden, false)
+  app.elements.get('detach-worktree').dispatch('click')
+  assert.deepEqual(opened, [hash])
+  assert.equal(app.context.location.hash, hash)
+
+  finish()
+  await settle()
+  assert.equal(app.context.location.hash, '#/')
+  app.window.dispatch('hashchange')
+  assert.equal(app.elements.get('detach-worktree').hidden, true)
+  assert.match(app.elements.get('page').innerHTML, /id="repo-list"/)
+})
+
+test('the detach button shows only on worktree pages of the main app window', async () => {
+  const { app } = await worktreeApp()
+  assert.equal(app.elements.get('detach-worktree').hidden, true, 'hidden in a browser')
+
+  app.window.__TAURI__ = { core: { invoke: async () => {} } }
+  app.run('render()')
+  assert.equal(app.elements.get('detach-worktree').hidden, false)
+  for (const hash of ['#/', '#/sessions', '#/terminals', prsHashOf(mainPath)]) {
+    navigate(app, hash)
+    assert.equal(app.elements.get('detach-worktree').hidden, true, hash)
+  }
+
+  const standalone = await standaloneApp(worktreeHashOf(worktreePath))
+  standalone.window.__TAURI__ = { core: { invoke: async () => {} } }
+  standalone.run('render()')
+  assert.equal(standalone.elements.get('detach-worktree').hidden, true)
+})
+
+test('a failed detach keeps the main window on the worktree and reports the error', async () => {
+  const { app } = await worktreeApp()
+  const hash = app.context.location.hash
+  app.window.__TAURI__ = { core: { invoke: async () => { throw new Error('denied') } } }
+
+  app.elements.get('detach-worktree').dispatch('click')
+  await settle()
+  assert.equal(app.context.location.hash, hash)
+  assert.equal(app.elements.get('modal-text').textContent, 'Could not open a window: Error: denied')
+})
+
+test('detaching a worktree leaves a page visited while opening it in place', async () => {
+  const { app } = await worktreeApp()
+  let finish
+  app.window.__TAURI__ = { core: { invoke: () => new Promise((resolve) => { finish = resolve }) } }
+
+  app.elements.get('detach-worktree').dispatch('click')
+  navigate(app, '#/sessions')
+  finish()
+  await settle()
+  assert.equal(app.context.location.hash, '#/sessions')
 })
 
 test('a worktree root allows its page and its sessions only', async () => {

@@ -109,7 +109,7 @@
 
   #font-value { min-width: 3em; text-align: center; }
 
-  .font-size button {
+  .font-size button, #open-board, #detach-worktree {
     padding: 2px 8px;
     color: var(--ink-2);
     font: inherit;
@@ -119,7 +119,7 @@
     cursor: pointer;
   }
 
-  .font-size button:hover:enabled { border-color: var(--accent); }
+  .font-size button:hover:enabled, #open-board:hover, #detach-worktree:hover { border-color: var(--accent); }
   .font-size button:disabled { color: var(--muted); cursor: default; }
 
   .column {
@@ -1080,11 +1080,15 @@
   <h1>Jam Board</h1>
   <nav class="tabs" id="tabs"><a class="tab" href="#/" aria-current="page">Repos</a><a class="tab" href="#/sessions">Sessions</a><a class="tab" href="#/terminals">Terminals</a></nav>
   <span id="status">loading…</span>
+  <button type="button" id="detach-worktree" hidden>Open in new window</button>
   <div class="font-size">
     <button type="button" id="font-down" title="Smaller text">A−</button>
     <span id="font-value">18px</span>
     <button type="button" id="font-up" title="Larger text">A+</button>
   </div>
+</header>
+<header id="standalone-header" hidden>
+  <button type="button" id="open-board">Open Jam Board</button>
 </header>
 <div id="problems"></div>
 <main id="page"></main>
@@ -2161,6 +2165,26 @@ function openWindow(hash) {
   window.__TAURI__.core
     .invoke('open_window', { hash })
     .catch((err) => tell(`Could not open a window: ${err}`))
+}
+
+// Asks the app to open or focus the main Jam Board window.
+function openMainWindow() {
+  window.__TAURI__?.core
+    .invoke('open_main_window')
+    .catch((err) => tell(`Could not open Jam Board: ${err}`))
+}
+
+// Opens the shown worktree in its own window, then returns this window to Repos if it still shows that page.
+async function detachWorktree() {
+  const hash = location.hash
+  if (standaloneRoot !== null || parseRoute(hash).kind !== 'worktree' || window.__TAURI__ === undefined) return
+
+  try {
+    await window.__TAURI__.core.invoke('open_window', { hash })
+    if (location.hash === hash) location.hash = '#/'
+  } catch (err) {
+    tell(`Could not open a window: ${err}`)
+  }
 }
 
 // Moves the selection by `step` rows of the repos page in display order and stops at the first and last rows.
@@ -4726,6 +4750,7 @@ function render() {
 
   const route = parseRoute(location.hash)
   if (editing !== null && !routeShows(route, editing)) return
+  $('detach-worktree').hidden = standaloneRoot !== null || route.kind !== 'worktree' || window.__TAURI__ === undefined
   if (route.kind !== 'worktree') parkWorktreeTerminal()
   if (renaming !== null && (route.kind !== 'worktree' || route.path !== renaming.path)) renaming = null
   recordPageOrigin(route)
@@ -5361,6 +5386,9 @@ $('font-up').addEventListener('click', () => stepFontSize(1))
 showFontSize(readFontSize())
 orgFilter = readOrgFilter()
 if (standaloneRoot !== null) $('board-header').hidden = true
+$('standalone-header').hidden = standaloneRoot === null || window.__TAURI__ === undefined
+$('open-board').addEventListener('click', openMainWindow)
+$('detach-worktree').addEventListener('click', detachWorktree)
 
 $('modal-input').addEventListener('keydown', onModalInputKey)
 $('jump-input').addEventListener('input', onJumpInput)

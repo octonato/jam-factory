@@ -9,6 +9,7 @@
   "permissions": [
     "core:window:allow-close",
     "core:window:allow-set-title",
-    "allow-open-window"
+    "allow-open-window",
+    "allow-open-main-window"
   ]
 }

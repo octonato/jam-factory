@@ -74,6 +74,29 @@ fn try_open_board_window(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Focuses the main board window, or reopens it on the server that `window` shows.
+#[tauri::command]
+pub async fn open_main_window(window: WebviewWindow) -> Result<(), String> {
+    let app = window.app_handle();
+    if let Some(main) = app.get_webview_window(MAIN) {
+        return focus(&main);
+    }
+
+    let url = main_url(window.url().map_err(|e| e.to_string())?);
+    let port = url
+        .port_or_known_default()
+        .ok_or("The board window has no port")?;
+    let main = build_board_window(app, MAIN, url, port)?;
+    focus(&main)
+}
+
+/// Returns `url` without the standalone query or the current page's fragment.
+fn main_url(mut url: Url) -> Url {
+    url.set_query(None);
+    url.set_fragment(None);
+    url
+}
+
 /// Focuses the standalone window rooted at `hash`, or opens one on the dashboard that `window` shows.
 #[tauri::command]
 pub async fn open_window(window: WebviewWindow, hash: String) -> Result<(), String> {
@@ -257,6 +280,20 @@ mod tests {
     }
 
     #[test]
+    fn the_main_url_keeps_the_server_and_clears_the_standalone_route() {
+        for port in [8731, 49152] {
+            let base = Url::parse(&format!(
+                "http://127.0.0.1:{port}/dashboard.html?standalone#/worktree/%2Fa%2Fb"
+            ))
+            .unwrap();
+            assert_eq!(
+                main_url(base).as_str(),
+                format!("http://127.0.0.1:{port}/dashboard.html")
+            );
+        }
+    }
+
+    #[test]
     fn finds_the_window_with_the_same_root() {
         let roots = HashMap::from([
             ("board-1".to_string(), "/worktree/%2Fa".to_string()),
@@ -315,6 +352,12 @@ mod tests {
                 .permissions
                 .iter()
                 .any(|p| p.identifier().get() == "allow-open-window")
+        );
+        assert!(
+            capability
+                .permissions
+                .iter()
+                .any(|p| p.identifier().get() == "allow-open-main-window")
         );
         assert!(
             capability
