@@ -176,6 +176,9 @@ function dashboard({ script = source, pageWidth = 1200, pageLeft = 0, splitterWi
     getElementById: (id) => elements.get(id) ?? null,
     createElement,
     documentElement: { style: {} },
+    visibilityState: 'visible',
+    focused: true,
+    hasFocus() { return this.focused },
   })
   const window = new Target()
   const context = vm.createContext({
@@ -2114,19 +2117,20 @@ const worktreeHashOf = (path) => `#/worktree/${encodeURIComponent(path)}`
 // Returns a session `id` of `o/r` in the worktree `worktree`.
 const sessionAt = (id, worktree) => ({ ...session, org: 'o', repo: 'r', id, dir: `api/file/o/r/main/${id}/`, worktree })
 
-// Returns a dashboard on the worktree page of `path` after one poll of an api that lists `sessions`, answers `api/repos` with `reposReply()` and `api/terminals` with `terminalsReply()`, with fake terminal classes, the instances they create and the URLs it posts.
+// Returns a dashboard on the worktree page of `path` after one poll of an api that lists `sessions`, answers `api/repos` with `reposReply()`, `api/terminals` with `terminalsReply()` and each post with `postReply()`, with fake terminal classes, the instances they create and the URLs it posts.
 async function worktreeApp(
   path = worktreePath,
   sessions = [],
   reposReply = () => response(JSON.stringify(worktreeRepos)),
   terminalsReply = () => response('', false, { status: 404 }),
+  postReply = () => response('', true, { status: 204 }),
 ) {
   const posts = []
   const app = dashboard({
     fetcher: (url, options) => {
       if (options?.method === 'POST') {
         posts.push(options.body === undefined ? url : `${url} ${options.body}`)
-        return response('', true, { status: 204 })
+        return postReply()
       }
       if (url === 'api/repos') return reposReply()
       if (url === 'api/terminals') return terminalsReply()
@@ -2641,6 +2645,219 @@ test('a shell tab shows the command it runs until a user names it', async () => 
   assert.deepEqual(posts, [], 'an unchanged name posts nothing')
 })
 
+test('a polled terminal state reaches its tab', async () => {
+  let running = [{ ...shellOnServer, state: 'idle' }]
+  const { app } = await worktreeApp(worktreePath, [], undefined, () => terminalsReply(running))
+  const [tab] = tabsOf(app)
+  assert.equal(tab.state, 'idle')
+
+  running = [{ ...shellOnServer, state: 'asleep' }]
+  await app.run('poll()')
+  assert.equal(tab.state, 'busy', 'an unknown state is busy')
+
+  clickTab(app, 'add')
+  assert.equal(tabsOf(app)[1].state, 'busy', 'a new tab is busy')
+})
+
+test('a shown tab in attention posts seen and turns idle', async () => {
+  const { app, posts } = await runningApp([{ ...shellOnServer, state: 'attention' }])
+  await settle()
+
+  assert.deepEqual(posts, ['api/terminals/7/seen'])
+  assert.equal(tabsOf(app)[0].state, 'idle')
+})
+
+test('a hidden tab in attention stays and posts nothing', async () => {
+  let running = []
+  const { app, posts } = await worktreeApp(worktreePath, [], undefined, () => terminalsReply(running))
+  navigate(app, '#/')
+
+  running = [{ ...shellOnServer, state: 'attention' }]
+  await app.run('poll()')
+  await settle()
+  assert.deepEqual(posts, [])
+  assert.equal(tabsOf(app)[0].state, 'attention')
+})
+
+test("an active tab in attention on another worktree's page stays and posts nothing", async () => {
+  const { app, posts } = await runningApp([shellOnServer, { ...mainOnServer, state: 'attention' }])
+  await settle()
+
+  const [lazygit] = tabsOf(app, mainPath)
+  assert.equal(app.run(`worktreeTerms.get(${JSON.stringify(mainPath)}).active`), lazygit.id)
+  assert.deepEqual(posts, [])
+  assert.equal(lazygit.state, 'attention')
+})
+
+test('a shown tab in an unfocused window stays and posts nothing', async () => {
+  let running = []
+  const { app, posts } = await worktreeApp(worktreePath, [], undefined, () => terminalsReply(running))
+  app.context.document.focused = false
+
+  running = [{ ...shellOnServer, state: 'attention' }]
+  await app.run('poll()')
+  await settle()
+  assert.deepEqual(posts, [])
+  assert.equal(tabsOf(app)[0].state, 'attention')
+})
+
+test('a shown tab in a hidden document stays and posts nothing', async () => {
+  let running = []
+  const { app, posts } = await worktreeApp(worktreePath, [], undefined, () => terminalsReply(running))
+  app.context.document.visibilityState = 'hidden'
+
+  running = [{ ...shellOnServer, state: 'attention' }]
+  await app.run('poll()')
+  await settle()
+  assert.deepEqual(posts, [])
+  assert.equal(tabsOf(app)[0].state, 'attention')
+})
+
+test('an away tab in attention stays and posts nothing', async () => {
+  let running = [shellOnServer]
+  const { app, posts, sockets } = await worktreeApp(worktreePath, [], undefined, () => terminalsReply(running))
+  sockets[0].onclose({ code: 4001, reason: 'attached in another window' })
+
+  running = [{ ...shellOnServer, state: 'attention' }]
+  await app.run('poll()')
+  await settle()
+  assert.deepEqual(posts, [])
+  assert.equal(tabsOf(app)[0].state, 'attention')
+})
+
+test('a failed tab in attention stays and posts nothing', async () => {
+  let running = [shellOnServer]
+  const { app, posts, sockets } = await worktreeApp(worktreePath, [], undefined, () => terminalsReply(running))
+  sockets[0].onclose({ code: 1006, reason: '' })
+
+  running = [{ ...shellOnServer, state: 'attention' }]
+  await app.run('poll()')
+  await settle()
+  assert.deepEqual(posts, [])
+  assert.equal(tabsOf(app)[0].state, 'attention')
+})
+
+test('selecting a tab in attention posts seen', async () => {
+  const { app, posts } = await runningApp([shellOnServer, { ...claudeOnServer, state: 'attention' }])
+  const [, claude] = tabsOf(app)
+  await settle()
+  assert.deepEqual(posts, [], 'a tab that is not active stays')
+
+  clickTab(app, 'select', claude.id)
+  await settle()
+  assert.deepEqual(posts, ['api/terminals/8/seen'])
+  assert.equal(claude.state, 'idle')
+})
+
+test('opening the worktree page posts seen for its active tab in attention', async () => {
+  let running = []
+  const { app, posts } = await worktreeApp(worktreePath, [], undefined, () => terminalsReply(running))
+  navigate(app, '#/')
+  running = [{ ...shellOnServer, state: 'attention' }]
+  await app.run('poll()')
+
+  navigate(app, worktreeHashOf(worktreePath))
+  await settle()
+  assert.deepEqual(posts, ['api/terminals/7/seen'])
+  assert.equal(tabsOf(app)[0].state, 'idle')
+})
+
+test('the window focus posts seen for the shown tab in attention', async () => {
+  let running = []
+  const { app, posts } = await worktreeApp(worktreePath, [], undefined, () => terminalsReply(running))
+  app.context.document.focused = false
+  running = [{ ...shellOnServer, state: 'attention' }]
+  await app.run('poll()')
+
+  app.context.document.focused = true
+  app.window.dispatch('focus')
+  await settle()
+  assert.deepEqual(posts, ['api/terminals/7/seen'])
+  assert.equal(tabsOf(app)[0].state, 'idle')
+})
+
+test('a seen post that gets 404 tells nothing', async () => {
+  const running = () => terminalsReply([{ ...shellOnServer, state: 'attention' }])
+  const { app, posts } = await worktreeApp(worktreePath, [], undefined, running, () => response('no such terminal', false, { status: 404 }))
+  await settle()
+
+  assert.deepEqual(posts, ['api/terminals/7/seen'])
+  assert.notEqual(app.elements.get('modal').open, true)
+})
+
+test('a seen post that fails tells nothing', async () => {
+  const running = () => terminalsReply([{ ...shellOnServer, state: 'attention' }])
+  const { app, posts } = await worktreeApp(worktreePath, [], undefined, running, () => response('boom', false))
+  await settle()
+
+  assert.deepEqual(posts, ['api/terminals/7/seen'])
+  assert.notEqual(app.elements.get('modal').open, true)
+})
+
+const codexOnServer = { id: 10, path: worktreePath, program: 'codex', name: 'codex' }
+
+// Returns the state of the worktree at `path`.
+const worktreeStateOf = (app, path = worktreePath) => app.run(`worktreeState(${JSON.stringify(path)})`)
+
+test('the worktree state takes attention over busy over idle', async () => {
+  let running = [{ ...shellOnServer, state: 'idle' }, { ...claudeOnServer, state: 'busy' }]
+  const { app } = await worktreeApp(worktreePath, [], undefined, () => terminalsReply(running))
+  navigate(app, '#/')
+  assert.equal(worktreeStateOf(app), 'busy')
+  assert.equal(app.run('anyAttention()'), false)
+
+  running = [...running, { ...codexOnServer, state: 'attention' }]
+  await app.run('poll()')
+  assert.equal(worktreeStateOf(app), 'attention')
+  assert.equal(app.run('anyAttention()'), true)
+
+  running = [{ ...shellOnServer, state: 'idle' }, { ...claudeOnServer, state: 'idle' }]
+  await app.run('poll()')
+  assert.equal(worktreeStateOf(app), 'idle')
+  assert.equal(app.run('anyAttention()'), false)
+
+  running = []
+  await app.run('poll()')
+  assert.equal(worktreeStateOf(app), null)
+  assert.equal(worktreeStateOf(app, mainPath), null)
+})
+
+test('the repos row colors its square by worktree state', async () => {
+  let running = [shellOnServer, { ...claudeOnServer, state: 'attention' }]
+  const { app } = await worktreeApp(worktreePath, [], undefined, () => terminalsReply(running))
+  const list = () => app.elements.get('repo-list').innerHTML
+  navigate(app, '#/')
+
+  assert.match(list(), /<span class="term-attention" title="needs you">▣ 2<\/span>/)
+  assert.equal(worktreeRows(app)[1].text, "feature o/r/work tree's 0 sessions · ▣ 2")
+
+  running = [{ ...shellOnServer, state: 'idle' }, { ...claudeOnServer, state: 'idle' }]
+  await app.run('poll()')
+  assert.match(list(), /<span class="term-idle" title="idle">▣ 2<\/span>/)
+
+  running = [shellOnServer, { ...claudeOnServer, state: 'idle' }]
+  await app.run('poll()')
+  assert.match(list(), /<span class="term-busy" title="busy">▣ 2<\/span>/)
+
+  assert.match(html, /\.term-attention \{ color: var\(--critical\); \}/)
+  assert.match(html, /\.term-idle \{ color: var\(--accent\); \}/)
+  assert.match(html, /\.term-busy \{ color: var\(--ink-2\); \}/)
+})
+
+// Returns each tab of the tab strip as its name and the markup of its dot, or null.
+const tabDots = (app) => [...app.elements.get('term-tabs').innerHTML.matchAll(/class="term-name"[^>]*>(<span class="term-dot[^"]*"[^>]*>●<\/span>)?([^<]*)<\/button>/g)]
+  .map((match) => [match[2], match[1] ?? null])
+
+test('the tab strip shows a dot for attention and idle, none for busy', async () => {
+  const { app } = await runningApp([shellOnServer, { ...claudeOnServer, state: 'attention' }, { ...codexOnServer, state: 'idle' }])
+
+  assert.deepEqual(tabDots(app), [
+    ['shell 4', null],
+    ['claude', '<span class="term-dot term-attention" title="needs you">●</span>'],
+    ['codex', '<span class="term-dot term-idle" title="idle">●</span>'],
+  ])
+})
+
 test('Shift+Enter sends Escape and Return to a worktree terminal', async () => {
   const { sockets, terminals } = await runningApp([shellOnServer])
   const key = (type, modifiers) => ({ type, key: 'Enter', shiftKey: true, altKey: false, ctrlKey: false, metaKey: false, ...modifiers })
@@ -2660,7 +2877,7 @@ test('the terminals page lists the tabs of every worktree', async () => {
 
   navigate(app, '#/terminals')
   const page = app.elements.get('page').innerHTML
-  assert.deepEqual([...page.matchAll(/<h2 class="org">([^<]*)<\/h2>/g)].map((match) => unescapeHtml(match[1])), [
+  assert.deepEqual([...page.matchAll(/<h2 class="org">([\s\S]*?)<\/h2>/g)].map((match) => textOf(match[1])), [
     "feature o/r/work tree's",
     'main o/r/main',
   ])
@@ -2668,6 +2885,48 @@ test('the terminals page lists the tabs of every worktree', async () => {
     `${worktreeHashOf(worktreePath)} shell 4 shell`,
     `${worktreeHashOf(worktreePath)} claude claude · in another window`,
     `${worktreeHashOf(mainPath)} lazygit lazygit`,
+  ])
+})
+
+test('the terminals page labels attention and idle rows', async () => {
+  const { app } = await runningApp([{ ...shellOnServer, state: 'idle' }, { ...claudeOnServer, state: 'attention' }, mainOnServer])
+
+  navigate(app, '#/terminals')
+  const page = app.elements.get('page').innerHTML
+  assert.deepEqual([...page.matchAll(/<span class="label">([\s\S]*?)<\/span>\s*<\/a>/g)].map((match) => unescapeHtml(match[1])), [
+    '<span class="term-idle" title="idle">shell · idle</span>',
+    '<span class="term-attention" title="needs you">claude · needs you</span>',
+    'lazygit',
+  ])
+  assert.deepEqual([...page.matchAll(/<h2 class="org">([\s\S]*?)<\/h2>/g)].map((match) => unescapeHtml(match[1])), [
+    `<span class="term-attention" title="needs you">feature o/r/work tree's</span>`,
+    '<span class="term-busy" title="busy">main o/r/main</span>',
+  ])
+})
+
+// Returns the markup of each row label of the terminals page.
+const terminalLabels = (app) => [...app.elements.get('page').innerHTML.matchAll(/<span class="label">([\s\S]*?)<\/span>\s*<\/a>/g)]
+  .map((match) => unescapeHtml(match[1]))
+
+test('the terminals page labels an away tab in attention', async () => {
+  const { app } = await runningApp([shellOnServer, { ...claudeOnServer, state: 'attention' }])
+  tabsOf(app)[1].away = true
+
+  navigate(app, '#/terminals')
+  assert.deepEqual(terminalLabels(app), [
+    'shell',
+    '<span class="term-attention" title="needs you">claude · in another window · needs you</span>',
+  ])
+})
+
+test('the terminals page labels an idle failed tab', async () => {
+  const { app } = await runningApp([{ ...shellOnServer, state: 'idle' }, claudeOnServer])
+  tabsOf(app)[0].failed = 'the connection closed'
+
+  navigate(app, '#/terminals')
+  assert.deepEqual(terminalLabels(app), [
+    '<span class="term-idle" title="idle">the connection closed · idle</span>',
+    'claude',
   ])
 })
 
@@ -5197,11 +5456,11 @@ test('each shortcut opens the pop-up on its tab', async () => {
 test('jumpRows lists each main checkout, then its worktrees', async () => {
   const app = await reposApp(jumpRepos)
   assert.deepEqual(plain(app.run('jumpRows()')), [
-    { path: sdkMain, kind: 'branch', label: 'akka/sdk/main', branch: 'main', hash: prsHashOf(sdkMain), terminals: false },
-    { path: pathA, kind: 'worktree', label: 'akka/sdk/alpha', branch: 'alpha', hash: worktreeHashOf(pathA), terminals: false },
-    { path: pathB, kind: 'worktree', label: 'akka/sdk/beta', branch: 'beta', hash: worktreeHashOf(pathB), terminals: false },
-    { path: orMain, kind: 'branch', label: 'o/r/main', branch: 'main', hash: prsHashOf(orMain), terminals: false },
-    { path: pathC, kind: 'worktree', label: 'o/r/gamma', branch: 'gamma', hash: worktreeHashOf(pathC), terminals: false },
+    { path: sdkMain, kind: 'branch', label: 'akka/sdk/main', branch: 'main', hash: prsHashOf(sdkMain), terminals: false, state: null },
+    { path: pathA, kind: 'worktree', label: 'akka/sdk/alpha', branch: 'alpha', hash: worktreeHashOf(pathA), terminals: false, state: null },
+    { path: pathB, kind: 'worktree', label: 'akka/sdk/beta', branch: 'beta', hash: worktreeHashOf(pathB), terminals: false, state: null },
+    { path: orMain, kind: 'branch', label: 'o/r/main', branch: 'main', hash: prsHashOf(orMain), terminals: false, state: null },
+    { path: pathC, kind: 'worktree', label: 'o/r/gamma', branch: 'gamma', hash: worktreeHashOf(pathC), terminals: false, state: null },
   ])
 })
 
@@ -5414,6 +5673,67 @@ test('a main checkout with terminal tabs shows no ▣ and has no row in Terminal
 
   press(app, 't', shift)
   assert.equal(jumpText(app), 'No match.')
+})
+
+test('the pop-up row and the bar item color their square', async () => {
+  let running = [shellOnServer, { ...claudeOnServer, state: 'attention' }]
+  const { app } = await worktreeApp(worktreePath, [], () => response(JSON.stringify(linkedRepos)), () => terminalsReply(running))
+  const bar = () => app.elements.get('worktree-bar').innerHTML
+  const list = () => app.elements.get('jump-list').innerHTML
+  press(app, 't', shift)
+
+  assert.match(bar(), /<span class="term-attention" title="needs you">▣<\/span> Terminal<\/a>/)
+  assert.match(list(), /<span class="jump-term term-attention" title="needs you">▣<\/span>/)
+  assert.equal(barLinks(app)[0].text, '▣ Terminal')
+  assert.equal(jumpText(app), "o/r/work tree's ▣")
+
+  running = [{ ...shellOnServer, state: 'idle' }, { ...claudeOnServer, state: 'idle' }]
+  await app.run('poll()')
+  assert.match(bar(), /<span class="term-idle" title="idle">▣<\/span> Terminal<\/a>/)
+  assert.match(list(), /<span class="jump-term term-idle" title="idle">▣<\/span>/)
+
+  running = [shellOnServer, { ...claudeOnServer, state: 'idle' }]
+  await app.run('poll()')
+  assert.match(bar(), /<span class="term-busy" title="busy">▣<\/span> Terminal<\/a>/)
+  assert.match(list(), /<span class="jump-term term-busy" title="busy">▣<\/span>/)
+})
+
+test('the header and pop-up Terminals tabs show ⚠ while a tab needs attention', async () => {
+  let running = [shellOnServer, { ...claudeOnServer, state: 'attention' }]
+  const { app } = await worktreeApp(worktreePath, [], undefined, () => terminalsReply(running))
+  const alert = '<span class="term-attention" title="needs you">⚠</span>'
+  const headerText = () => textOf(app.elements.get('tabs').innerHTML)
+  press(app, 'k', cmd)
+
+  assert.ok(app.elements.get('tabs').innerHTML.includes(`>Terminals ${alert}</a>`))
+  assert.ok(app.elements.get('jump-tabs').innerHTML.includes(`>Terminals ${alert}</button>`))
+  assert.equal(headerText(), 'Repos Sessions Terminals ⚠')
+  assert.equal(jumpTabsText(app), 'All Branches Worktrees Terminals ⚠')
+
+  running = [shellOnServer, { ...claudeOnServer, state: 'idle' }]
+  await app.run('poll()')
+  assert.equal(headerText(), 'Repos Sessions Terminals')
+  assert.equal(jumpTabsText(app), 'All Branches Worktrees Terminals')
+})
+
+test('closing a tab in attention drops the red marks', async () => {
+  const { app } = await runningApp([shellOnServer, { ...claudeOnServer, state: 'attention' }])
+  const [, claude] = tabsOf(app)
+  const parts = ['tabs', 'jump-tabs', 'jump-list', 'worktree-bar', 'term-tabs']
+  const marked = () => parts.filter((id) => /term-attention|⚠/.test(app.elements.get(id).innerHTML))
+  press(app, 'k', cmd)
+  assert.deepEqual(marked(), parts)
+
+  clickTab(app, 'close', claude.id)
+  app.run('render()')
+  assert.deepEqual(marked(), [])
+
+  press(app, 'Escape')
+  navigate(app, '#/')
+  assert.doesNotMatch(app.elements.get('repo-list').innerHTML, /term-attention/)
+
+  navigate(app, '#/terminals')
+  assert.doesNotMatch(app.elements.get('page').innerHTML, /term-attention/)
 })
 
 test('Cmd+K opens the pop-up from a terminal tab and from the editor', async () => {

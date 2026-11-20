@@ -22,16 +22,42 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{Value, json};
 
 use super::api::{json_response, same_origin, segments};
+use super::attention::Scanner;
 use super::http::{Request, Response};
 use super::pty::{Program, Pty, command_names};
 
 /// The most output bytes a terminal keeps for its next viewer.
 const KEPT_OUTPUT: usize = 256 * 1024;
+
+/// How long a terminal stays busy after its last output.
+pub const IDLE_AFTER: Duration = Duration::from_secs(5);
+
+/// Whether a terminal needs the user, wrote output lately, or wrote none.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum State {
+    /// The program rang the bell or sent a notification that no one has seen.
+    Attention,
+    /// The program wrote output within the idle delay.
+    Busy,
+    /// The program wrote no output within the idle delay.
+    Idle,
+}
+
+impl State {
+    /// The name of the state in the API.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            State::Attention => "attention",
+            State::Busy => "busy",
+            State::Idle => "idle",
+        }
+    }
+}
 
 /// What a terminal sends to its viewer.
 #[derive(Debug, PartialEq)]
@@ -51,11 +77,14 @@ pub struct Terminal {
     next_viewer: AtomicU64,
 }
 
-/// The kept output, the viewer and whether the program ended.
+/// The kept output, the viewer, whether the program ended, the signal scanner, the attention flag and the time of the last output.
 struct Screen {
     output: VecDeque<u8>,
     viewer: Option<(u64, Sender<Event>)>,
     ended: bool,
+    scanner: Scanner,
+    attention: bool,
+    last_output: Instant,
 }
 
 impl Terminal {
@@ -75,6 +104,9 @@ impl Terminal {
                 output: VecDeque::new(),
                 viewer: None,
                 ended: false,
+                scanner: Scanner::default(),
+                attention: false,
+                last_output: Instant::now(),
             }),
             next_viewer: AtomicU64::new(1),
         });
@@ -103,9 +135,14 @@ impl Terminal {
         }
     }
 
-    /// Adds `chunk` to the kept output and sends it to the viewer.
+    /// Notes the time and any signal in `chunk`, adds it to the kept output and sends it to the viewer.
     fn keep(&self, chunk: Vec<u8>) {
         let mut screen = lock(&self.screen);
+
+        screen.last_output = Instant::now();
+        if screen.scanner.feed(&chunk) {
+            screen.attention = true;
+        }
 
         screen.output.extend(&chunk);
         let excess = screen.output.len().saturating_sub(KEPT_OUTPUT);
@@ -167,6 +204,24 @@ impl Terminal {
         lock(&self.screen).ended
     }
 
+    /// The state of the terminal. It is idle after `idle_after` without output.
+    pub fn state(&self, idle_after: Duration) -> State {
+        let screen = lock(&self.screen);
+
+        if screen.attention {
+            State::Attention
+        } else if screen.last_output.elapsed() < idle_after {
+            State::Busy
+        } else {
+            State::Idle
+        }
+    }
+
+    /// Clears the attention flag.
+    pub fn seen(&self) {
+        lock(&self.screen).attention = false;
+    }
+
     /// Writes `bytes` to the program's terminal input.
     pub fn write(&self, bytes: &[u8]) -> io::Result<()> {
         match lock(&self.pty).as_mut() {
@@ -221,6 +276,7 @@ impl Drop for Viewer {
 /// The terminals that run in worktrees, by id.
 pub struct Terminals {
     entries: Mutex<Entries>,
+    idle_after: Duration,
 }
 
 /// The last id given and the open terminals.
@@ -230,18 +286,9 @@ struct Entries {
 }
 
 impl Default for Terminals {
-    /// No terminals, with ids that start at the current time in milliseconds.
+    /// No terminals, with the idle delay `IDLE_AFTER`.
     fn default() -> Self {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |elapsed| elapsed.as_millis());
-
-        Terminals {
-            entries: Mutex::new(Entries {
-                last_id: u64::try_from(now).unwrap_or(0),
-                open: BTreeMap::new(),
-            }),
-        }
+        Terminals::with_idle_after(IDLE_AFTER)
     }
 }
 
@@ -262,6 +309,21 @@ impl Entries {
 }
 
 impl Terminals {
+    /// No terminals, with ids that start at the current time in milliseconds. A terminal is idle after `idle_after` without output.
+    pub fn with_idle_after(idle_after: Duration) -> Terminals {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_millis());
+
+        Terminals {
+            entries: Mutex::new(Entries {
+                last_id: u64::try_from(now).unwrap_or(0),
+                open: BTreeMap::new(),
+            }),
+            idle_after,
+        }
+    }
+
     /// Runs `program` in `dir` as a new terminal named `name`, and returns its id and the terminal. `kind` is the program name the list shows.
     pub fn open(
         &self,
@@ -301,7 +363,8 @@ impl Terminals {
             .map(|entry| Arc::clone(&entry.terminal))
     }
 
-    /// The running terminals in id order, as `{"terminals": [{"id", "path", "program", "name", "renamed", "command"}]}`.
+    /// The running terminals in id order, as `{"terminals": [{"id", "path", "program", "name", "renamed", "state", "command"}]}`.
+    /// `state` is `attention`, `busy` or `idle`.
     /// `command` is the name of the foreground job, or null when the program is in the foreground.
     pub fn to_json(&self) -> Value {
         let mut entries = lock(&self.entries);
@@ -317,6 +380,7 @@ impl Terminals {
                     "program": entry.program,
                     "name": entry.name,
                     "renamed": entry.renamed,
+                    "state": entry.terminal.state(self.idle_after).as_str(),
                 });
                 (row, entry.terminal.foreground())
             })
@@ -350,6 +414,15 @@ impl Terminals {
             }
             None => false,
         }
+    }
+
+    /// Clears the attention flag of terminal `id`, and returns whether it runs.
+    pub fn seen(&self, id: u64) -> bool {
+        let Some(terminal) = self.get(id) else {
+            return false;
+        };
+        terminal.seen();
+        true
     }
 
     /// Kills terminal `id`, and returns whether it was open.
@@ -389,7 +462,7 @@ impl Terminals {
     }
 }
 
-/// Answers `POST /api/terminals/<id>/kill` and `POST /api/terminals/<id>/name` with `terminals`.
+/// Answers `POST /api/terminals/<id>/kill`, `/name` and `/seen` with `terminals`.
 pub fn post(terminals: &Terminals, request: &Request) -> Response {
     if !same_origin(request) {
         return Response::error(403);
@@ -409,6 +482,7 @@ pub fn post(terminals: &Terminals, request: &Request) -> Response {
             Some(name) => terminals.rename(id, &name),
             None => return Response::error(400),
         },
+        "seen" => terminals.seen(id),
         _ => return Response::error(404),
     };
 
@@ -514,6 +588,29 @@ mod tests {
         }
     }
 
+    /// Waits up to 5 s for `terminal` to need attention.
+    fn assert_attention(terminal: &Terminal) {
+        let deadline = Instant::now() + TIMEOUT;
+
+        while terminal.state(IDLE_AFTER) != State::Attention {
+            assert!(Instant::now() < deadline, "the terminal needs no attention");
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// A same-origin `POST` request to `target`.
+    fn post_request(target: &str) -> Request {
+        Request {
+            method: "POST".to_string(),
+            target: target.to_string(),
+            headers: vec![
+                ("Host".to_string(), "127.0.0.1:1".to_string()),
+                ("Origin".to_string(), "http://127.0.0.1:1".to_string()),
+            ],
+            body: Vec::new(),
+        }
+    }
+
     #[test]
     fn a_dropped_viewer_leaves_the_program_running() {
         let dir = tempfile::tempdir().unwrap();
@@ -597,6 +694,72 @@ mod tests {
     }
 
     #[test]
+    fn a_terminal_goes_busy_then_idle_then_attention() {
+        let dir = tempfile::tempdir().unwrap();
+        let program = sh("read line; printf '\\a'; exec sleep 60");
+        let terminal = Terminal::start(&program, dir.path(), 80, 24).unwrap();
+        let idle_after = Duration::from_millis(200);
+
+        assert_eq!(terminal.state(idle_after), State::Busy);
+
+        thread::sleep(Duration::from_millis(400));
+        assert_eq!(terminal.state(idle_after), State::Idle);
+
+        terminal.write(b"\r").unwrap();
+        assert_attention(&terminal);
+
+        terminal.kill();
+    }
+
+    #[test]
+    fn new_output_makes_an_idle_terminal_busy() {
+        let dir = tempfile::tempdir().unwrap();
+        let terminal = Terminal::start(&sh("exec cat"), dir.path(), 80, 24).unwrap();
+        let viewer = terminal.view();
+        let idle_after = Duration::from_millis(200);
+
+        let deadline = Instant::now() + TIMEOUT;
+        while terminal.state(idle_after) != State::Idle {
+            assert!(Instant::now() < deadline, "the terminal is not idle");
+            thread::sleep(Duration::from_millis(20));
+        }
+
+        terminal.write(b"hi\r").unwrap();
+        read_until(&viewer, "hi");
+
+        assert_eq!(terminal.state(idle_after), State::Busy);
+        terminal.kill();
+    }
+
+    #[test]
+    fn seen_clears_attention() {
+        let dir = tempfile::tempdir().unwrap();
+        let program = sh("printf '\\a'; exec sleep 60");
+        let terminal = Terminal::start(&program, dir.path(), 80, 24).unwrap();
+        assert_attention(&terminal);
+
+        terminal.seen();
+
+        assert_ne!(terminal.state(IDLE_AFTER), State::Attention);
+        terminal.kill();
+    }
+
+    #[test]
+    fn input_does_not_clear_attention() {
+        let dir = tempfile::tempdir().unwrap();
+        let program = sh("printf '\\a'; exec sleep 60");
+        let terminal = Terminal::start(&program, dir.path(), 80, 24).unwrap();
+        let viewer = terminal.view();
+        assert_attention(&terminal);
+
+        terminal.write(b"x").unwrap();
+        read_until(&viewer, "x");
+
+        assert_eq!(terminal.state(IDLE_AFTER), State::Attention);
+        terminal.kill();
+    }
+
+    #[test]
     fn the_list_shows_open_terminals_in_id_order() {
         let dir = tempfile::tempdir().unwrap();
         let terminals = Terminals::default();
@@ -614,8 +777,8 @@ mod tests {
         assert_eq!(
             terminals.to_json(),
             json!({ "terminals": [
-                { "id": first, "path": path, "program": "shell", "name": "build", "renamed": true, "command": null },
-                { "id": second, "path": path, "program": "claude", "name": "claude", "renamed": false, "command": null },
+                { "id": first, "path": path, "program": "shell", "name": "build", "renamed": true, "state": "busy", "command": null },
+                { "id": second, "path": path, "program": "claude", "name": "claude", "renamed": false, "state": "busy", "command": null },
             ]})
         );
 
@@ -704,6 +867,30 @@ mod tests {
 
         assert!(terminals.get(id).is_none());
         assert_eq!(terminals.to_json(), json!({ "terminals": [] }));
+    }
+
+    #[test]
+    fn seen_is_false_for_an_unknown_terminal() {
+        assert!(!Terminals::default().seen(1));
+    }
+
+    #[test]
+    fn the_seen_route_clears_attention() {
+        let dir = tempfile::tempdir().unwrap();
+        let terminals = Terminals::with_idle_after(Duration::ZERO);
+        let program = sh("printf '\\a'; exec sleep 60");
+
+        let (id, terminal) = terminals
+            .open(dir.path(), "shell", &program, "shell 1", 80, 24)
+            .unwrap();
+        assert_attention(&terminal);
+
+        let request = post_request(&format!("/api/terminals/{id}/seen"));
+        let response = post(&terminals, &request);
+
+        assert_eq!(response.status, 204);
+        assert_eq!(terminals.to_json()["terminals"][0]["state"], "idle");
+        terminals.kill_all();
     }
 
     #[test]

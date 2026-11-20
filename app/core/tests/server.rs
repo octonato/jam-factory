@@ -1131,6 +1131,7 @@ fn terminal_posts_check_origin_id_action_and_name() {
     let foreign = [("Origin", "http://evil")];
 
     assert_eq!(post(port, "/api/terminals/1/kill").status, 404);
+    assert_eq!(post(port, "/api/terminals/1/seen").status, 404);
     assert_eq!(post(port, "/api/terminals/x/kill").status, 404);
     assert_eq!(post(port, "/api/terminals/1/stop").status, 404);
     assert_eq!(post(port, "/api/terminals/1/name").status, 400);
@@ -1140,6 +1141,10 @@ fn terminal_posts_check_origin_id_action_and_name() {
     );
     assert_eq!(
         request(port, "POST", "/api/terminals/1/kill", &foreign).status,
+        403
+    );
+    assert_eq!(
+        request(port, "POST", "/api/terminals/1/seen", &foreign).status,
         403
     );
 }

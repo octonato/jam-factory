@@ -15,6 +15,7 @@
 //! A local HTTP server for the factory store and the embedded dashboard.
 
 pub mod api;
+pub mod attention;
 pub mod dashboard;
 #[cfg(test)]
 mod fake_store;

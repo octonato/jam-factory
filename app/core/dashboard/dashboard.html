@@ -607,6 +607,10 @@
   .term-tabs .term-close { padding-left: 0; }
   .term-tabs .term-add { border: 1px solid var(--line); border-radius: 6px; }
   .term-tab.failed .term-name { color: var(--critical); }
+  .term-attention { color: var(--critical); }
+  .term-idle { color: var(--accent); }
+  .term-busy { color: var(--ink-2); }
+  .term-dot { margin-right: 4px; font-size: 0.7em; }
 
   .term-tabs .term-rename {
     width: 12ch;
@@ -1407,6 +1411,8 @@ const TABS = [
   { kind: 'sessions', label: 'Sessions', href: '#/sessions' },
   { kind: 'terminals', label: 'Terminals', href: '#/terminals' },
 ]
+// The label of each terminal state.
+const TERM_STATES = { attention: 'needs you', busy: 'busy', idle: 'idle' }
 // The close code of a terminal socket whose terminal another window took.
 const TAKEN_CODE = 4001
 // The bytes a terminal tab sends for Shift+Enter: Escape then Return.
@@ -2001,11 +2007,11 @@ function onCardAction(event) {
   runAction(session, button.dataset.action)
 }
 
-// Returns the row of `worktree`, outlined when `selected`: a link to its page with its branch or short sha, its short path, its session count and its open terminal count.
+// Returns the row of `worktree`, outlined when `selected`: a link to its page with its branch or short sha, its short path, its session count and its open terminal count in the color of its state.
 function worktreeRowHtml(worktree, selected) {
   const count = sessionsOf(worktree.path).length
   const terms = worktreeTerms.get(worktree.path)?.tabs.length ?? 0
-  const termCount = terms > 0 ? ` · ▣ ${terms}` : ''
+  const termCount = terms > 0 ? ` · ${termMarkHtml(worktreeState(worktree.path), `▣ ${terms}`)}` : ''
   return `
     <div class="row worktree${selected ? ' selected' : ''}">
       <a class="body" href="${escape(worktreeHash(worktree.path))}">
@@ -2182,14 +2188,21 @@ function isSelectedTerm(path, tab) {
   return selectedTerm?.path === path && selectedTerm.id === tab.id
 }
 
-// Returns what the terminals page says about `tab`: its failure, its program in another window, or its program.
-function terminalLabel(tab) {
+// Returns what the terminals page says about `tab` before its state: its failure, its program in another window, or its program.
+function terminalBaseLabel(tab) {
   if (tab.failed !== null) return tab.failed
   if (tab.away) return `${tab.program} · in another window`
   return tab.program
 }
 
-// Returns the terminals page list: one group per worktree with tabs, under its branch and short path, with one link per tab to its worktree page.
+// Returns the HTML of the terminals page label of `tab`: its base label, then its state in the color of its state unless busy.
+function terminalLabel(tab) {
+  const label = terminalBaseLabel(tab)
+  if (tab.state === 'busy') return escape(label)
+  return termMarkHtml(tab.state, escape(`${label} · ${TERM_STATES[tab.state]}`))
+}
+
+// Returns the terminals page list: one group per worktree with tabs, under its branch and short path in the color of its state, with one link per tab to its worktree page.
 function terminalsHtml() {
   const groups = [...worktreeTerms].filter(([, terms]) => terms.tabs.length > 0)
   if (groups.length === 0) return '<p class="empty">No terminals run.</p>'
@@ -2202,13 +2215,13 @@ function terminalsHtml() {
       <div class="row worktree${isSelectedTerm(path, tab) ? ' selected' : ''}">
         <a class="body" href="${escape(worktreeHash(path))}" data-path="${escape(path)}" data-tab="${tab.id}">
           <span class="name"><span class="id">${escape(tabTitle(tab))}</span></span>
-          <span class="label">${escape(terminalLabel(tab))}</span>
+          <span class="label">${terminalLabel(tab)}</span>
         </a>
       </div>`).join('')
 
     return `
       <section class="org-group">
-        <h2 class="org">${escape(title)}</h2>
+        <h2 class="org">${termMarkHtml(worktreeState(path), escape(title))}</h2>
         <div class="rows">${rows}</div>
       </section>`
   }).join('')
@@ -2390,11 +2403,11 @@ function barItems(path, selected) {
   return [terminal, ...sessions.map((session) => ({ hash: sessionHref(session), session }))]
 }
 
-// Returns the bar of the worktree at `path`: one link per item, with the item of `selected` as the current page.
+// Returns the bar of the worktree at `path`: one link per item, with the item of `selected` as the current page. The `▣` of the Terminal item takes the color of the worktree state.
 function worktreeBarHtml(path, selected) {
   return barItems(path, selected).map(({ hash, session }) => {
     const current = session?.dir === selected?.dir ? ' aria-current="page"' : ''
-    if (session === null) return `<a class="bar-item" href="${escape(hash)}"${current}>▣ Terminal</a>`
+    if (session === null) return `<a class="bar-item" href="${escape(hash)}"${current}>${termMarkHtml(worktreeState(path), '▣')} Terminal</a>`
 
     const tone = tint(session)
     return `
@@ -2407,10 +2420,12 @@ function worktreeBarHtml(path, selected) {
 }
 
 // Returns the tab strip of `terms`: one tab per terminal with its close button, then the `+` button. Tab `renamingId` shows its name in a text field.
+// A tab in attention or idle shows a dot of its state before its name.
 function termTabsHtml(terms, renamingId) {
+  const dotHtml = (tab) => tab.state === 'busy' ? '' : `<span class="term-dot term-${tab.state}" title="${TERM_STATES[tab.state]}">●</span>`
   const nameHtml = (tab) => tab.id === renamingId
     ? `<input class="term-rename" id="term-rename" value="${escape(tabTitle(tab))}" aria-label="Tab name" spellcheck="false">`
-    : `<button type="button" class="term-name" data-term="select" data-tab="${tab.id}" aria-pressed="${tab.id === terms.active}">${escape(tabTitle(tab))}</button>`
+    : `<button type="button" class="term-name" data-term="select" data-tab="${tab.id}" aria-pressed="${tab.id === terms.active}">${dotHtml(tab)}${escape(tabTitle(tab))}</button>`
 
   const tabs = (terms?.tabs ?? []).map((tab) => `
     <span class="term-tab${tab.failed !== null ? ' failed' : ''}">
@@ -3633,7 +3648,8 @@ function onModalInputKey(event) {
   $('modal').close('ok')
 }
 
-// Returns the pop-up rows in config order as `{ path, kind, label, branch, hash, terminals }`: each main checkout as a `branch` row, then its linked worktrees as `worktree` rows. `terminals` is true for a `worktree` row with terminal tabs. A checkout with an error has no rows.
+// Returns the pop-up rows in config order as `{ path, kind, label, branch, hash, terminals, state }`: each main checkout as a `branch` row, then its linked worktrees as `worktree` rows.
+// `terminals` is true for a `worktree` row with terminal tabs, and `state` is the state of its worktree, or null. A checkout with an error has no rows.
 function jumpRows() {
   const repos = (reposState?.repos ?? []).filter((repo) => repo.error === null)
   const terminals = (path) => (worktreeTerms.get(path)?.tabs.length ?? 0) > 0
@@ -3646,6 +3662,7 @@ function jumpRows() {
       branch: repo.branch ?? '',
       hash: prsHash(repo.path),
       terminals: false,
+      state: null,
     },
     ...repo.worktrees.map((worktree) => ({
       path: worktree.path,
@@ -3654,6 +3671,7 @@ function jumpRows() {
       branch: worktree.branch ?? worktree.head ?? '',
       hash: worktreeHash(worktree.path),
       terminals: terminals(worktree.path),
+      state: worktreeState(worktree.path),
     })),
   ])
 }
@@ -3674,9 +3692,9 @@ function shownJumpRows() {
   return tabRows(jump.tab).filter((row) => holdsWords(`${row.label} ${row.path} ${row.branch}`, words))
 }
 
-// Returns the pop-up line of `row`, tinted when `selected`: its short path, then `▣` when it has terminal tabs.
+// Returns the pop-up line of `row`, tinted when `selected`: its short path, then `▣` in the color of its state when it has terminal tabs.
 function jumpRowHtml(row, selected) {
-  const term = row.terminals ? '<span class="jump-term">▣</span>' : ''
+  const term = row.terminals ? `<span class="jump-term term-${row.state}" title="${TERM_STATES[row.state]}">▣</span>` : ''
   return `
     <div class="jump-row${selected ? ' selected' : ''}" data-path="${escape(row.path)}">
       <span class="jump-path">${escape(row.label)}</span>${term}
@@ -3722,8 +3740,12 @@ function onJumpTabsClick(event) {
 }
 
 // Draws the tab strip when it changed, then the shown rows of the open pop-up, or `No match.`. Selects the first row when the selected row is not shown.
+// The Terminals tab shows a red `⚠` while a tab needs attention.
 function renderJump() {
-  const tabs = JUMP_TABS.map(({ tab, label }) => `<button type="button" class="jump-tab" data-tab="${tab}" aria-selected="${tab === jump.tab}">${label}</button>`).join('')
+  const tabs = JUMP_TABS.map(({ tab, label }) => {
+    const alert = tab === 'terminals' ? terminalsAlertHtml() : ''
+    return `<button type="button" class="jump-tab" data-tab="${tab}" aria-selected="${tab === jump.tab}">${label}${alert}</button>`
+  }).join('')
   if (jumpTabsHtml !== tabs) {
     $('jump-tabs').innerHTML = tabs
     jumpTabsHtml = tabs
@@ -3990,7 +4012,7 @@ function addWorktreeTab(path, { name, program, serverId }) {
   observer.observe(el)
 
   lastTabId += 1
-  const tab = { id: lastTabId, serverId, name, renamed: false, command: null, program, term, fit, socket: null, el, observer, failed: null, away: false }
+  const tab = { id: lastTabId, serverId, name, renamed: false, command: null, program, state: 'busy', term, fit, socket: null, el, observer, failed: null, away: false }
   sendXterm(term, () => tab.socket)
 
   term.attachCustomKeyEventHandler((event) => {
@@ -4060,18 +4082,49 @@ function jsonOrNull(text) {
   }
 }
 
-// Posts `action` with `body` for the server terminal of `tab`. Tells the user when it fails, unless the terminal no longer runs.
+// Posts `action` with `body` for the server terminal of `tab`. Tells the user when a `kill` or a `name` fails, unless the terminal no longer runs.
 async function postTerminal(tab, action, body) {
   try {
     const res = await fetch(`api/terminals/${tab.serverId}/${action}`, { method: 'POST', body })
     if (!res.ok && res.status !== 404) throw new Error((await res.text()).trim() || `${res.status} ${res.statusText}`)
   } catch (err) {
-    await tell(`Could not ${action === 'kill' ? 'close' : 'rename'} ${tab.name}: ${err.message}`)
+    if (action !== 'seen') await tell(`Could not ${action === 'kill' ? 'close' : 'rename'} ${tab.name}: ${err.message}`)
   }
 }
 
+// Returns the state of the server row `entry`: `attention`, `busy` or `idle`, and `busy` for any other value.
+function terminalState(entry) {
+  return ['attention', 'busy', 'idle'].includes(entry.state) ? entry.state : 'busy'
+}
+
+// Returns the state of the worktree at `path`: `attention` when a tab needs attention, else `busy` when a tab is busy, else `idle`. Returns null when `path` has no tabs.
+function worktreeState(path) {
+  const tabs = worktreeTerms.get(path)?.tabs ?? []
+  if (tabs.length === 0) return null
+
+  if (tabs.some((tab) => tab.state === 'attention')) return 'attention'
+  if (tabs.some((tab) => tab.state === 'busy')) return 'busy'
+  return 'idle'
+}
+
+// Returns true when a tab of any worktree needs attention.
+function anyAttention() {
+  return terminalRows().some(({ tab }) => tab.state === 'attention')
+}
+
+// Returns `html` in a span of the color and label of the terminal state `state`, or `html` alone when `state` is null.
+function termMarkHtml(state, html) {
+  if (state === null) return html
+  return `<span class="term-${state}" title="${TERM_STATES[state]}">${html}</span>`
+}
+
+// Returns the red `⚠` that follows the label of a Terminals tab while a tab needs attention, else ''.
+function terminalsAlertHtml() {
+  return anyAttention() ? ` ${termMarkHtml('attention', '⚠')}` : ''
+}
+
 // Matches the worktree tabs to the running terminals of the server, `list`.
-// Drops each tab whose terminal ended, takes the names the server holds, and adds a tab for each terminal no tab shows.
+// Drops each tab whose terminal ended, takes the names and states the server holds, and adds a tab for each terminal no tab shows.
 // A worktree with a tab that waits for its server id gets no new tab.
 function syncTerminals(list) {
   const running = new Map(list.map((entry) => [entry.id, entry]))
@@ -4087,6 +4140,7 @@ function syncTerminals(list) {
       }
 
       tab.command = entry.command ?? null
+      tab.state = terminalState(entry)
       if (renaming?.id !== tab.id) {
         tab.name = entry.name
         tab.renamed = entry.renamed === true
@@ -4101,6 +4155,7 @@ function syncTerminals(list) {
     const tab = addWorktreeTab(entry.path, { name: entry.name, program: entry.program, serverId: entry.id })
     tab.renamed = entry.renamed === true
     tab.command = entry.command ?? null
+    tab.state = terminalState(entry)
     const terms = worktreeTerms.get(entry.path)
     const shell = /^shell (\d+)$/.exec(entry.name)
     if (shell !== null) terms.shells = Math.max(terms.shells, Number(shell[1]))
@@ -4123,6 +4178,37 @@ function selectWorktreeTerminal(path, id) {
   tab.away = false
   render()
   tab.term.focus()
+}
+
+// Returns true when the window shows the live output of `tab` of the worktree at `path`: the Terminal item of its worktree page shows, `tab` is the active tab, `tab` is neither away nor failed, and the window has the focus and is visible.
+function isShownTab(path, tab) {
+  if (tab.away || tab.failed !== null) return false
+
+  const route = parseRoute(location.hash)
+  if (route.kind !== 'worktree' || route.path !== path || worktreeView.item !== null) return false
+  if (worktreeTerms.get(path)?.active !== tab.id) return false
+
+  return document.hasFocus() && document.visibilityState === 'visible'
+}
+
+// Makes each shown tab in attention idle and posts `seen` for it. Returns true when it changed a tab.
+function markSeen() {
+  let changed = false
+  for (const [path, terms] of worktreeTerms) {
+    for (const tab of terms.tabs) {
+      if (tab.state !== 'attention' || !isShownTab(path, tab)) continue
+
+      tab.state = 'idle'
+      postTerminal(tab, 'seen')
+      changed = true
+    }
+  }
+  return changed
+}
+
+// Marks the shown tab seen when the window gets the focus.
+function onWindowFocus() {
+  if (markSeen()) render()
 }
 
 // Selects the active tab of `path` when it runs `program` and has not failed, else the first such tab, else opens a new one.
@@ -4618,11 +4704,12 @@ function renderNotFound() {
   $('page').innerHTML = '<div class="column"><p class="empty">session not found</p></div>'
 }
 
-// Draws the tab strip and marks the tab of `kind` as the current page.
+// Draws the tab strip and marks the tab of `kind` as the current page. The Terminals tab shows a red `⚠` while a tab needs attention.
 function renderTabs(kind) {
   const html = TABS.map((tab) => {
     const current = tab.kind === kind ? ' aria-current="page"' : ''
-    return `<a class="tab" href="${tab.href}"${current}>${tab.label}</a>`
+    const alert = tab.kind === 'terminals' ? terminalsAlertHtml() : ''
+    return `<a class="tab" href="${tab.href}"${current}>${tab.label}${alert}</a>`
   }).join('')
   if (tabsHtml === html) return
 
@@ -4633,7 +4720,7 @@ function renderTabs(kind) {
 // Shows the page of the route and syncs the window title. While the editor is open, shows only the edited file.
 // A route off the Terminal item parks the shown worktree terminal. A route off the Terminal item of the edited tab name drops the edit.
 // A route into a worktree page records its origin. A route off the PRs page drops its PRs, selection and filter.
-// A route off the worktree pages drops their PRs. Redraws the open pop-up.
+// A route off the worktree pages drops their PRs. Redraws the open pop-up. Marks the shown tab in attention seen, then renders again.
 function render() {
   if (jump !== null) renderJump()
 
@@ -4655,6 +4742,7 @@ function render() {
   renderTabs(route.kind)
   renderPage(route)
   syncTitle()
+  if (markSeen()) render()
 }
 
 // Shows the page of `route`.
@@ -5250,6 +5338,7 @@ async function poll() {
   try {
     const [{ sessions, problems }, , terminals] = await Promise.all([loadSessions(), loadRepos(), loadTerminals()])
     if (terminals !== null) syncTerminals(terminals)
+    markSeen()
     for (const session of sessions) {
       const problem = sessionProblem(session)
       if (problem !== null) problems.push(`${sessionName(session)}: ${problem}`)
@@ -5281,6 +5370,7 @@ $('jump').addEventListener('close', () => { jump = null })
 window.addEventListener('hashchange', onHashChange)
 window.addEventListener('beforeunload', onBeforeUnload)
 window.addEventListener('resize', onSessionResize)
+window.addEventListener('focus', onWindowFocus)
 document.addEventListener('keydown', onKey)
 state.failedChecks = metroSelfCheck()
 poll()
