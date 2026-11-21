@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Finds the factory root, the server port, the repos and the GitHub user from `~/.jam-factory/config.json`.
+//! Finds the factory root, the server port, the repos, the GitHub user and the GitHub sign-in hosts from `~/.jam-factory/config.json`.
 
 use std::fs;
 use std::io;
@@ -69,6 +69,14 @@ pub struct GithubUserError {
     pub reason: String,
 }
 
+/// A config file whose GitHub sign-in hosts cannot be read, with its path and the reason.
+#[derive(Debug, Error)]
+#[error("Cannot read githubSignInHosts from {}: {reason}", path.display())]
+pub struct SignInHostsError {
+    pub path: PathBuf,
+    pub reason: String,
+}
+
 #[derive(Default, Deserialize)]
 struct ReposConfig {
     repos: Option<Vec<String>>,
@@ -78,6 +86,12 @@ struct ReposConfig {
 struct GithubUserConfig {
     #[serde(rename = "githubUser")]
     github_user: Option<String>,
+}
+
+#[derive(Default, Deserialize)]
+struct SignInHostsConfig {
+    #[serde(rename = "githubSignInHosts")]
+    hosts: Option<Vec<String>>,
 }
 
 /// Returns the factory root for the home folder `home`.
@@ -159,6 +173,41 @@ pub fn resolve_github_user(home: &Path) -> Result<Option<String>, GithubUserErro
     let user = config.github_user.map(|user| user.trim().to_string());
 
     Ok(user.filter(|user| !user.is_empty()))
+}
+
+/// Returns the `githubSignInHosts` patterns of the config for the home folder `home`, lowercased and trimmed.
+pub fn resolve_sign_in_hosts(home: &Path) -> Result<Vec<String>, SignInHostsError> {
+    let path = home.join(CONFIG_DIR).join(CONFIG_FILE);
+
+    let error = |reason: String| SignInHostsError {
+        path: path.clone(),
+        reason,
+    };
+
+    let config: SignInHostsConfig = read_config(&path).map_err(error)?;
+
+    let mut hosts = Vec::new();
+    for host in config.hosts.unwrap_or_default() {
+        let pattern = host.trim().to_lowercase();
+        if !is_host_pattern(&pattern) {
+            return Err(error(format!(
+                "host {host:?} is not a host or *. plus a domain"
+            )));
+        }
+
+        hosts.push(pattern);
+    }
+
+    Ok(hosts)
+}
+
+/// Tells whether `pattern` is a host, or `*.` plus a domain, made of letters, digits, `-` and dots.
+fn is_host_pattern(pattern: &str) -> bool {
+    let domain = pattern.strip_prefix("*.").unwrap_or(pattern);
+
+    domain.split('.').all(|label| {
+        !label.is_empty() && label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+    })
 }
 
 /// Reads and parses the config file at `path`, or returns an empty config when it is missing.
@@ -421,6 +470,71 @@ mod tests {
                 "{text}: {err}"
             );
         }
+    }
+
+    #[test]
+    fn sign_in_hosts_default_to_empty() {
+        let home = tempfile::tempdir().unwrap();
+
+        let hosts = resolve_sign_in_hosts(home.path()).unwrap();
+        assert_eq!(hosts, Vec::<String>::new());
+
+        write_config(home.path(), r#"{ "root": "/x" }"#);
+        let hosts = resolve_sign_in_hosts(home.path()).unwrap();
+        assert_eq!(hosts, Vec::<String>::new());
+    }
+
+    #[test]
+    fn sign_in_hosts_read_hosts_and_wildcards() {
+        let home = tempfile::tempdir().unwrap();
+        write_config(
+            home.path(),
+            r#"{ "githubSignInHosts": ["Akka.Okta.com", "*.okta.com"] }"#,
+        );
+
+        let hosts = resolve_sign_in_hosts(home.path()).unwrap();
+
+        assert_eq!(hosts, vec!["akka.okta.com", "*.okta.com"]);
+    }
+
+    #[test]
+    fn bad_sign_in_hosts_are_errors() {
+        let home = tempfile::tempdir().unwrap();
+
+        for (value, entry) in [
+            (r#""*.okta.com""#, r#""*.okta.com""#),
+            ("[3]", "`3`"),
+            (r#"["https://a.okta.com"]"#, r#""https://a.okta.com""#),
+            (r#"["a.okta.com/x"]"#, r#""a.okta.com/x""#),
+            (r#"["a.okta.com:443"]"#, r#""a.okta.com:443""#),
+            (r#"["a b.com"]"#, r#""a b.com""#),
+            (r#"["a..com"]"#, r#""a..com""#),
+            (r#"[""]"#, r#""""#),
+            (r#"["a.*.com"]"#, r#""a.*.com""#),
+            (r#"["*okta.com"]"#, r#""*okta.com""#),
+            (r#"["*."]"#, r#""*.""#),
+        ] {
+            let text = format!(r#"{{ "githubSignInHosts": {value} }}"#);
+            let config = write_config(home.path(), &text);
+
+            let err = resolve_sign_in_hosts(home.path()).unwrap_err();
+
+            assert!(
+                err.to_string().contains(&config.display().to_string()),
+                "{text}: {err}"
+            );
+            assert!(err.reason.contains(entry), "{text}: {err}");
+        }
+    }
+
+    #[test]
+    fn bad_sign_in_hosts_do_not_break_port() {
+        let home = tempfile::tempdir().unwrap();
+        write_config(home.path(), r#"{ "port": 9000, "githubSignInHosts": 3 }"#);
+
+        let port = resolve_port(home.path()).unwrap();
+
+        assert_eq!(port, 9000);
     }
 
     #[test]

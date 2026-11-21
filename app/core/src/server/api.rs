@@ -20,6 +20,7 @@ use jam_factory_store::{SessionRef, StoreError};
 use percent_encoding::percent_decode_str;
 use serde_json::{Value, json};
 
+use super::github;
 use super::http::{Request, Response};
 use super::open;
 use super::prs;
@@ -46,6 +47,7 @@ pub fn get(
         ["", "api", "repos"] => Ok(json_response(&repos_json(repos))),
         ["", "api", "terminals"] => Ok(terminals::get(terminals)),
         ["", "api", "prs", ..] => return prs::get(repos, target),
+        ["", "api", "github"] => return github::get(repos, target),
         ["", "api", "files", org, repo, branch, id] => files(store, [org, repo, branch, id]),
         ["", "api", "file", org, repo, branch, id, path @ ..] if !path.is_empty() => {
             file(store, [org, repo, branch, id], path)

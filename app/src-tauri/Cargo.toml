@@ -14,5 +14,5 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 jam-factory-store = { path = "../store" }
 percent-encoding = "2"
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["unstable"] }
 tauri-plugin-dialog = "2"

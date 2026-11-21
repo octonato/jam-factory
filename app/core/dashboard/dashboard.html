@@ -359,6 +359,11 @@
     grid-template-rows: auto auto minmax(0, 1fr);
   }
 
+  .session-page.github-item {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto minmax(0, 1fr);
+  }
+
   #metro-pane {
     overflow: auto;
     padding: 16px 16px 48px;
@@ -629,6 +634,37 @@
   .term-view .term { height: 100%; }
   .term-view .xterm { height: 100%; padding: 4px 8px; }
 
+  .github-tools {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .github-tools button {
+    padding: 2px 10px;
+    color: var(--ink-2);
+    font: inherit;
+    font-size: 0.857rem;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    cursor: pointer;
+  }
+
+  .github-tools button:hover { color: var(--accent); border-color: var(--accent); }
+
+  .github-view {
+    flex: 1;
+    min-height: 0;
+    padding: 12px 16px;
+    color: var(--muted);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
   .session-bar {
     grid-column: 1 / -1;
     padding: 12px 16px;
@@ -662,6 +698,7 @@
   .bar-item.done { --tone: var(--good); }
   .bar-item:is(.waiting, .blocked, .done) { border-left: 3px solid var(--tone); }
   .bar-item .id { font-weight: 600; }
+  .bar-item svg { width: 1em; height: 1em; }
   .bar-item:hover { color: var(--accent); }
 
   .bar-item[aria-current="page"] {
@@ -1263,6 +1300,10 @@ const NEW_WORKTREE_KEY = 'b'
 const REMOVE_WORKTREE_KEY = 'd'
 // The title of the worktree icon of a PR that no worktree holds.
 const PR_CHECKOUT_TITLE = 'Check out and open worktree page (c)'
+// The `item` of the worktree page while the GitHub item shows.
+const GITHUB_ITEM = 'github'
+// The ids of the pop-ups that hide the GitHub view while they show: the jump pop-up, the modal and the shortcuts help.
+const GITHUB_OVERLAYS = ['jump', 'modal', 'shortcuts']
 const CI_LABELS = { none: 'no CI', pending: 'CI running', passing: 'CI passing', failing: 'CI failing' }
 const REVIEW_LABELS = {
   none: 'no reviews',
@@ -1449,8 +1490,14 @@ let tabsHtml = ''
 let listView = { html: '', el: null }
 let reposView = { el: null, list: '' }
 let sessionView = { dir: null, card: '', metro: '', head: '', stops: [], selected: -1 }
-// The shown worktree page, where `item` is the dir of the selected session or null for the Terminal item.
+// The shown worktree page, where `item` is the dir of the selected session, `GITHUB_ITEM` for the GitHub item, or null for the Terminal item.
 let worktreeView = { path: null, el: null, item: null, card: '', bar: '', tabs: '' }
+// The GitHub item last entered: its worktree path, its URL or the error that replaced it, whether its fetch runs, and the number of its last fetch.
+let githubTab = { path: null, url: null, error: null, loading: false, seq: 0 }
+// The GitHub view of this window: `shown` while the page asked it to show, `created` once it exists, and the `bounds` last sent.
+let githubView = { shown: false, created: false, bounds: null }
+// The GitHub view commands sent so far, each run after the one before.
+let githubQueue = Promise.resolve()
 let prsView = { path: null, el: null, card: '', list: '' }
 let lastView = { key: null, path: null, text: null, version: null }
 let editing = null
@@ -1747,13 +1794,14 @@ async function loadTerminals() {
   }
 }
 
-// Returns the page of `hash`: the repos, the sessions, the terminals, a worktree with its path, the PRs of a main checkout with its path, or a session with its file path.
+// Returns the page of `hash`: the repos, the sessions, the terminals, a worktree with its path, the GitHub item of a worktree with its path, the PRs of a main checkout with its path, or a session with its file path.
 function parseRoute(hash) {
   const segments = hash.replace(/^#\/?/, '').split('/').filter((s) => s !== '').map(decode)
   if (segments.length === 0) return { kind: 'repos' }
   if (segments.length === 1 && segments[0] === 'sessions') return { kind: 'sessions' }
   if (segments.length === 1 && segments[0] === 'terminals') return { kind: 'terminals' }
   if (segments.length === 2 && segments[0] === 'worktree') return { kind: 'worktree', path: segments[1] }
+  if (segments.length === 2 && segments[0] === 'github') return { kind: 'github', path: segments[1] }
   if (segments.length === 2 && segments[0] === 'prs') return { kind: 'prs', path: segments[1] }
 
   const [org, repo = '', branch = '', id = '', ...rest] = segments
@@ -1766,6 +1814,10 @@ function worktreeHash(path) {
 
 function prsHash(path) {
   return `#/prs/${encodeURIComponent(path)}`
+}
+
+function githubHash(path) {
+  return `#/github/${encodeURIComponent(path)}`
 }
 
 // Returns `{org}/{repo}/{branch}/{id}` of `session`, each segment percent-encoded.
@@ -2345,7 +2397,7 @@ function sessionWorktree(session) {
 
 // Returns the key of the worktree page that `route` shows: its worktree path, or the href of a session with no worktree. Returns null when it shows none.
 function routePage(route) {
-  if (route.kind === 'worktree') return route.path
+  if (route.kind === 'worktree' || route.kind === 'github') return route.path
   if (route.kind !== 'session') return null
 
   const session = state.sessions.find((s) => sessionHref(s) === sessionHref(route))
@@ -2431,7 +2483,12 @@ function pageCardHtml(path, found) {
   return missingWorktreeCardHtml(path ?? '')
 }
 
-// Returns the items of the bar of the worktree at `path`: the Terminal item, then one item per session of `path`, then `selected` when `path` lacks it.
+// Returns true when the bar of the worktree at `path` has the GitHub item: in the app, on a configured main or linked checkout.
+function hasGithubItem(path) {
+  return window.__TAURI__ !== undefined && (findWorktree(path) !== null || findRepo(path) !== undefined)
+}
+
+// Returns the items of the bar of the worktree at `path`: the Terminal item, the GitHub item when `path` has one, then one item per session of `path`, then `selected` when `path` lacks it.
 // Returns only the item of `selected` when `path` is null.
 function barItems(path, selected) {
   if (path === null) return [{ hash: sessionHref(selected), session: selected }]
@@ -2440,13 +2497,23 @@ function barItems(path, selected) {
   if (selected !== null && !sessions.some((session) => session.dir === selected.dir)) sessions.push(selected)
 
   const terminal = { hash: worktreeHash(path), session: null }
-  return [terminal, ...sessions.map((session) => ({ hash: sessionHref(session), session }))]
+  const github = hasGithubItem(path) ? [{ hash: githubHash(path), session: null, github: true }] : []
+  return [terminal, ...github, ...sessions.map((session) => ({ hash: sessionHref(session), session }))]
 }
 
-// Returns the bar of the worktree at `path`: one link per item, with the item of `selected` as the current page. The `▣` of the Terminal item takes the color of the worktree state.
-function worktreeBarHtml(path, selected) {
-  return barItems(path, selected).map(({ hash, session }) => {
-    const current = session?.dir === selected?.dir ? ' aria-current="page"' : ''
+// Returns true when `item` is the current bar item: the GitHub item when `github` is true, else the item of `selected`.
+function isCurrentItem(item, selected, github) {
+  if (item.github) return github
+  return !github && item.session?.dir === selected?.dir
+}
+
+// Returns the bar of the worktree at `path`: one link per item, with the GitHub item as the current page when `github` is true, else the item of `selected`.
+// The `▣` of the Terminal item takes the color of the worktree state.
+function worktreeBarHtml(path, selected, github) {
+  return barItems(path, selected).map((item) => {
+    const { hash, session } = item
+    const current = isCurrentItem(item, selected, github) ? ' aria-current="page"' : ''
+    if (item.github) return `<a class="bar-item" href="${escape(hash)}"${current}><svg viewBox="0 0 16 16" aria-hidden="true">${ACTION_ICONS.github}</svg> GitHub</a>`
     if (session === null) return `<a class="bar-item" href="${escape(hash)}"${current}>${termMarkHtml(worktreeState(path), '▣')} Terminal</a>`
 
     const tone = tint(session)
@@ -2483,9 +2550,9 @@ function updateWorktreePart(key, id, html) {
   worktreeView[key] = html
 }
 
-// Renders the worktree page of `path` with `session` and its `file` selected, or the Terminal item when `session` is null, or only the reason for an unlisted `path` with no tabs and no sessions.
+// Renders the worktree page of `path` with `session` and its `file` selected, or the GitHub item when `github` is true, or the Terminal item when `session` is null, or only the reason for an unlisted `path` with no tabs and no sessions.
 // A null `path` renders the page of `session` alone.
-function renderWorktreePage(path, session, file) {
+function renderWorktreePage(path, session, file, github = false) {
   const found = findWorktree(path)
   const terms = worktreeTerms.get(path)
   const hasTabs = (terms?.tabs.length ?? 0) > 0
@@ -2497,15 +2564,16 @@ function renderWorktreePage(path, session, file) {
 
   if (found !== null && worktreePrs?.path !== found.repo.path) loadWorktreePrs(found.repo.path)
 
-  const item = session?.dir ?? null
+  const item = github ? GITHUB_ITEM : session?.dir ?? null
   if (worktreeView.el !== $('page').firstElementChild || worktreeView.path !== path || worktreeView.item !== item) {
     buildWorktreePage(path, item)
   }
 
   updateWorktreePart('card', 'worktree-card', pageCardHtml(path, found))
-  updateWorktreePart('bar', 'worktree-bar', worktreeBarHtml(path, session))
+  updateWorktreePart('bar', 'worktree-bar', worktreeBarHtml(path, session, github))
 
   if (session !== null) return renderSessionContent(session, file)
+  if (github) return renderGithubTab(path)
 
   if (renaming !== null && !terms?.tabs.some((tab) => tab.id === renaming.id)) renaming = null
   const tabs = found === null && !hasTabs ? missingWorktreeHtml() : termTabsHtml(terms, renaming?.id)
@@ -2514,15 +2582,20 @@ function renderWorktreePage(path, session, file) {
   if (activeWorktreeTerminal(path) === undefined) worktreeView.el.classList.remove('zoomed')
 }
 
-// Replaces `#page` with the worktree page of `path`, which shows the session whose dir is `item`, or the terminal tabs when `item` is null.
+// Replaces `#page` with the worktree page of `path`, which shows the session whose dir is `item`, the GitHub item when `item` is `GITHUB_ITEM`, or the terminal tabs when `item` is null.
 function buildWorktreePage(path, item) {
   parkWorktreeTerminal()
-  $('page').innerHTML = worktreePageHtml(item === null)
+  $('page').innerHTML = worktreePageHtml(item)
 
   const page = $('page').firstElementChild
   $('worktree-card').addEventListener('click', onWorktreeCardAction)
   $('worktree-bar').addEventListener('click', onRowClick)
   worktreeView = { path, el: page, item, card: '', bar: '', tabs: '' }
+
+  if (item === GITHUB_ITEM) {
+    $('github-tools').addEventListener('click', onGithubToolsClick)
+    return
+  }
 
   if (item === null) {
     $('term-tabs').addEventListener('click', onTermTabsClick)
@@ -2540,18 +2613,33 @@ function buildWorktreePage(path, item) {
   lastView = { key: null, path: null, text: null, version: null }
 }
 
-// Returns the markup of the worktree page: the card and the bar, then the terminal tabs when `terminal` is true, else the session strip, the metro, the splitter and the viewer.
-function worktreePageHtml(terminal) {
+// Returns the markup of the worktree page that shows `item`: the card and the bar, then the terminal tabs when `item` is null, the GitHub toolbar and view when `item` is `GITHUB_ITEM`, else the session strip, the metro, the splitter and the viewer.
+function worktreePageHtml(item) {
   const head = `
         <div class="session-bar" id="worktree-card"></div>
         <nav class="worktree-bar" id="worktree-bar"></nav>`
 
-  if (terminal) {
+  if (item === null) {
     return `
       <div class="session-page terminal-item">${head}
         <section class="viewer">
           <div class="term-tabs" id="term-tabs"></div>
           <div class="term-view" id="term-view"></div>
+        </section>
+      </div>`
+  }
+
+  if (item === GITHUB_ITEM) {
+    return `
+      <div class="session-page github-item">${head}
+        <section class="viewer">
+          <div class="github-tools" id="github-tools">
+            <button type="button" data-github="back">Back</button>
+            <button type="button" data-github="reload" title="Reload (⌘R)">Reload</button>
+            <button type="button" data-github="refetch" title="Load the open PR, or the repo page">PR/Repo</button>
+            <button type="button" data-github="browser">Open in browser</button>
+          </div>
+          <div class="github-view" id="github-view"></div>
         </section>
       </div>`
   }
@@ -2568,6 +2656,121 @@ function worktreePageHtml(terminal) {
           <div id="view"></div>
         </section>
       </div>`
+}
+
+// Fetches the GitHub URL of the worktree at `path` when the page has none for it, writes the fetch state in the placeholder, and shows the GitHub view once the URL is known.
+function renderGithubTab(path) {
+  if (!hasGithubItem(path)) return
+  if (githubTab.path !== path) fetchGithubUrl(path, false)
+
+  const text = githubTab.loading ? 'loading…' : githubTab.error ?? ''
+  if ($('github-view').textContent !== text) $('github-view').textContent = text
+
+  if (githubTab.url === null) hideGithubView()
+  else showGithubView()
+}
+
+// Fetches the GitHub URL of the worktree at `path` into `githubTab`, loads it in the GitHub view when `load`, then renders.
+// A refetch of the same path keeps its URL while it runs. A later fetch drops the reply.
+async function fetchGithubUrl(path, load) {
+  const seq = githubTab.seq + 1
+  const shown = githubTab.path === path ? githubTab.url : null
+  githubTab = { path, url: shown, error: null, loading: true, seq }
+
+  let reply
+  try {
+    const { url, error } = JSON.parse(await fetchText(`api/github?path=${encodeURIComponent(path)}`))
+    reply = { url: stringOrNull(url), error: stringOrNull(error) }
+  } catch (err) {
+    reply = { url: null, error: err.message }
+  }
+  if (githubTab.seq !== seq) return
+
+  Object.assign(githubTab, reply, { loading: false })
+  if (load && reply.url !== null) loadGithubView()
+  render()
+}
+
+// Returns true while the jump pop-up, the modal or the shortcuts help shows.
+function githubOverlayOpen() {
+  return GITHUB_OVERLAYS.some((id) => $(id).open)
+}
+
+// Returns true when the route and the page show the GitHub item of the worktree at `githubTab.path`.
+function githubItemShows() {
+  const route = parseRoute(location.hash)
+  if (route.kind !== 'github' || route.path !== githubTab.path) return false
+
+  return worktreeView.el === $('page').firstElementChild && worktreeView.item === GITHUB_ITEM && worktreeView.path === route.path
+}
+
+// Runs `step` once the GitHub view commands queued before it settle, and returns its promise.
+function queueGithub(step) {
+  const run = githubQueue.then(step)
+  githubQueue = run.catch(() => {})
+  return run
+}
+
+// Shows the GitHub view over its placeholder, or moves it there when the placeholder moved.
+// Does nothing unless the page shows the GitHub item of `githubTab` with its URL and no pop-up shows.
+function showGithubView() {
+  if (githubTab.url === null || !githubItemShows() || githubOverlayOpen()) return
+
+  const rect = $('github-view').getBoundingClientRect()
+  const bounds = { x: rect.left, y: rect.top, width: rect.width, height: rect.height }
+  if (githubView.shown && JSON.stringify(bounds) === JSON.stringify(githubView.bounds)) return
+
+  const { path, url, seq } = githubTab
+  githubView.shown = true
+  githubView.bounds = bounds
+  queueGithub(async () => {
+    await window.__TAURI__.core.invoke('github_view_show', { path, url, ...bounds })
+    githubView.created = true
+  }).catch((err) => failGithubView(seq, err))
+}
+
+// Hides the GitHub view when the page asked it to show.
+function hideGithubView() {
+  if (!githubView.shown) return
+
+  githubView.shown = false
+  queueGithub(() => window.__TAURI__.core.invoke('github_view_hide')).catch((err) => tell(String(err)))
+}
+
+// Loads the URL of `githubTab` in the GitHub view when the view exists by the time the commands queued before it settle.
+function loadGithubView() {
+  const { path, url, seq } = githubTab
+  queueGithub(async () => {
+    if (githubView.created) await window.__TAURI__.core.invoke('github_view_load', { path, url })
+  }).catch((err) => failGithubView(seq, err))
+}
+
+// Writes `err` in the placeholder of the GitHub item and hides the view, unless a later fetch started.
+function failGithubView(seq, err) {
+  if (githubTab.seq !== seq) return
+
+  githubTab.url = null
+  githubTab.error = String(err)
+  render()
+}
+
+// Runs the GitHub view action of the clicked toolbar button, or fetches the URL of the GitHub item again for PR/Repo.
+// Back and Reload do nothing while the view hides, and Open in browser does nothing while the GitHub item has no URL.
+function onGithubToolsClick(event) {
+  const button = event.target.closest('button[data-github]')
+  if (!button || !hasGithubItem(worktreeView.path)) return
+
+  const action = button.dataset.github
+  if (action === 'refetch') {
+    fetchGithubUrl(worktreeView.path, true)
+    render()
+    return
+  }
+
+  const ready = action === 'browser' ? githubTab.url !== null : githubView.shown
+  if (!ready) return
+
+  queueGithub(() => window.__TAURI__.core.invoke('github_view_action', { action })).catch((err) => tell(String(err)))
 }
 
 // Opens the worktree in the tool of the clicked card button, in its own window, or lazygit in a new tab, or the Terminal item with a lazygit tab when a session item shows.
@@ -3629,7 +3832,7 @@ async function showFile(session, files, path, seq) {
   if (!sameFile) $('view').scrollTop = 0
 }
 
-// Shows the modal with `message`, and its text field when `input`, and resolves with the value of the button that closed it.
+// Shows the modal with `message`, and its text field when `input`, above a hidden GitHub view, and resolves with the value of the button that closed it.
 function openModal(message, cancellable, input = false) {
   const modal = $('modal')
   $('modal-text').textContent = message
@@ -3640,6 +3843,7 @@ function openModal(message, cancellable, input = false) {
   const closed = new Promise((resolve) => {
     modal.addEventListener('close', () => resolve(modal.returnValue), { once: true })
   })
+  hideGithubView()
   modal.showModal()
   if (input) $('modal-input').focus()
   return closed
@@ -3672,12 +3876,13 @@ function shortcutsHtml() {
   }).join('')
 }
 
-// Opens the shortcuts dialog, or closes it when it is open.
+// Opens the shortcuts dialog above a hidden GitHub view, or closes it when it is open.
 function toggleShortcuts() {
   const dialog = $('shortcuts')
   if (dialog.open) return dialog.close()
 
   $('shortcuts-list').innerHTML = shortcutsHtml()
+  hideGithubView()
   dialog.showModal()
 }
 
@@ -3742,12 +3947,13 @@ function jumpRowHtml(row, selected) {
     </div>`
 }
 
-// Opens the pop-up on `tab` with an empty filter and its first row selected.
+// Opens the pop-up on `tab` with an empty filter and its first row selected, above a hidden GitHub view.
 function openJump(tab) {
   jump = { tab, filter: '', selected: null }
   jumpTabsHtml = ''
   $('jump-input').value = ''
 
+  hideGithubView()
   $('jump').showModal()
   $('jump-input').focus()
   renderJump()
@@ -4354,9 +4560,10 @@ function stepWorktreeTerminal(path, step) {
 function stepBarItem(step) {
   if (worktreeView.el === null || worktreeView.el !== $('page').firstElementChild) return false
 
+  const github = worktreeView.item === GITHUB_ITEM
   const selected = state.sessions.find((session) => session.dir === worktreeView.item) ?? null
   const items = barItems(worktreeView.path, selected)
-  const index = items.findIndex(({ session }) => session?.dir === selected?.dir)
+  const index = items.findIndex((item) => isCurrentItem(item, selected, github))
   if (items.length > 1) location.hash = items[(index + step + items.length) % items.length].hash
   return true
 }
@@ -4676,7 +4883,7 @@ function resizeSessionPage(page, width = leftWidth) {
 // Clamps the left column of the shown session item to the new window width.
 function onSessionResize() {
   const page = $('page').firstElementChild
-  if (page !== null && page === worktreeView.el && worktreeView.item !== null) resizeSessionPage(page)
+  if (page !== null && page === worktreeView.el && worktreeView.item !== null && worktreeView.item !== GITHUB_ITEM) resizeSessionPage(page)
 }
 
 // Resizes the left column while the splitter is dragged.
@@ -4760,6 +4967,7 @@ function renderTabs(kind) {
 
 // Shows the page of the route and syncs the window title. While the editor is open, shows only the edited file.
 // A route off the Terminal item parks the shown worktree terminal. A route off the Terminal item of the edited tab name drops the edit.
+// A route off a GitHub item hides the GitHub view.
 // A route into a worktree page records its origin. A route off the PRs page drops its PRs, selection and filter.
 // A route off the worktree pages drops their PRs. Redraws the open pop-up. Marks the shown tab in attention seen, then renders again.
 function render() {
@@ -4768,6 +4976,7 @@ function render() {
   const route = parseRoute(location.hash)
   if (editing !== null && !routeShows(route, editing)) return
   if (route.kind !== 'worktree') parkWorktreeTerminal()
+  if (route.kind !== 'github' || !hasGithubItem(route.path)) hideGithubView()
   if (renaming !== null && (route.kind !== 'worktree' || route.path !== renaming.path)) renaming = null
   recordPageOrigin(route)
   if (routePage(route) === null) worktreePrs = null
@@ -4792,6 +5001,7 @@ function renderPage(route) {
   if (route.kind === 'sessions') return renderList()
   if (route.kind === 'terminals') return renderTerminals()
   if (route.kind === 'worktree') return renderWorktreePage(route.path, null, null)
+  if (route.kind === 'github') return renderWorktreePage(route.path, null, null, true)
   if (route.kind === 'prs') return renderPrsPage(route.path)
 
   const session = state.sessions.find((s) => sessionHref(s) === sessionHref(route))
@@ -4824,7 +5034,7 @@ function isRoot(route) {
 
 // Returns the paths of the worktrees whose pages and sessions a standalone window may show.
 function standaloneWorktrees() {
-  if (standaloneRoot.kind === 'worktree') return [standaloneRoot.path]
+  if (standaloneRoot.kind === 'worktree' || standaloneRoot.kind === 'github') return [standaloneRoot.path]
 
   if (standaloneRoot.kind === 'session') {
     const session = state.sessions.find((s) => sessionHref(s) === sessionHref(standaloneRoot))
@@ -4845,7 +5055,7 @@ function inScope(route) {
 
   const worktrees = standaloneWorktrees()
   const scoped = (path) => worktrees.some((worktree) => sameWorktree(worktree, path))
-  if (route.kind === 'worktree') return scoped(route.path)
+  if (route.kind === 'worktree' || route.kind === 'github') return scoped(route.path)
   if (route.kind !== 'session') return false
 
   const session = state.sessions.find((s) => sessionHref(s) === sessionHref(route))
@@ -4863,7 +5073,7 @@ function backTarget(hash) {
 function standaloneTitle() {
   if (standaloneRoot === null) return null
 
-  if (standaloneRoot.kind === 'worktree') {
+  if (standaloneRoot.kind === 'worktree' || standaloneRoot.kind === 'github') {
     const found = findWorktree(standaloneRoot.path)
     return found === null ? null : `Jam · ${found.repo.repo}/${found.worktree.branch ?? found.worktree.head ?? ''}`
   }
@@ -5337,7 +5547,7 @@ function onKey(event) {
     return
   }
 
-  if (route.kind === 'worktree') {
+  if (route.kind === 'worktree' || route.kind === 'github') {
     if (worktreeKey(key, route.path)) event.preventDefault()
     return
   }
@@ -5380,6 +5590,8 @@ function showFontSize(size) {
       tab.fit.fit()
     }
   }
+
+  showGithubView()
 }
 
 function stepFontSize(step) {
@@ -5435,10 +5647,12 @@ $('modal-input').addEventListener('keydown', onModalInputKey)
 $('jump-input').addEventListener('input', onJumpInput)
 $('jump-tabs').addEventListener('click', onJumpTabsClick)
 $('jump').addEventListener('close', () => { jump = null })
+for (const id of GITHUB_OVERLAYS) $(id).addEventListener('close', showGithubView)
 
 window.addEventListener('hashchange', onHashChange)
 window.addEventListener('beforeunload', onBeforeUnload)
 window.addEventListener('resize', onSessionResize)
+window.addEventListener('resize', showGithubView)
 window.addEventListener('focus', onWindowFocus)
 document.addEventListener('keydown', onKey)
 state.failedChecks = metroSelfCheck()

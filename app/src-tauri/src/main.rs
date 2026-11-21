@@ -14,6 +14,7 @@
 
 //! Tauri entry point for the Jam Board desktop app.
 
+mod github_view;
 mod menu;
 mod navigation;
 mod probe;
@@ -26,7 +27,11 @@ fn main() {
         .on_menu_event(menu::on_event)
         .invoke_handler(tauri::generate_handler![
             windows::open_window,
-            windows::open_main_window
+            windows::open_main_window,
+            github_view::github_view_show,
+            github_view::github_view_load,
+            github_view::github_view_hide,
+            github_view::github_view_action
         ])
         .setup(|app| {
             windows::open_board_window(app.handle());

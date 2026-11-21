@@ -20,7 +20,8 @@ use std::sync::{LazyLock, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use tauri::{
-    AppHandle, Manager, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent,
+    AppHandle, LogicalPosition, Manager, Url, Webview, WebviewBuilder, WebviewUrl, Window,
+    WindowEvent,
 };
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 
@@ -91,15 +92,15 @@ fn try_open_board_window(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// Focuses the main board window, or reopens it on the server that `window` shows.
+/// Focuses the main board window, or reopens it on the server that `webview` shows.
 #[tauri::command]
-pub async fn open_main_window(window: WebviewWindow) -> Result<(), String> {
-    let app = window.app_handle();
-    if let Some(main) = app.get_webview_window(MAIN) {
+pub async fn open_main_window(webview: Webview) -> Result<(), String> {
+    let app = webview.app_handle();
+    if let Some(main) = app.get_window(MAIN) {
         return focus(&main);
     }
 
-    let url = main_url(window.url().map_err(|e| e.to_string())?);
+    let url = main_url(webview.url().map_err(|e| e.to_string())?);
     let port = url
         .port_or_known_default()
         .ok_or("The board window has no port")?;
@@ -114,12 +115,12 @@ fn main_url(mut url: Url) -> Url {
     url
 }
 
-/// Focuses the standalone window rooted at `hash`, or opens one on the dashboard that `window` shows.
+/// Focuses the standalone window rooted at `hash`, or opens one on the dashboard that `webview` shows.
 #[tauri::command]
-pub async fn open_window(window: WebviewWindow, hash: String) -> Result<(), String> {
-    let dashboard = window.url().map_err(|e| e.to_string())?;
+pub async fn open_window(webview: Webview, hash: String) -> Result<(), String> {
+    let dashboard = webview.url().map_err(|e| e.to_string())?;
 
-    open_standalone(window.app_handle(), dashboard, &hash)
+    open_standalone(webview.app_handle(), dashboard, &hash)
 }
 
 /// Opens or focuses the standalone window of the worktree that each `jam-board://open?path=…` link in `urls` names.
@@ -167,7 +168,7 @@ fn worktree_hash(path: &str) -> String {
 fn open_standalone(app: &AppHandle, dashboard: Url, hash: &str) -> Result<(), String> {
     let known = window_with_root(&roots(), hash);
     if let Some(label) = known {
-        if let Some(open) = app.get_webview_window(&label) {
+        if let Some(open) = app.get_window(&label) {
             return focus(&open);
         }
         forget_window(&mut roots(), &label);
@@ -222,7 +223,7 @@ fn forget_window(roots: &mut HashMap<String, String>, label: &str) {
 }
 
 /// Removes `window` from the roots once it is destroyed.
-fn forget_on_destroy(window: &WebviewWindow) {
+fn forget_on_destroy(window: &Window) {
     let label = window.label().to_string();
 
     window.on_window_event(move |event| {
@@ -233,7 +234,7 @@ fn forget_on_destroy(window: &WebviewWindow) {
 }
 
 /// Unminimizes, shows and focuses `window`.
-fn focus(window: &WebviewWindow) -> Result<(), String> {
+fn focus(window: &Window) -> Result<(), String> {
     let focused = window
         .unminimize()
         .and_then(|_| window.show())
@@ -247,17 +248,34 @@ fn on_all_workspaces(label: &str) -> bool {
     label == MAIN
 }
 
-/// Opens a window labelled `label` on `url`. It keeps the dashboard served on `port` and sends other links to the browser.
-fn build_board_window(
-    app: &AppHandle,
-    label: &str,
-    url: Url,
-    port: u16,
-) -> Result<WebviewWindow, String> {
-    let window = WebviewWindowBuilder::new(app, label, WebviewUrl::External(url))
+/// Opens a window labelled `label` on `url`. Its board web view keeps the dashboard served on `port` and sends other links to the browser.
+fn build_board_window(app: &AppHandle, label: &str, url: Url, port: u16) -> Result<Window, String> {
+    let window = Window::builder(app, label)
         .title("Jam Board")
         .inner_size(1200.0, 800.0)
         .visible_on_all_workspaces(on_all_workspaces(label))
+        .build()
+        .map_err(|e| format!("Cannot open the board window: {e}"))?;
+
+    let page = add_board_webview(&window, url, port).inspect_err(|_| destroy(&window))?;
+    if let Err(e) = page.set_focus() {
+        eprintln!("jam-board: cannot focus the board page: {e}");
+    }
+    ask_page_before_close(&window, &page);
+
+    Ok(window)
+}
+
+/// Adds the board web view on `url` over the whole of `window`, labelled as `window`.
+fn add_board_webview(window: &Window, url: Url, port: u16) -> Result<Webview, String> {
+    let scale = window.scale_factor().map_err(|e| e.to_string())?;
+    let size = window
+        .inner_size()
+        .map_err(|e| e.to_string())?
+        .to_logical::<f64>(scale);
+
+    let page = WebviewBuilder::new(window.label(), WebviewUrl::External(url))
+        .auto_resize()
         .on_navigation(move |url| match navigation::decide(url, port) {
             Navigation::Stay => true,
             Navigation::Browser => {
@@ -265,18 +283,30 @@ fn build_board_window(
                 false
             }
             Navigation::Block => false,
-        })
-        .build()
-        .map_err(|e| format!("Cannot open the board window: {e}"))?;
-    ask_page_before_close(&window);
+        });
 
-    Ok(window)
+    window
+        .add_child(page, LogicalPosition::new(0., 0.), size)
+        .map_err(|e| format!("Cannot open the board window: {e}"))
+}
+
+/// Returns the board web view of `window`.
+pub fn board_webview(window: &Window) -> Option<Webview> {
+    window
+        .webviews()
+        .into_iter()
+        .find(|webview| is_board_webview(window.label(), webview.label()))
+}
+
+/// Returns true when the web view labelled `webview_label` is the board web view of the window labelled `window_label`.
+fn is_board_webview(window_label: &str, webview_label: &str) -> bool {
+    webview_label == window_label
 }
 
 /// Closes each board window after its page agrees, or exits when no window is open.
 pub fn close_board_windows(app: &AppHandle) {
     let mut closing = false;
-    for window in app.webview_windows().values() {
+    for window in app.windows().values() {
         closing |= window.close().is_ok();
     }
 
@@ -285,9 +315,10 @@ pub fn close_board_windows(app: &AppHandle) {
     }
 }
 
-/// Holds each close request of `window` and closes it when the page answers anything but `false`.
-fn ask_page_before_close(window: &WebviewWindow) {
-    let page = window.clone();
+/// Holds each close request of `window` and closes it when `page` answers anything but `false`.
+fn ask_page_before_close(window: &Window, page: &Webview) {
+    let closing = window.clone();
+    let page = page.clone();
 
     window.on_window_event(move |event| {
         let WindowEvent::CloseRequested { api, .. } = event else {
@@ -295,14 +326,14 @@ fn ask_page_before_close(window: &WebviewWindow) {
         };
         api.prevent_close();
 
-        let target = page.clone();
+        let target = closing.clone();
         let asked = page.eval_with_callback(ASK_PAGE_TO_CLOSE, move |answer| {
             if may_close(&answer) {
                 destroy(&target);
             }
         });
         if asked.is_err() {
-            destroy(&page);
+            destroy(&closing);
         }
     });
 }
@@ -312,7 +343,7 @@ fn may_close(answer: &str) -> bool {
     answer != "false"
 }
 
-fn destroy(window: &WebviewWindow) {
+fn destroy(window: &Window) {
     if let Err(e) = window.destroy() {
         eprintln!("jam-board: cannot close the board window: {e}");
     }
@@ -423,6 +454,12 @@ mod tests {
     }
 
     #[test]
+    fn the_board_webview_shares_the_window_label() {
+        assert!(is_board_webview("main", "main"));
+        assert!(!is_board_webview("main", "main-github"));
+    }
+
+    #[test]
     fn the_dashboard_invokes_the_open_window_command() {
         let dashboard = include_str!("../../core/dashboard/dashboard.html");
 
@@ -464,6 +501,20 @@ mod tests {
                 .iter()
                 .any(|p| p.identifier().get() == "core:window:allow-set-title")
         );
+        for github_view in [
+            "allow-github-view-show",
+            "allow-github-view-load",
+            "allow-github-view-hide",
+            "allow-github-view-action",
+        ] {
+            assert!(
+                capability
+                    .permissions
+                    .iter()
+                    .any(|p| p.identifier().get() == github_view),
+                "{github_view}"
+            );
+        }
 
         let patterns: Vec<RemoteUrlPattern> = capability
             .remote
@@ -478,5 +529,6 @@ mod tests {
         assert!(allowed("http://127.0.0.1:49152/dashboard.html#/o/r"));
         assert!(!allowed("http://example.org:8731/dashboard.html"));
         assert!(!allowed("https://127.0.0.1:8731/dashboard.html"));
+        assert!(!allowed("https://github.com/o/r"));
     }
 }

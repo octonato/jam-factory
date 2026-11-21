@@ -19,6 +19,7 @@ pub mod attention;
 pub mod dashboard;
 #[cfg(test)]
 mod fake_store;
+pub mod github;
 pub mod http;
 pub mod open;
 pub mod prs;

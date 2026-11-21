@@ -44,10 +44,10 @@ function cardRows(html) {
   }))
 }
 
-function dashboard({ script = source, pageWidth = 1200, pageLeft = 0, splitterWidth = 6, fetcher, storage = new Map(), search = '', hash = '', tauri } = {}) {
+function dashboard({ script = source, pageWidth = 1200, pageLeft = 0, pageTop = 0, pageHeight = 800, splitterWidth = 6, fetcher, storage = new Map(), search = '', hash = '', tauri } = {}) {
   const elements = new Map()
   const calls = []
-  const geometry = { pageWidth, pageLeft, splitterWidth }
+  const geometry = { pageWidth, pageLeft, pageTop, pageHeight, splitterWidth }
 
   // Moves each of `nodes` from its parent to the end of the children of `parent`.
   const appendTo = (parent, nodes) => {
@@ -99,7 +99,9 @@ function dashboard({ script = source, pageWidth = 1200, pageLeft = 0, splitterWi
       firstElementChild: null,
       getBoundingClientRect: () => ({
         width: id === 'splitter' ? geometry.splitterWidth : geometry.pageWidth,
+        height: geometry.pageHeight,
         left: geometry.pageLeft,
+        top: geometry.pageTop,
       }),
     })
     Object.defineProperty(el, 'innerHTML', {
@@ -6122,4 +6124,376 @@ test('the shortcuts dialog lists the pop-up tab keys', () => {
   press(app, '?', { shiftKey: true })
 
   assert.match(shortcutsText(app), /Pop-up ↑ ↓ Move the selection ⇧⌘\[ ⇧⌘\] Show the previous or next tab Enter Open the selected row ⌘Enter Open the selected row in its own window Esc Close the pop-up Repos /)
+})
+
+const githubMain = '/a/main'
+const githubWorktree = '/a/feature x+y'
+
+// The repos of a checkout at `githubMain` with the linked worktree `githubWorktree`, as `api/repos` lists them.
+const githubRepos = {
+  error: null,
+  repos: [{ org: 'a', repo: 'r', path: githubMain, error: null, worktrees: [{ path: githubWorktree, branch: 'feature', head: null }] }],
+}
+
+// Returns the hash of the GitHub item of `path`.
+const githubHashOf = (path) => `#/github/${encodeURIComponent(path)}`
+
+// Returns the dashboard of `worktreeApp(path, sessions)` on the checkouts of `githubRepos`, in the app with a stub `invoke`.
+async function githubApp(path, sessions = []) {
+  const opened = await worktreeApp(path, sessions, () => response(JSON.stringify(githubRepos)))
+  opened.app.window.__TAURI__ = { core: { invoke: async () => {} } }
+  opened.app.run('render()')
+  return opened
+}
+
+test('the GitHub route parses', () => {
+  const app = dashboard()
+
+  assert.deepEqual(plain(app.run('parseRoute("#/github/%2Fa%2Ffeature%20x%2By")')), { kind: 'github', path: '/a/feature x+y' })
+  assert.equal(app.run(`githubHash(${JSON.stringify(githubWorktree)})`), '#/github/%2Fa%2Ffeature%20x%2By')
+})
+
+test('the GitHub item shows in the app on configured checkouts', async () => {
+  const sessions = [sessionAt('s1', githubWorktree), sessionAt('s2', githubMain)]
+  const { app } = await githubApp(githubWorktree, sessions)
+
+  assert.deepEqual(barLinks(app), [
+    { href: worktreeHashOf(githubWorktree), text: '▣ Terminal' },
+    { href: githubHashOf(githubWorktree), text: 'GitHub' },
+    { href: '#/o/r/main/s1', text: 's1 build implement' },
+  ])
+  assert.match(app.elements.get('worktree-bar').innerHTML, /<svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor"/)
+
+  navigate(app, worktreeHashOf(githubMain))
+  assert.deepEqual(barLinks(app), [
+    { href: worktreeHashOf(githubMain), text: '▣ Terminal' },
+    { href: githubHashOf(githubMain), text: 'GitHub' },
+    { href: '#/o/r/main/s2', text: 's2 build implement' },
+  ])
+})
+
+test('the GitHub item hides outside the app and on unlisted paths', async () => {
+  const gone = '/a/gone'
+  const sessions = [sessionAt('s1', githubWorktree), sessionAt('s2', gone)]
+
+  const { app: browser } = await worktreeApp(githubWorktree, sessions, () => response(JSON.stringify(githubRepos)))
+  assert.deepEqual(barLinks(browser).map(({ text }) => text), ['▣ Terminal', 's1 build implement'])
+
+  const { app } = await githubApp(githubWorktree, sessions)
+  navigate(app, '#/o/r/main/s2')
+  await settle()
+  assert.deepEqual(barLinks(app).map(({ text }) => text), ['▣ Terminal', 's2 build implement'])
+  assert.equal(app.run(`hasGithubItem(${JSON.stringify(gone)})`), false)
+})
+
+test('the GitHub route shows the worktree page with the GitHub item current and parks the terminal', async () => {
+  const { app } = await githubApp(githubWorktree)
+  clickTab(app, 'add')
+  const [tab] = tabsOf(app, githubWorktree)
+
+  navigate(app, githubHashOf(githubWorktree))
+  assert.deepEqual(pageIds(app), ['worktree-card', 'worktree-bar', 'github-tools', 'github-view'])
+  assert.match(app.elements.get('page').innerHTML, /<div class="session-page github-item">/)
+  assert.deepEqual(currentBarLinks(app), [githubHashOf(githubWorktree)])
+  assert.deepEqual(app.elements.get('term-store').children, [tab.el])
+  assert.match(html, /\.session-page\.github-item \{\s*grid-template-columns: minmax\(0, 1fr\);\s*grid-template-rows: auto auto minmax\(0, 1fr\);\s*\}/)
+
+  app.window.dispatch('resize')
+  navigate(app, worktreeHashOf(githubWorktree))
+  assert.deepEqual(shownTerms(app), [tab.el])
+})
+
+test('a standalone worktree keeps its GitHub route in scope', async () => {
+  const root = worktreeHashOf(githubWorktree)
+
+  for (const [key, modifiers] of [['l'], ['Escape'], ['[', { metaKey: true }]]) {
+    const app = await standaloneApp(root, [], githubRepos)
+    app.window.__TAURI__ = { core: { invoke: async () => {} } }
+
+    assert.equal(app.run(`inScope(parseRoute(githubHash(${JSON.stringify(githubWorktree)})))`), true)
+    assert.equal(scoped(app, githubHashOf(githubMain)), false)
+    assert.equal(scoped(app, githubHashOf('/a/other')), false)
+
+    navigate(app, githubHashOf(githubWorktree))
+    assert.equal(app.context.location.hash, githubHashOf(githubWorktree))
+    assert.ok(press(app, key, modifiers), `${key} is taken`)
+    assert.equal(app.context.location.hash, root)
+  }
+})
+
+test('a GitHub root allows its worktree page and names its repo and branch', async () => {
+  const root = githubHashOf(githubWorktree)
+  const { app, titles } = await titledApp(root, [sessionAt('s1', githubWorktree)], githubRepos)
+
+  for (const hash of [root, worktreeHashOf(githubWorktree), '#/o/r/main/s1']) assert.equal(scoped(app, hash), true, hash)
+  for (const hash of ['#/', githubHashOf(githubMain), worktreeHashOf(githubMain)]) assert.equal(scoped(app, hash), false, hash)
+  assert.deepEqual(titles, ['Jam · r/feature'])
+})
+
+test('the bar steps onto the GitHub item', async () => {
+  const { app } = await githubApp(githubWorktree, [sessionAt('s1', githubWorktree)])
+
+  // Presses the bar key of `direction`, follows the new hash, and returns it.
+  const step = async (direction) => {
+    assert.ok(pressBar(app, direction), `${direction} is taken`)
+    app.window.dispatch('hashchange')
+    await settle()
+    return app.context.location.hash
+  }
+
+  assert.equal(await step('next'), githubHashOf(githubWorktree))
+  assert.deepEqual(currentBarLinks(app), [githubHashOf(githubWorktree)])
+  assert.equal(await step('next'), '#/o/r/main/s1')
+  assert.equal(await step('previous'), githubHashOf(githubWorktree))
+  assert.equal(await step('previous'), worktreeHashOf(githubWorktree))
+  assert.deepEqual(currentBarLinks(app), [worktreeHashOf(githubWorktree)])
+})
+
+const githubPr = 'https://github.com/o/r/pull/7'
+const githubRepo = 'https://github.com/o/r'
+
+// The bounds of the GitHub placeholder in the dashboards of `githubViewApp`.
+const githubBounds = { x: 0, y: 96, width: 1200, height: 640 }
+
+// Returns the `api/github` reply that carries `url` or `error`.
+const githubReply = (url, error = null) => response(JSON.stringify({ url, error }))
+
+// Returns the `github_view_show` call of `url` for `githubWorktree` at `bounds`.
+const githubShow = (url, bounds = githubBounds) => ['github_view_show', { path: githubWorktree, url, ...bounds }]
+
+const githubPlaceholder = (app) => app.elements.get('github-view').textContent
+
+// Returns a dashboard in the app on the Terminal item of `githubWorktree` after one poll, the `[command, args]` of each invoke, and the pending `api/github` fetches as `{ url, answer }`.
+// Each invoke settles as `invokeReply(command)` does, and `api/repos` lists `repos`.
+async function githubViewApp(invokeReply = async () => {}, repos = githubRepos) {
+  const invoked = []
+  const fetches = []
+  const invoke = (command, args) => {
+    invoked.push(args === undefined ? [command] : [command, plain(args)])
+    return invokeReply(command)
+  }
+
+  const app = dashboard({
+    pageTop: githubBounds.y,
+    pageHeight: githubBounds.height,
+    tauri: { core: { invoke } },
+    fetcher: (url) => {
+      if (url === 'api/repos') return response(JSON.stringify(repos))
+      if (url === 'api/sessions') return sessionsReply([])
+      if (url.startsWith('api/github?')) return new Promise((answer) => fetches.push({ url, answer }))
+      return response('', false, { status: 404 })
+    },
+  })
+  app.context.location.hash = worktreeHashOf(githubWorktree)
+  await app.run('poll()')
+  return { app, invoked, fetches }
+}
+
+// Returns the dashboard of `githubViewApp(invokeReply, repos)` on the GitHub item of `githubWorktree` once its URL fetch answers `url`.
+async function shownGithubApp(url = githubPr, invokeReply = undefined, repos = undefined) {
+  const opened = await githubViewApp(invokeReply, repos)
+  navigate(opened.app, githubHashOf(githubWorktree))
+  opened.fetches[0].answer(githubReply(url))
+  await settle()
+  return opened
+}
+
+// Clicks the GitHub toolbar button of `action`.
+function clickGithubTool(app, action) {
+  const button = { dataset: { github: action } }
+  const target = { closest: (selector) => (selector === 'button[data-github]' ? button : null) }
+  app.elements.get('github-tools').dispatch('click', { target })
+}
+
+test('entering the GitHub route shows the view', async () => {
+  const { app, invoked, fetches } = await githubViewApp()
+
+  navigate(app, githubHashOf(githubWorktree))
+  assert.deepEqual(fetches.map(({ url }) => url), ['api/github?path=%2Fa%2Ffeature%20x%2By'])
+  assert.equal(githubPlaceholder(app), 'loading…')
+  assert.deepEqual(invoked, [])
+
+  fetches[0].answer(githubReply(githubPr))
+  await settle()
+  assert.deepEqual(invoked, [githubShow(githubPr)])
+  assert.equal(githubPlaceholder(app), '')
+})
+
+test('a failed fetch shows the error', async () => {
+  const { app, invoked, fetches } = await githubViewApp()
+
+  navigate(app, githubHashOf(githubWorktree))
+  fetches[0].answer(githubReply(null, 'gh: not logged in'))
+  await settle()
+
+  assert.equal(githubPlaceholder(app), 'gh: not logged in')
+  assert.deepEqual(invoked, [])
+})
+
+test('leaving the route hides the view', async () => {
+  const { app, invoked } = await shownGithubApp()
+
+  navigate(app, '#/')
+  await settle()
+  assert.deepEqual(invoked, [githubShow(githubPr), ['github_view_hide']])
+
+  await app.run('poll()')
+  await settle()
+  assert.deepEqual(invoked, [githubShow(githubPr), ['github_view_hide']])
+})
+
+test('leaving the route hides the view only once the pending show settles', async () => {
+  let finishShow
+  const invokeReply = async (command) => {
+    if (command === 'github_view_show') await new Promise((resolve) => (finishShow = resolve))
+  }
+  const { app, invoked } = await shownGithubApp(githubPr, invokeReply)
+
+  navigate(app, '#/')
+  await settle()
+  assert.deepEqual(invoked, [githubShow(githubPr)])
+
+  finishShow()
+  await settle()
+  assert.deepEqual(invoked, [githubShow(githubPr), ['github_view_hide']])
+})
+
+test('a worktree gone from the repos hides the view', async () => {
+  const repos = { ...githubRepos, repos: [{ ...githubRepos.repos[0] }] }
+  const { app, invoked } = await shownGithubApp(githubPr, undefined, repos)
+
+  repos.repos[0].worktrees = []
+  await app.run('poll()')
+  await settle()
+  assert.equal(app.context.location.hash, githubHashOf(githubWorktree))
+  assert.deepEqual(invoked, [githubShow(githubPr), ['github_view_hide']])
+})
+
+test('pop-ups hide and restore the view', async () => {
+  const { app, invoked } = await shownGithubApp()
+  const popUps = [
+    [() => press(app, 'k', { metaKey: true }), () => press(app, 'Escape')],
+    [() => press(app, '?', { shiftKey: true }), () => press(app, '?', { shiftKey: true })],
+    [() => app.run('tell("Done.")'), () => closeModal(app, 'ok')],
+  ]
+
+  for (const [open, close] of popUps) {
+    invoked.length = 0
+    open()
+    await settle()
+    assert.deepEqual(invoked, [['github_view_hide']])
+
+    close()
+    await settle()
+    assert.deepEqual(invoked, [['github_view_hide'], githubShow(githubPr)])
+  }
+})
+
+test('a late fetch does not show the view under a pop-up', async () => {
+  const { app, invoked, fetches } = await githubViewApp()
+
+  navigate(app, githubHashOf(githubWorktree))
+  assert.ok(press(app, 'k', { metaKey: true }))
+  fetches[0].answer(githubReply(githubPr))
+  await settle()
+  assert.deepEqual(invoked, [])
+
+  assert.ok(press(app, 'Escape'))
+  await settle()
+  assert.deepEqual(invoked, [githubShow(githubPr)])
+})
+
+test('the toolbar runs its commands', async () => {
+  const { app, invoked, fetches } = await shownGithubApp(githubRepo)
+  const buttons = [...app.elements.get('page').innerHTML.matchAll(/<button type="button" data-github="([^"]+)"[^>]*>([^<]*)<\/button>/g)]
+  assert.deepEqual(buttons.map((match) => [match[1], match[2]]), [['back', 'Back'], ['reload', 'Reload'], ['refetch', 'PR/Repo'], ['browser', 'Open in browser']])
+
+  invoked.length = 0
+  for (const action of ['back', 'reload', 'browser']) clickGithubTool(app, action)
+  await settle()
+  assert.deepEqual(invoked, [
+    ['github_view_action', { action: 'back' }],
+    ['github_view_action', { action: 'reload' }],
+    ['github_view_action', { action: 'browser' }],
+  ])
+
+  invoked.length = 0
+  clickGithubTool(app, 'refetch')
+  assert.deepEqual(fetches.map(({ url }) => url), ['api/github?path=%2Fa%2Ffeature%20x%2By', 'api/github?path=%2Fa%2Ffeature%20x%2By'])
+  assert.equal(githubPlaceholder(app), 'loading…')
+
+  fetches[1].answer(githubReply(githubPr))
+  await settle()
+  assert.deepEqual(invoked, [['github_view_load', { path: githubWorktree, url: githubPr }]])
+})
+
+test('the toolbar leaves the page of another worktree alone while the GitHub item loads or fails', async () => {
+  const other = { path: '/a/other', branch: 'other', head: null }
+  const repos = { ...githubRepos, repos: [{ ...githubRepos.repos[0], worktrees: [...githubRepos.repos[0].worktrees, other] }] }
+  const { app, invoked, fetches } = await shownGithubApp(githubPr, undefined, repos)
+
+  navigate(app, githubHashOf(other.path))
+  await settle()
+  assert.deepEqual(fetches.map(({ url }) => url), ['api/github?path=%2Fa%2Ffeature%20x%2By', 'api/github?path=%2Fa%2Fother'])
+  assert.equal(githubPlaceholder(app), 'loading…')
+  assert.deepEqual(invoked, [githubShow(githubPr), ['github_view_hide']])
+
+  invoked.length = 0
+  for (const action of ['back', 'reload', 'browser']) clickGithubTool(app, action)
+  await settle()
+  assert.deepEqual(invoked, [])
+
+  fetches[1].answer(githubReply(null, 'gh: not logged in'))
+  await settle()
+  assert.equal(githubPlaceholder(app), 'gh: not logged in')
+
+  for (const action of ['back', 'reload', 'browser']) clickGithubTool(app, action)
+  await settle()
+  assert.deepEqual(invoked, [])
+})
+
+test('a show error shows in the placeholder', async () => {
+  const error = 'Cannot read githubSignInHosts from /home/me/.jam-factory/config.json: bad entry *okta.com'
+  const invokeReply = async (command) => {
+    if (command === 'github_view_show') throw error
+  }
+  const { app, invoked } = await shownGithubApp(githubPr, invokeReply)
+
+  assert.equal(githubPlaceholder(app), error)
+  assert.deepEqual(invoked, [githubShow(githubPr), ['github_view_hide']])
+
+  await app.run('poll()')
+  await settle()
+  assert.equal(invoked.length, 2)
+})
+
+test('the URL is fetched once per path', async () => {
+  const { app, invoked, fetches } = await shownGithubApp()
+
+  navigate(app, worktreeHashOf(githubWorktree))
+  navigate(app, githubHashOf(githubWorktree))
+  await settle()
+
+  assert.equal(fetches.length, 1)
+  assert.deepEqual(invoked, [githubShow(githubPr), ['github_view_hide'], githubShow(githubPr)])
+})
+
+test('the view follows its placeholder on resize and font-size change', async () => {
+  const { app, invoked } = await shownGithubApp()
+
+  app.window.dispatch('resize')
+  await app.run('poll()')
+  await settle()
+  assert.deepEqual(invoked, [githubShow(githubPr)])
+
+  app.geometry.pageHeight = 500
+  app.window.dispatch('resize')
+  await settle()
+  assert.deepEqual(invoked.at(-1), githubShow(githubPr, { ...githubBounds, height: 500 }))
+
+  app.geometry.pageTop = 120
+  app.elements.get('font-down').dispatch('click')
+  await settle()
+  assert.deepEqual(invoked.at(-1), githubShow(githubPr, { ...githubBounds, y: 120, height: 500 }))
+  assert.equal(invoked.length, 3)
 })
