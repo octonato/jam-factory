@@ -2488,7 +2488,7 @@ function hasGithubItem(path) {
   return window.__TAURI__ !== undefined && (findWorktree(path) !== null || findRepo(path) !== undefined)
 }
 
-// Returns the items of the bar of the worktree at `path`: the Terminal item, the GitHub item when `path` has one, then one item per session of `path`, then `selected` when `path` lacks it.
+// Returns the items of the bar of the worktree at `path`: the GitHub item when `path` has one, the Terminal item, then one item per session of `path`, then `selected` when `path` lacks it.
 // Returns only the item of `selected` when `path` is null.
 function barItems(path, selected) {
   if (path === null) return [{ hash: sessionHref(selected), session: selected }]
@@ -2498,7 +2498,7 @@ function barItems(path, selected) {
 
   const terminal = { hash: worktreeHash(path), session: null }
   const github = hasGithubItem(path) ? [{ hash: githubHash(path), session: null, github: true }] : []
-  return [terminal, ...github, ...sessions.map((session) => ({ hash: sessionHref(session), session }))]
+  return [...github, terminal, ...sessions.map((session) => ({ hash: sessionHref(session), session }))]
 }
 
 // Returns true when `item` is the current bar item: the GitHub item when `github` is true, else the item of `selected`.

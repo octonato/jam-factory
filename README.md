@@ -168,6 +168,14 @@ To create a worktree, select a main row on the Repos tab and press `b`, or press
 { "githubUser": "octonato" }
 ```
 
+A worktree's GitHub tab shows the worktree's GitHub page inside Jam Board. The tab keeps GitHub pages and opens other links in your default browser. If your GitHub organization signs in through an identity provider such as Okta, set `githubSignInHosts` to the provider's hosts. The tab then keeps the sign-in pages too. Each entry is a host, such as `sso.example.org`, or `*.` plus a domain, such as `*.okta.com`. A `*.` entry matches every subdomain of the domain, but not the domain itself:
+
+```json
+{ "githubSignInHosts": ["*.okta.com"] }
+```
+
+Jam Board reads `githubSignInHosts` when a window first shows its GitHub tab. Reopen the window after a change. The tab shows an error when an entry is not a valid host.
+
 To open a worktree from a terminal, run `jb` in it, or pass its path or a folder inside it. `jb` opens the worktree in its own Jam Board window, or focuses the window when it is open. It starts Jam Board when it is not running. The worktree must be a linked worktree of a checkout in `repos`:
 
 ```sh
@@ -349,7 +357,7 @@ A step in changes mode holds git diffs. A step in code-path mode holds lines of 
 
 ```
 ~/.jam-factory/
-  config.json                    optional: { "root": "<root>", "port": <port>, "repos": ["<path>", ...], "githubUser": "<login>" }
+  config.json                    optional: { "root": "<root>", "port": <port>, "repos": ["<path>", ...], "githubUser": "<login>", "githubSignInHosts": ["<host>", ...] }
 <root>/                          ~/.jam-factory/factory by default
   <org>/<repo>/sessions/<branch>/<session id>/
     session.json                 the session's mode, stage, round and counts

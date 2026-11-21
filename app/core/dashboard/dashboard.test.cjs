@@ -6158,16 +6158,16 @@ test('the GitHub item shows in the app on configured checkouts', async () => {
   const { app } = await githubApp(githubWorktree, sessions)
 
   assert.deepEqual(barLinks(app), [
-    { href: worktreeHashOf(githubWorktree), text: '▣ Terminal' },
     { href: githubHashOf(githubWorktree), text: 'GitHub' },
+    { href: worktreeHashOf(githubWorktree), text: '▣ Terminal' },
     { href: '#/o/r/main/s1', text: 's1 build implement' },
   ])
   assert.match(app.elements.get('worktree-bar').innerHTML, /<svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor"/)
 
   navigate(app, worktreeHashOf(githubMain))
   assert.deepEqual(barLinks(app), [
-    { href: worktreeHashOf(githubMain), text: '▣ Terminal' },
     { href: githubHashOf(githubMain), text: 'GitHub' },
+    { href: worktreeHashOf(githubMain), text: '▣ Terminal' },
     { href: '#/o/r/main/s2', text: 's2 build implement' },
   ])
 })
@@ -6241,12 +6241,12 @@ test('the bar steps onto the GitHub item', async () => {
     return app.context.location.hash
   }
 
-  assert.equal(await step('next'), githubHashOf(githubWorktree))
-  assert.deepEqual(currentBarLinks(app), [githubHashOf(githubWorktree)])
-  assert.equal(await step('next'), '#/o/r/main/s1')
   assert.equal(await step('previous'), githubHashOf(githubWorktree))
-  assert.equal(await step('previous'), worktreeHashOf(githubWorktree))
+  assert.deepEqual(currentBarLinks(app), [githubHashOf(githubWorktree)])
+  assert.equal(await step('next'), worktreeHashOf(githubWorktree))
   assert.deepEqual(currentBarLinks(app), [worktreeHashOf(githubWorktree)])
+  assert.equal(await step('next'), '#/o/r/main/s1')
+  assert.equal(await step('previous'), worktreeHashOf(githubWorktree))
 })
 
 const githubPr = 'https://github.com/o/r/pull/7'
