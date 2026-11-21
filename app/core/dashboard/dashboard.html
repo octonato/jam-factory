@@ -2685,13 +2685,14 @@ function queueGithub(step) {
   return run
 }
 
-// Shows the GitHub view over its placeholder, or moves it there when the placeholder moved.
+// Shows the GitHub view over its placeholder, or moves it there when the placeholder or the viewport moved.
+// Sends the placeholder bounds in viewport coordinates and the viewport height.
 // Does nothing unless the page shows the GitHub item of `githubTab` with its URL and no pop-up shows.
 function showGithubView() {
   if (githubTab.url === null || !githubItemShows() || githubOverlayOpen()) return
 
   const rect = $('github-view').getBoundingClientRect()
-  const bounds = { x: rect.left, y: rect.top, width: rect.width, height: rect.height }
+  const bounds = { x: rect.left, y: rect.top, width: rect.width, height: rect.height, viewportHeight: window.innerHeight }
   if (githubView.shown && JSON.stringify(bounds) === JSON.stringify(githubView.bounds)) return
 
   const { path, url, seq } = githubTab

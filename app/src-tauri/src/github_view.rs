@@ -69,8 +69,10 @@ fn page_state(loaded: Option<&str>, path: &str, pending: bool) -> Page {
     }
 }
 
-/// Shows the GitHub view of the calling window at these logical bounds, and loads `url` when the view is new or last loaded another path.
+/// Shows the GitHub view of the calling window at these logical bounds of the board page's viewport, and loads `url` when the view is new or last loaded another path.
+/// `viewport_height` is the height of the board page's viewport.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn github_view_show(
     webview: Webview,
     path: String,
@@ -79,10 +81,12 @@ pub async fn github_view_show(
     y: f64,
     width: f64,
     height: f64,
+    viewport_height: f64,
 ) -> Result<(), String> {
     let window = webview.window();
     let url = parse(&url)?;
-    let position = LogicalPosition::new(x, y);
+    let origin = viewport_origin(&window, &webview, viewport_height)?;
+    let position = LogicalPosition::new(origin.x + x, origin.y + y);
     let size = LogicalSize::new(width, height);
 
     shown().insert(window.label().to_string());
@@ -148,6 +152,31 @@ pub fn reload_focused(app: &AppHandle) {
 fn focused_board_window(app: &AppHandle) -> Option<Window> {
     app.get_focused_window()
         .filter(|window| windows::board_webview(window).is_some())
+}
+
+/// Returns the logical position in `window` of the top left corner of the viewport of `board`, whose page reports a viewport of height `viewport_height`.
+fn viewport_origin(
+    window: &Window,
+    board: &Webview,
+    viewport_height: f64,
+) -> Result<LogicalPosition<f64>, String> {
+    let scale = window.scale_factor().map_err(|e| e.to_string())?;
+    let bounds = board
+        .bounds()
+        .map_err(|e| format!("Cannot read the board page bounds: {e}"))?;
+
+    let position = bounds.position.to_logical::<f64>(scale);
+    let size = bounds.size.to_logical::<f64>(scale);
+
+    Ok(LogicalPosition::new(
+        position.x,
+        position.y + top_inset(size.height, viewport_height),
+    ))
+}
+
+/// Returns the space above a viewport of height `viewport_height` that ends at the bottom of a web view of height `frame_height`.
+fn top_inset(frame_height: f64, viewport_height: f64) -> f64 {
+    (frame_height - viewport_height).max(0.0)
 }
 
 /// Returns the GitHub view of `window`.
@@ -299,6 +328,13 @@ mod tests {
     fn the_github_view_label_follows_the_window() {
         assert_eq!(github_label("main"), "main-github");
         assert_eq!(github_label("board-3"), "board-3-github");
+    }
+
+    #[test]
+    fn the_viewport_starts_below_the_inset_of_the_board_page() {
+        assert_eq!(top_inset(800.0, 800.0), 0.0);
+        assert_eq!(top_inset(800.0, 772.0), 28.0);
+        assert_eq!(top_inset(800.0, 801.0), 0.0);
     }
 
     #[test]

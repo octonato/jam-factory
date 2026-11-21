@@ -183,6 +183,7 @@ function dashboard({ script = source, pageWidth = 1200, pageLeft = 0, pageTop = 
     hasFocus() { return this.focused },
   })
   const window = new Target()
+  Object.defineProperty(window, 'innerHeight', { get: () => geometry.pageTop + geometry.pageHeight })
   if (tauri !== undefined) window.__TAURI__ = tauri
   const context = vm.createContext({
     document,
@@ -6291,8 +6292,8 @@ const githubBounds = { x: 0, y: 96, width: 1200, height: 640 }
 // Returns the `api/github` reply that carries `url` or `error`.
 const githubReply = (url, error = null) => response(JSON.stringify({ url, error }))
 
-// Returns the `github_view_show` call of `url` for `githubWorktree` at `bounds`.
-const githubShow = (url, bounds = githubBounds) => ['github_view_show', { path: githubWorktree, url, ...bounds }]
+// Returns the `github_view_show` call of `url` for `githubWorktree` at `bounds`, in a viewport that ends at the bottom of `bounds`.
+const githubShow = (url, bounds = githubBounds) => ['github_view_show', { path: githubWorktree, url, ...bounds, viewportHeight: bounds.y + bounds.height }]
 
 const githubPlaceholder = (app) => app.elements.get('github-view').textContent
 
