@@ -501,12 +501,7 @@ mod tests {
                 .iter()
                 .any(|p| p.identifier().get() == "core:window:allow-set-title")
         );
-        for github_view in [
-            "allow-github-view-show",
-            "allow-github-view-load",
-            "allow-github-view-hide",
-            "allow-github-view-action",
-        ] {
+        for github_view in ["allow-github-view-show", "allow-github-view-hide"] {
             assert!(
                 capability
                     .permissions

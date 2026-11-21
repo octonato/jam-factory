@@ -12,8 +12,6 @@
     "allow-open-window",
     "allow-open-main-window",
     "allow-github-view-show",
-    "allow-github-view-load",
-    "allow-github-view-hide",
-    "allow-github-view-action"
+    "allow-github-view-hide"
   ]
 }

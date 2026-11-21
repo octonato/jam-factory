@@ -168,7 +168,7 @@ To create a worktree, select a main row on the Repos tab and press `b`, or press
 { "githubUser": "octonato" }
 ```
 
-A worktree's GitHub tab shows the worktree's GitHub page inside Jam Board. The tab keeps GitHub pages and opens other links in your default browser. If your GitHub organization signs in through an identity provider such as Okta, set `githubSignInHosts` to the provider's hosts. The tab then keeps the sign-in pages too. Each entry is a host, such as `sso.example.org`, or `*.` plus a domain, such as `*.okta.com`. A `*.` entry matches every subdomain of the domain, but not the domain itself:
+A worktree's GitHub tab shows the worktree's GitHub page inside Jam Board: the branch's PR, open, closed or merged, or the repo page when the branch has no PR. A worktree opens on its GitHub tab, unless it has a terminal tab. The tab keeps GitHub pages and opens other links in your default browser. If your GitHub organization signs in through an identity provider such as Okta, set `githubSignInHosts` to the provider's hosts. The tab then keeps the sign-in pages too. Each entry is a host, such as `sso.example.org`, or `*.` plus a domain, such as `*.okta.com`. A `*.` entry matches every subdomain of the domain, but not the domain itself:
 
 ```json
 { "githubSignInHosts": ["*.okta.com"] }

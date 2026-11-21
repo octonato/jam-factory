@@ -17,9 +17,7 @@ fn main() {
         "open_window",
         "open_main_window",
         "github_view_show",
-        "github_view_load",
         "github_view_hide",
-        "github_view_action",
     ]);
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(app))
         .expect("failed to run the Tauri build script");

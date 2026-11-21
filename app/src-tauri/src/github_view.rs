@@ -28,10 +28,6 @@ use jam_factory_store::root::resolve_sign_in_hosts;
 use crate::navigation::{self, Navigation};
 use crate::windows;
 
-const GO_BACK: &str = "history.back()";
-
-const NO_VIEW: &str = "The board window has no GitHub view";
-
 /// The worktree path that each GitHub view last loaded, by window label.
 static LOADED: LazyLock<Mutex<HashMap<String, String>>> = LazyLock::new(Mutex::default);
 
@@ -118,22 +114,6 @@ pub async fn github_view_show(
     Ok(())
 }
 
-/// Loads `url` in the GitHub view of the calling window and records `path` as its worktree.
-#[tauri::command]
-pub async fn github_view_load(webview: Webview, path: String, url: String) -> Result<(), String> {
-    let window = webview.window();
-    let url = parse(&url)?;
-    let view = github_view(&window).ok_or(NO_VIEW)?;
-
-    match worktree_page(&window, &path) {
-        Page::Ready => navigate(&view, url)?,
-        Page::Pending | Page::Stale => load_hidden(&window, &view, url)?,
-    }
-    loaded().insert(window.label().to_string(), path);
-
-    Ok(())
-}
-
 /// Hides the GitHub view of the calling window, if it has one.
 #[tauri::command]
 pub async fn github_view_hide(webview: Webview) -> Result<(), String> {
@@ -146,22 +126,6 @@ pub async fn github_view_hide(webview: Webview) -> Result<(), String> {
 
     view.hide()
         .map_err(|e| format!("Cannot hide the GitHub view: {e}"))
-}
-
-/// Runs `action`, one of `back`, `reload` and `browser`, on the GitHub view of the calling window, if it has one.
-#[tauri::command]
-pub async fn github_view_action(webview: Webview, action: String) -> Result<(), String> {
-    let run: fn(&Webview) -> Result<(), String> = match action.as_str() {
-        "back" => go_back,
-        "reload" => reload,
-        "browser" => open_page_in_browser,
-        _ => return Err(format!("Unknown GitHub view action: {action}")),
-    };
-
-    match github_view(&webview.window()) {
-        Some(view) => run(&view),
-        None => Ok(()),
-    }
 }
 
 /// Reloads the GitHub view of the focused board window when it shows.
@@ -305,16 +269,6 @@ fn navigate(view: &Webview, url: Url) -> Result<(), String> {
         .map_err(|e| format!("Cannot load the GitHub page: {e}"))
 }
 
-/// Runs `history.back()` in `view`, unless it has a pending page.
-fn go_back(view: &Webview) -> Result<(), String> {
-    if pending_url(view).is_some() {
-        return Ok(());
-    }
-
-    view.eval(GO_BACK)
-        .map_err(|e| format!("Cannot go back in the GitHub view: {e}"))
-}
-
 /// Reloads `view`, or loads its pending page again.
 fn reload(view: &Webview) -> Result<(), String> {
     if let Some(url) = pending_url(view) {
@@ -323,19 +277,6 @@ fn reload(view: &Webview) -> Result<(), String> {
 
     view.reload()
         .map_err(|e| format!("Cannot reload the GitHub view: {e}"))
-}
-
-/// Opens the pending page of `view`, or the page it shows, in the default browser.
-fn open_page_in_browser(view: &Webview) -> Result<(), String> {
-    let url = match pending_url(view) {
-        Some(url) => url,
-        None => view
-            .url()
-            .map_err(|e| format!("Cannot read the GitHub view's page: {e}"))?,
-    };
-
-    navigation::open_in_browser(&url);
-    Ok(())
 }
 
 fn loaded() -> MutexGuard<'static, HashMap<String, String>> {

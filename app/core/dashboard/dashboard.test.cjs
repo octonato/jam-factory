@@ -187,7 +187,7 @@ function dashboard({ script = source, pageWidth = 1200, pageLeft = 0, pageTop = 
   const context = vm.createContext({
     document,
     window,
-    location: { hash, search },
+    location: { hash, search, replace(url) { this.hash = url } },
     URLSearchParams,
     localStorage: {
       getItem: (key) => storage.get(key) ?? null,
@@ -6192,7 +6192,7 @@ test('the GitHub route shows the worktree page with the GitHub item current and 
   const [tab] = tabsOf(app, githubWorktree)
 
   navigate(app, githubHashOf(githubWorktree))
-  assert.deepEqual(pageIds(app), ['worktree-card', 'worktree-bar', 'github-tools', 'github-view'])
+  assert.deepEqual(pageIds(app), ['worktree-card', 'worktree-bar', 'github-view'])
   assert.match(app.elements.get('page').innerHTML, /<div class="session-page github-item">/)
   assert.deepEqual(currentBarLinks(app), [githubHashOf(githubWorktree)])
   assert.deepEqual(app.elements.get('term-store').children, [tab.el])
@@ -6249,8 +6249,41 @@ test('the bar steps onto the GitHub item', async () => {
   assert.equal(await step('previous'), worktreeHashOf(githubWorktree))
 })
 
+test('opening a worktree with no terminal tab shows its GitHub item', async () => {
+  const { app } = await githubApp(githubWorktree)
+
+  navigate(app, '#/')
+  navigate(app, worktreeHashOf(githubWorktree))
+  assert.equal(app.context.location.hash, githubHashOf(githubWorktree))
+  assert.deepEqual(currentBarLinks(app), [githubHashOf(githubWorktree)])
+
+  navigate(app, worktreeHashOf(githubWorktree))
+  assert.equal(app.context.location.hash, worktreeHashOf(githubWorktree))
+  assert.deepEqual(currentBarLinks(app), [worktreeHashOf(githubWorktree)])
+})
+
+test('opening a worktree with a terminal tab shows its Terminal item', async () => {
+  const { app } = await githubApp(githubWorktree)
+  clickTab(app, 'add')
+
+  navigate(app, '#/')
+  navigate(app, worktreeHashOf(githubWorktree))
+  assert.equal(app.context.location.hash, worktreeHashOf(githubWorktree))
+  assert.deepEqual(currentBarLinks(app), [worktreeHashOf(githubWorktree)])
+})
+
+test('opening a worktree with a program shows its Terminal item', async () => {
+  const { app } = await githubApp(githubWorktree)
+  navigate(app, '#/')
+
+  app.run(`openWorktree(${JSON.stringify(githubWorktree)}, 'lazygit')`)
+  app.window.dispatch('hashchange')
+  assert.equal(app.context.location.hash, worktreeHashOf(githubWorktree))
+  assert.deepEqual(tabsOf(app, githubWorktree).map((tab) => tab.program), ['lazygit'])
+  assert.deepEqual(currentBarLinks(app), [worktreeHashOf(githubWorktree)])
+})
+
 const githubPr = 'https://github.com/o/r/pull/7'
-const githubRepo = 'https://github.com/o/r'
 
 // The bounds of the GitHub placeholder in the dashboards of `githubViewApp`.
 const githubBounds = { x: 0, y: 96, width: 1200, height: 640 }
@@ -6263,7 +6296,7 @@ const githubShow = (url, bounds = githubBounds) => ['github_view_show', { path: 
 
 const githubPlaceholder = (app) => app.elements.get('github-view').textContent
 
-// Returns a dashboard in the app on the Terminal item of `githubWorktree` after one poll, the `[command, args]` of each invoke, and the pending `api/github` fetches as `{ url, answer }`.
+// Returns a dashboard in the app on the repos page after one poll, the `[command, args]` of each invoke, and the pending `api/github` fetches as `{ url, answer }`.
 // Each invoke settles as `invokeReply(command)` does, and `api/repos` lists `repos`.
 async function githubViewApp(invokeReply = async () => {}, repos = githubRepos) {
   const invoked = []
@@ -6284,7 +6317,7 @@ async function githubViewApp(invokeReply = async () => {}, repos = githubRepos) 
       return response('', false, { status: 404 })
     },
   })
-  app.context.location.hash = worktreeHashOf(githubWorktree)
+  app.context.location.hash = '#/'
   await app.run('poll()')
   return { app, invoked, fetches }
 }
@@ -6296,13 +6329,6 @@ async function shownGithubApp(url = githubPr, invokeReply = undefined, repos = u
   opened.fetches[0].answer(githubReply(url))
   await settle()
   return opened
-}
-
-// Clicks the GitHub toolbar button of `action`.
-function clickGithubTool(app, action) {
-  const button = { dataset: { github: action } }
-  const target = { closest: (selector) => (selector === 'button[data-github]' ? button : null) }
-  app.elements.get('github-tools').dispatch('click', { target })
 }
 
 test('entering the GitHub route shows the view', async () => {
@@ -6403,31 +6429,7 @@ test('a late fetch does not show the view under a pop-up', async () => {
   assert.deepEqual(invoked, [githubShow(githubPr)])
 })
 
-test('the toolbar runs its commands', async () => {
-  const { app, invoked, fetches } = await shownGithubApp(githubRepo)
-  const buttons = [...app.elements.get('page').innerHTML.matchAll(/<button type="button" data-github="([^"]+)"[^>]*>([^<]*)<\/button>/g)]
-  assert.deepEqual(buttons.map((match) => [match[1], match[2]]), [['back', 'Back'], ['reload', 'Reload'], ['refetch', 'PR/Repo'], ['browser', 'Open in browser']])
-
-  invoked.length = 0
-  for (const action of ['back', 'reload', 'browser']) clickGithubTool(app, action)
-  await settle()
-  assert.deepEqual(invoked, [
-    ['github_view_action', { action: 'back' }],
-    ['github_view_action', { action: 'reload' }],
-    ['github_view_action', { action: 'browser' }],
-  ])
-
-  invoked.length = 0
-  clickGithubTool(app, 'refetch')
-  assert.deepEqual(fetches.map(({ url }) => url), ['api/github?path=%2Fa%2Ffeature%20x%2By', 'api/github?path=%2Fa%2Ffeature%20x%2By'])
-  assert.equal(githubPlaceholder(app), 'loading…')
-
-  fetches[1].answer(githubReply(githubPr))
-  await settle()
-  assert.deepEqual(invoked, [['github_view_load', { path: githubWorktree, url: githubPr }]])
-})
-
-test('the toolbar leaves the page of another worktree alone while the GitHub item loads or fails', async () => {
+test('the GitHub item of another worktree hides the view while it loads or fails', async () => {
   const other = { path: '/a/other', branch: 'other', head: null }
   const repos = { ...githubRepos, repos: [{ ...githubRepos.repos[0], worktrees: [...githubRepos.repos[0].worktrees, other] }] }
   const { app, invoked, fetches } = await shownGithubApp(githubPr, undefined, repos)
@@ -6438,18 +6440,10 @@ test('the toolbar leaves the page of another worktree alone while the GitHub ite
   assert.equal(githubPlaceholder(app), 'loading…')
   assert.deepEqual(invoked, [githubShow(githubPr), ['github_view_hide']])
 
-  invoked.length = 0
-  for (const action of ['back', 'reload', 'browser']) clickGithubTool(app, action)
-  await settle()
-  assert.deepEqual(invoked, [])
-
   fetches[1].answer(githubReply(null, 'gh: not logged in'))
   await settle()
   assert.equal(githubPlaceholder(app), 'gh: not logged in')
-
-  for (const action of ['back', 'reload', 'browser']) clickGithubTool(app, action)
-  await settle()
-  assert.deepEqual(invoked, [])
+  assert.deepEqual(invoked, [githubShow(githubPr), ['github_view_hide']])
 })
 
 test('a show error shows in the placeholder', async () => {

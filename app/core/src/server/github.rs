@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Gives the GitHub page of a configured checkout with `gh`: its open pull request, else its repository.
+//! Gives the GitHub page of a configured checkout with `gh`: its pull request in any state, else its repository.
 //! Route: `GET /api/github?path=<checkout>`.
 
 use std::path::{Path, PathBuf};
@@ -29,7 +29,6 @@ use super::repos::RepoList;
 #[derive(Deserialize)]
 struct ViewedPr {
     url: String,
-    state: String,
 }
 
 /// The fields of a repository in the output of `gh repo view`.
@@ -66,23 +65,23 @@ fn configured_checkout(repos: &dyn RepoList, target: &str) -> Option<PathBuf> {
     main.or_else(|| configured_worktree(repos, target))
 }
 
-/// The URL of the open pull request of the checkout `dir`, else the URL of its repository.
+/// The URL of the pull request of the checkout `dir`, else the URL of its repository.
 fn page_url(dir: &Path, runner: &dyn Runner) -> Result<String, String> {
-    match open_pr_url(dir, runner) {
+    match pr_url(dir, runner) {
         Some(url) => Ok(url),
         None => repo_url(dir, runner),
     }
 }
 
-/// The URL of the pull request of the branch of `dir` when it is open.
-fn open_pr_url(dir: &Path, runner: &dyn Runner) -> Option<String> {
+/// The URL of the pull request of the branch of `dir`: open, closed or merged.
+fn pr_url(dir: &Path, runner: &dyn Runner) -> Option<String> {
     let json = runner
-        .run(dir, "gh", &["pr", "view", "--json", "url,state"])
+        .run(dir, "gh", &["pr", "view", "--json", "url"])
         .ok()?;
 
     let pr: ViewedPr = serde_json::from_str(&json).ok()?;
 
-    (pr.state == "OPEN").then_some(pr.url)
+    Some(pr.url)
 }
 
 /// The URL of the repository of `dir`.
@@ -147,14 +146,12 @@ mod tests {
         items.iter().map(|item| item.to_string()).collect()
     }
 
-    /// The `gh pr view` output of the PR `7` of `o/r` in `state`.
-    fn pr(state: &str) -> String {
-        json!({ "url": "https://github.com/o/r/pull/7", "state": state }).to_string()
-    }
+    /// The `gh pr view` output of the PR `7` of `o/r`.
+    const PR: &str = r#"{"url":"https://github.com/o/r/pull/7"}"#;
 
-    /// The `gh pr view --json url,state` call in `dir`.
+    /// The `gh pr view --json url` call in `dir`.
     fn pr_view(dir: &Path) -> Call {
-        let args = ["pr", "view", "--json", "url,state"];
+        let args = ["pr", "view", "--json", "url"];
         (dir.to_path_buf(), "gh".to_string(), strings(&args))
     }
 
@@ -225,14 +222,14 @@ mod tests {
     }
 
     #[test]
-    fn an_open_pr_gives_its_url() {
+    fn a_pr_gives_its_url() {
         let dir = tempfile::tempdir().unwrap();
         let Some((main, linked)) = repo_with_worktree(dir.path()) else {
             eprintln!("skipped: git is missing");
             return;
         };
         let repos = FixedRepos(vec![main]);
-        let runner = StubRunner::new(vec![Ok(pr("OPEN"))]);
+        let runner = StubRunner::new(vec![Ok(PR.to_string())]);
 
         let response = get_with(&repos, &github_target(&linked), &runner);
 
@@ -242,34 +239,6 @@ mod tests {
             json!({ "url": "https://github.com/o/r/pull/7", "error": null })
         );
         assert_eq!(runner.calls(), [pr_view(&linked)]);
-    }
-
-    #[test]
-    fn a_closed_pr_gives_the_repo_url() {
-        let dir = tempfile::tempdir().unwrap();
-        let Some((main, linked)) = repo_with_worktree(dir.path()) else {
-            eprintln!("skipped: git is missing");
-            return;
-        };
-        let repos = FixedRepos(vec![main]);
-
-        for state in ["MERGED", "CLOSED"] {
-            let runner = StubRunner::new(vec![Ok(pr(state)), Ok(REPO.to_string())]);
-
-            let response = get_with(&repos, &github_target(&linked), &runner);
-
-            assert_eq!(response.status, 200, "{state}");
-            assert_eq!(
-                body(&response),
-                json!({ "url": "https://github.com/o/r", "error": null }),
-                "{state}"
-            );
-            assert_eq!(
-                runner.calls(),
-                [pr_view(&linked), repo_view(&linked)],
-                "{state}"
-            );
-        }
     }
 
     #[test]
@@ -324,7 +293,7 @@ mod tests {
             return;
         };
         let repos = FixedRepos(vec![main.clone()]);
-        let runner = StubRunner::new(vec![Ok(pr("OPEN"))]);
+        let runner = StubRunner::new(vec![Ok(PR.to_string())]);
 
         let response = get_with(&repos, &github_target(&main), &runner);
 
