@@ -108,6 +108,19 @@ mod tests {
     }
 
     #[test]
+    fn dashboard_has_a_version_footer() {
+        let html = std::str::from_utf8(embedded("/dashboard.html").unwrap().bytes).unwrap();
+
+        let footer = html
+            .find("<footer id=\"board-footer\"><span id=\"version\"></span></footer>")
+            .unwrap();
+        assert!(footer > html.find("</main>").unwrap());
+        assert!(footer < html.find("<dialog id=\"modal\"").unwrap());
+        assert!(html.contains("fetchText('api/version')"));
+        assert!(!html.contains("$('board-footer').hidden"));
+    }
+
+    #[test]
     fn dashboard_has_no_back_link() {
         let html = std::str::from_utf8(embedded("/dashboard.html").unwrap().bytes).unwrap();
 

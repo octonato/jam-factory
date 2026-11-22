@@ -17,3 +17,4 @@
 pub mod mcp_client;
 pub mod server;
 pub mod store;
+pub mod version;

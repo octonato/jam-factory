@@ -28,6 +28,7 @@ use super::repos::{RepoList, is_worktree, repos_json};
 use super::terminals::{self, Terminals};
 use super::worktrees;
 use crate::store::Store;
+use crate::version::BUILD_VERSION;
 
 const HTML: &str = "text/html; charset=utf-8";
 const JSON: &str = "application/json";
@@ -46,6 +47,7 @@ pub fn get(
         ["", "api", "sessions"] => sessions(store),
         ["", "api", "repos"] => Ok(json_response(&repos_json(repos))),
         ["", "api", "terminals"] => Ok(terminals::get(terminals)),
+        ["", "api", "version"] => Ok(json_response(&json!({ "version": BUILD_VERSION }))),
         ["", "api", "prs", ..] => return prs::get(repos, target),
         ["", "api", "github"] => return github::get(repos, target),
         ["", "api", "files", org, repo, branch, id] => files(store, [org, repo, branch, id]),

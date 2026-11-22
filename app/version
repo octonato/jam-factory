@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+# Prints the build version of this checkout, or the next release version after the one in Cargo.toml.
+set -euo pipefail
+
+usage() {
+    echo "Usage: version build | version next <patch|minor|major|X.Y.Z>" >&2
+    exit 2
+}
+
+fail() {
+    echo "Error: $*" >&2
+    exit 1
+}
+
+dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+release_tag='^v[0-9]+\.[0-9]+\.[0-9]+$'
+release_version='^([0-9]+)\.([0-9]+)\.([0-9]+)$'
+
+# Prints the version of the first `version = "…"` line of Cargo.toml.
+cargo_version() {
+    local line
+
+    if ! line="$(grep -m 1 -E '^version = ".+"$' "$dir/Cargo.toml")"; then
+        fail "no version in $dir/Cargo.toml"
+    fi
+
+    line="${line#version = \"}"
+    echo "${line%\"}"
+}
+
+# Prints the version of the first release tag among the given tags, or nothing.
+first_release() {
+    local tag
+
+    for tag in $1; do
+        if [[ "$tag" =~ $release_tag ]]; then
+            echo "${tag#v}"
+            return
+        fi
+    done
+}
+
+build() {
+    local tags base changes head
+
+    tags="$(git -C "$dir" tag --points-at HEAD --list 'v*' --sort=-v:refname)" || fail "git cannot list the tags on HEAD"
+    base="$(first_release "$tags")"
+
+    if [[ -n "$base" ]]; then
+        changes="$(git -C "$dir" status --porcelain)" || fail "git cannot read the status of the worktree"
+
+        if [[ -z "$changes" ]]; then
+            echo "$base"
+            return
+        fi
+    fi
+
+    if [[ -z "$base" ]]; then
+        tags="$(git -C "$dir" tag --merged HEAD --list 'v*' --sort=-v:refname)" || fail "git cannot list the tags of HEAD"
+        base="$(first_release "$tags")"
+    fi
+
+    if [[ -z "$base" ]]; then
+        base="$(cargo_version)"
+    fi
+
+    head="$(git -C "$dir" rev-parse HEAD)" || fail "git cannot read HEAD"
+    echo "${base}-${head:0:8}"
+}
+
+next() {
+    local current major minor patch new
+
+    current="$(cargo_version)"
+
+    if ! [[ "$current" =~ $release_version ]]; then
+        fail "the current version '$current' is not X.Y.Z"
+    fi
+
+    major="${BASH_REMATCH[1]}"
+    minor="${BASH_REMATCH[2]}"
+    patch="${BASH_REMATCH[3]}"
+
+    case "$1" in
+        patch) new="$major.$minor.$((patch + 1))" ;;
+        minor) new="$major.$((minor + 1)).0" ;;
+        major) new="$((major + 1)).0.0" ;;
+        *)
+            new="${1#v}"
+            if ! [[ "$new" =~ $release_version ]]; then
+                fail "'$1' is not patch, minor, major or X.Y.Z"
+            fi
+            ;;
+    esac
+
+    if [[ "$new" == "$current" ]]; then
+        fail "the version is already $current"
+    fi
+
+    if git -C "$dir" rev-parse -q --verify "refs/tags/v$new" >/dev/null; then
+        fail "tag v$new already exists"
+    fi
+
+    echo "$new"
+}
+
+if [[ $# -eq 1 && "$1" == "build" ]]; then
+    build
+elif [[ $# -eq 2 && "$1" == "next" ]]; then
+    next "$2"
+else
+    usage
+fi

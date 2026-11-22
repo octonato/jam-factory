@@ -25,6 +25,7 @@ use jam_board_core::server::Server;
 use jam_board_core::server::dashboard::embedded;
 use jam_board_core::server::repos::FixedRepos;
 use jam_board_core::store::Store;
+use jam_board_core::version::BUILD_VERSION;
 use jam_factory_store::name::check_path;
 use jam_factory_store::sessions::SESSION_FILE;
 use jam_factory_store::{Category, FileRead, SessionEntry, SessionRef, StoreError};
@@ -452,6 +453,17 @@ fn sessions_route_returns_the_entries() {
             },
         ] })
     );
+}
+
+#[test]
+fn version_route_returns_the_build_version() {
+    let f = fixture();
+
+    let reply = get(f.port(), "/api/version");
+
+    assert_eq!(reply.status, 200);
+    assert_eq!(reply.header("Content-Type"), Some("application/json"));
+    assert_eq!(reply.json(), json!({ "version": BUILD_VERSION }));
 }
 
 #[test]

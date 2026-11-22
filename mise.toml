@@ -5,16 +5,16 @@ node = "26.12.0"
 
 [tasks.build]
 description = "Run the quality gates, then build"
-run = "just build"
+run = "just app::build"
 
 [tasks.test]
 description = "Run the test suite"
-run = "just test"
+run = "just app::test"
 
 [tasks.check]
 description = "Check formatting and lints"
-run = "just check"
+run = "just app::check"
 
 [tasks.fmt]
 description = "Format and auto-fix lints"
-run = "just format"
+run = "just app::format"

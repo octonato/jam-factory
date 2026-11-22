@@ -33,13 +33,21 @@ test:
 # Run the full CI quality-gate set: fmt, clippy, test.
 build: check test
 
-# Run the gates, copy the app bundle to /Applications and both servers and jb to ~/.local/bin, then reload the server agent.
-install: build
+# Run the gates, then install Jam Board, both servers and jb.
+install: build deploy
+
+# Copy the app bundle to /Applications and both servers and jb to ~/.local/bin, then reload the server agent.
+[private]
+deploy:
     #!/usr/bin/env bash
     set -euo pipefail
 
+    JAM_FACTORY_VERSION="$(./version build)"
+    export JAM_FACTORY_VERSION
+    echo "Installing Jam Board v${JAM_FACTORY_VERSION}"
+
     if ! cargo tauri --version >/dev/null 2>&1; then
-        echo "Error: the Tauri CLI is missing. Run 'mise install' in app/." >&2
+        echo "Error: the Tauri CLI is missing. Run 'mise install' at the repository root." >&2
         exit 1
     fi
 
@@ -129,30 +137,23 @@ run *ARGS:
 
     ./target/release/jam-board {{ARGS}}
 
-# Cut a release: validate version, bump Cargo.toml, run gates, commit + tag as jam-board-vX.Y.Z.
-release VERSION:
+# Bump the version (patch, minor, major or X.Y.Z), commit and tag it as vX.Y.Z, then install.
+release BUMP="patch":
     #!/usr/bin/env bash
     set -euo pipefail
-
-    raw="{{VERSION}}"
-    version="${raw#jam-board-}"
-    version="${version#v}"
-    tag="jam-board-v${version}"
-
-    if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.+][0-9A-Za-z.-]+)?$ ]]; then
-      echo "Error: '$version' is not a valid semver version" >&2
-      exit 1
-    fi
 
     if [[ -n "$(git status --porcelain)" ]]; then
       echo "Error: working tree is not clean" >&2
       exit 1
     fi
 
-    if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
-      echo "Error: tag ${tag} already exists" >&2
+    if ! cargo tauri --version >/dev/null 2>&1; then
+      echo "Error: the Tauri CLI is missing. Run 'mise install' at the repository root." >&2
       exit 1
     fi
+
+    version="$(./version next "{{BUMP}}")"
+    tag="v${version}"
 
     # Set the [workspace.package] version, the first `version = "..."` line in the file.
     sed -i.bak -E "1,/^version = \".*\"$/s/^version = \".*\"$/version = \"${version}\"/" Cargo.toml
@@ -161,12 +162,19 @@ release VERSION:
     # Refresh Cargo.lock for the workspace members.
     cargo update --workspace >/dev/null
 
-    just build
-    cargo build --release -p jam-board
+    if ! just build; then
+      git restore Cargo.toml Cargo.lock
+      exit 1
+    fi
 
     git add Cargo.toml Cargo.lock
     git commit -m "rel: ${tag}"
     git tag -a "${tag}" -m "rel: ${tag}"
+
+    if ! just deploy; then
+      echo "Error: ${tag} is committed and tagged, but not installed. Fix the cause, run 'just install', then push the branch and the tag ${tag}." >&2
+      exit 1
+    fi
 
     echo "Released ${tag} (commit + tag created)."
     read -r -p "Do you want to push it? (Y/n) " answer

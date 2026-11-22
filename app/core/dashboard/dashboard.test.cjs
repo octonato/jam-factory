@@ -9,8 +9,8 @@ const scripts = [...html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g)]
   .filter((script) => script.trim() !== '')
 assert.equal(scripts.length, 1, 'expected one inline dashboard script')
 
-// Keep the real initialization and handlers, omitting only the network poll and its timer.
-const polling = '\npoll()\nsetInterval(poll, POLL_MS)\n'
+// Keep the real initialization and handlers, omitting only the version load, the network poll and its timer.
+const polling = '\nloadVersion()\npoll()\nsetInterval(poll, POLL_MS)\n'
 assert.ok(scripts[0].endsWith(polling), 'dashboard polling startup changed')
 const source = scripts[0].slice(0, -polling.length)
 
@@ -151,7 +151,7 @@ function dashboard({ script = source, pageWidth = 1200, pageLeft = 0, pageTop = 
     return el
   }
 
-  for (const id of ['board-header', 'tabs', 'page', 'term-store', 'status', 'problems', 'font-down', 'font-up', 'font-value', 'modal', 'modal-text', 'modal-input', 'modal-cancel', 'shortcuts', 'shortcuts-list', 'jump', 'jump-tabs', 'jump-input', 'jump-list']) element(id)
+  for (const id of ['board-header', 'tabs', 'page', 'board-footer', 'version', 'term-store', 'status', 'problems', 'font-down', 'font-up', 'font-value', 'modal', 'modal-text', 'modal-input', 'modal-cancel', 'shortcuts', 'shortcuts-list', 'jump', 'jump-tabs', 'jump-input', 'jump-list']) element(id)
   for (const dialog of [elements.get('modal'), elements.get('shortcuts'), elements.get('jump')]) {
     dialog.showModal = () => { dialog.open = true }
     dialog.close = (value = '') => {
@@ -4754,16 +4754,43 @@ test('the main window keeps the header and every route', () => {
   const app = dashboard()
 
   assert.ok(!app.elements.get('board-header').hidden)
+  assert.ok(!app.elements.get('board-footer').hidden)
   assert.equal(app.run('standaloneRoot'), null)
   assert.equal(scoped(app, '#/sessions'), true)
   assert.equal(app.run('backTarget("#/")'), '#/')
 })
 
-test('a standalone window hides the header', () => {
+test('a standalone window hides the header and keeps the footer', () => {
   const app = standaloneDashboard(worktreeHashOf(worktreePath))
 
   assert.equal(app.elements.get('board-header').hidden, true)
+  assert.ok(!app.elements.get('board-footer').hidden)
   assert.deepEqual(plain(app.run('standaloneRoot')), { kind: 'worktree', path: worktreePath })
+})
+
+test('the footer shows the server version with a v prefix', async () => {
+  const app = dashboard({ fetcher: (url) => (url === 'api/version' ? response('{"version":"0.1.4-3e24a0f1"}') : response('', false)) })
+
+  await app.run('loadVersion()')
+
+  assert.ok(app.calls.includes('api/version'))
+  assert.equal(app.elements.get('version').textContent, 'v0.1.4-3e24a0f1')
+})
+
+test('the footer stays empty when the version call fails or holds no version', async () => {
+  const fetchers = [
+    () => response('', false),
+    () => { throw new Error('disconnected') },
+    () => response('not json'),
+    () => response('{}'),
+    () => response('{"version":3}'),
+    () => response('{"version":""}'),
+  ]
+  for (const fetcher of fetchers) {
+    const app = dashboard({ fetcher })
+    await app.run('loadVersion()')
+    assert.equal(app.elements.get('version').textContent, '')
+  }
 })
 
 // Returns the actions of the icons on the worktree card.

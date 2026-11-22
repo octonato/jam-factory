@@ -124,7 +124,7 @@ The factory keeps session state in files outside your Git repositories. The `jam
 Install the server from a clone of this repository. The build needs [rustup](https://rustup.rs/) and [mise](https://mise.jdx.dev/). `mise install` adds `just`, Node and the Tauri CLI:
 
 ```sh
-cd /absolute/path/to/jam-factory/app
+cd /absolute/path/to/jam-factory
 mise install
 just install
 ```
@@ -137,10 +137,10 @@ just install
 
 Press `?` on any Jam Board page to list the keyboard shortcuts of every page. Press `?` or `Esc` to close the list.
 
-To stop the agent and remove it with `jam-factory-server`, run this in `app/`:
+To stop the agent and remove it with `jam-factory-server`, run this at the repository root:
 
 ```sh
-just uninstall-server
+just app::uninstall-server
 ```
 
 `jam-factory-mcp` keeps every session under one root folder, `~/.jam-factory/factory` by default. To use another folder, set `root` in `~/.jam-factory/config.json`. A leading `~/` expands to your home folder. To run `jam-factory-server` on another port, set `port` to a number from 1 to 65535:
@@ -502,3 +502,18 @@ The branch pair shares these with the installed board:
 - `jam-board://` links and `jb`. They keep opening the installed app.
 
 Each server runs its own terminals.
+
+## Release
+
+`just release` cuts a release of Jam Board. Run it at the repository root on a clean worktree:
+
+```sh
+just release              # bumps the patch version
+just release minor
+just release major
+just release 0.2.0
+```
+
+It sets the new version in `app/Cargo.toml` and runs the gates. It commits `rel: vX.Y.Z` and tags `vX.Y.Z`. Then it installs Jam Board as `just install` does, and offers to push the commit and the tag. When the gates fail, it restores `app/Cargo.toml` and `app/Cargo.lock` and stops before the commit. When the install fails, the commit and the tag stay. Fix the cause, run `just install`, then push the branch and the tag `vX.Y.Z`.
+
+The board footer shows the build version. A build of a clean tagged commit shows `vX.Y.Z`. Any other build shows `vX.Y.Z-{8 characters of the commit}`, including `./try-branch` and a build with uncommitted changes. There, `X.Y.Z` is the highest `vX.Y.Z` tag reachable from the commit, or the version in `app/Cargo.toml` when no such tag exists.

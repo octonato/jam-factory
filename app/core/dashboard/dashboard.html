@@ -70,6 +70,15 @@
     overflow: auto;
   }
 
+  #board-footer {
+    display: flex;
+    justify-content: flex-end;
+    padding: 2px 16px;
+    border-top: 1px solid var(--line);
+    color: var(--muted);
+    font-size: 0.714rem;
+  }
+
   a { color: var(--accent); }
 
   header {
@@ -1104,6 +1113,7 @@
 </header>
 <div id="problems"></div>
 <main id="page"></main>
+<footer id="board-footer"><span id="version"></span></footer>
 <div id="term-store" hidden></div>
 <dialog id="modal">
   <form method="dialog">
@@ -1700,6 +1710,17 @@ async function loadRepos() {
   } catch (err) {
     reposState = { error: err.message, repos: [] }
   }
+}
+
+// Shows the `api/version` reply in the footer as `v{version}`, or nothing when the reply holds no version.
+async function loadVersion() {
+  let version = null
+  try {
+    version = stringOrNull(JSON.parse(await fetchText('api/version')).version)
+  } catch {
+    version = null
+  }
+  $('version').textContent = version ? `v${version}` : ''
 }
 
 // Shows the cached PRs of the main checkout at `path` in `prsState`, then the fresh list, unless the shown page changed meanwhile.
@@ -5717,6 +5738,7 @@ window.addEventListener('resize', showGithubView)
 window.addEventListener('focus', onWindowFocus)
 document.addEventListener('keydown', onKey)
 state.failedChecks = metroSelfCheck()
+loadVersion()
 poll()
 setInterval(poll, POLL_MS)
 </script>

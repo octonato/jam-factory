@@ -37,7 +37,9 @@ if answers; then
     exit 1
 fi
 
-(cd "$app" && cargo build --release -p jam-factory-server -p jam-board)
+version="$("$app/version" build)"
+
+(cd "$app" && JAM_FACTORY_VERSION="$version" cargo build --release -p jam-factory-server -p jam-board)
 
 mkdir -p "$logs"
 JAM_FACTORY_PORT="$port" "$app/target/release/jam-factory-server" >"$log" 2>&1 &
@@ -70,6 +72,6 @@ if ! answers; then
     exit 1
 fi
 
-echo "Branch server on http://127.0.0.1:$port/dashboard.html, log in $log"
+echo "Branch server v$version on http://127.0.0.1:$port/dashboard.html, log in $log"
 
 JAM_FACTORY_PORT="$port" "$app/target/release/jam-board"
