@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Serves the board on the port in `~/.jam-factory/config.json` until killed.
+//! Serves the board on the port in `JAM_FACTORY_PORT` or `~/.jam-factory/config.json` until killed.
 
 use std::env;
 use std::process::ExitCode;

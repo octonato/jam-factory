@@ -149,6 +149,8 @@ just uninstall-server
 { "root": "~/Sources/factory", "port": 9000 }
 ```
 
+The environment variable `JAM_FACTORY_PORT` overrides `port` for `jam-factory-server` and Jam Board. It must be a number from 1 to 65535. `./try-branch` uses it to run a second server and board, as [Try a branch's board](#try-a-branchs-board) shows.
+
 To list main checkouts on the Repos tab of Jam Board, set `repos` to a list of their paths. A leading `~` expands to your home folder. Each path must be absolute after expansion:
 
 ```json
@@ -480,3 +482,23 @@ These files are for you, not for the project. Add `.nogit/` to your global gitig
 
 1. Find the file with `git config --global core.excludesFile`. If it prints nothing, Git uses `~/.config/git/ignore`.
 2. Add the line `.nogit/` to that file.
+
+## Try a branch's board
+
+`./try-branch` runs a branch's `jam-factory-server` and Jam Board beside the installed ones. Run it at the root of the branch's worktree:
+
+```sh
+./try-branch              # port 8732
+./try-branch --port 8740
+```
+
+It builds both in release mode in the worktree's `app/target`. It leaves `/Applications` and `~/.local/bin` untouched. It starts the branch server with `JAM_FACTORY_PORT` set to the port, and writes the server log to `.nogit/try-branch/server.log`. Once the server answers, it runs the branch board in the foreground on the same port. It stops the branch server when the board quits or on Ctrl+C.
+
+The branch pair shares these with the installed board:
+
+- The factory sessions and the `repos` in `~/.jam-factory/config.json`. An edit in one board shows up in the other.
+- The GitHub sign-in cookies.
+- The installed `jam-factory-mcp`. The branch server runs the one in `~/.local/bin`, so it does not test MCP changes of the branch.
+- `jam-board://` links and `jb`. They keep opening the installed app.
+
+Each server runs its own terminals.

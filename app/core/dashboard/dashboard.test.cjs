@@ -6241,13 +6241,7 @@ test('the shortcuts dialog lists the three pop-up shortcuts', () => {
   app.context.location.hash = '#/'
   press(app, '?', { shiftKey: true })
 
-<<<<<<< HEAD
-  assert.match(shortcutsText(app), /^Everywhere \? Show or hide the shortcuts ⌘ click Open a row or bar item in a new window ⇧⌘B Open the pop-up on Branches ⇧⌘W Open the pop-up on Worktrees ⇧⌘T Open the pop-up on Terminals Pop-up /)
-||||||| 94416d2
-  assert.match(shortcutsText(app), /^Everywhere \? Show or hide the shortcuts ⌘ click Open a row or bar item in a new window ⌘K Open the pop-up on All ⇧⌘B Open the pop-up on Branches ⇧⌘W Open the pop-up on Worktrees ⇧⌘T Open the pop-up on Terminals Pop-up /)
-=======
-  assert.match(shortcutsText(app), /^Everywhere \? Show or hide the shortcuts ⌘ click Open a row or bar item in a new window ⌘K Open the pop-up on All ⇧⌘B Open the pop-up on Branches ⇧⌘W Open the pop-up on Worktrees ⇧⌘T Open the pop-up on Terminals ⌘= ⌘- Make the text of the shown tab bigger or smaller Pop-up /)
->>>>>>> octonato/increase-font-size
+  assert.match(shortcutsText(app), /^Everywhere \? Show or hide the shortcuts ⌘ click Open a row or bar item in a new window ⇧⌘B Open the pop-up on Branches ⇧⌘W Open the pop-up on Worktrees ⇧⌘T Open the pop-up on Terminals ⌘= ⌘- Make the text of the shown tab bigger or smaller Pop-up /)
 })
 
 test('the shortcuts dialog lists the pop-up tab keys', () => {

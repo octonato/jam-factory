@@ -14,6 +14,8 @@
 
 //! Finds the factory root, the server port, the repos, the GitHub user and the GitHub sign-in hosts from `~/.jam-factory/config.json`.
 
+use std::env;
+use std::ffi::OsString;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -26,6 +28,7 @@ pub const CONFIG_DIR: &str = ".jam-factory";
 pub const CONFIG_FILE: &str = "config.json";
 pub const DEFAULT_ROOT: &str = "factory";
 pub const DEFAULT_PORT: u16 = 8731;
+pub const PORT_VAR: &str = "JAM_FACTORY_PORT";
 
 /// A config file that cannot be read, with its path and the reason.
 #[derive(Debug, Error)]
@@ -35,12 +38,14 @@ pub struct RootError {
     pub reason: String,
 }
 
-/// A config file whose server port cannot be read, with its path and the reason.
+/// A server port that cannot be read from the config file or from `JAM_FACTORY_PORT`.
 #[derive(Debug, Error)]
-#[error("Cannot read the server port from {}: {reason}", path.display())]
-pub struct PortError {
-    pub path: PathBuf,
-    pub reason: String,
+pub enum PortError {
+    #[error("Cannot read the server port from {}: {reason}", path.display())]
+    Config { path: PathBuf, reason: String },
+
+    #[error("Cannot read the server port from {PORT_VAR}: {value:?} is not between 1 and 65535")]
+    Var { value: OsString },
 }
 
 /// A config file whose repos cannot be read, with its path and the reason.
@@ -119,11 +124,20 @@ pub fn resolve(home: &Path) -> Result<PathBuf, RootError> {
     Ok(expanded)
 }
 
-/// Returns the server port for the home folder `home`.
+/// Returns the server port from `JAM_FACTORY_PORT`, else from the config for the home folder `home`.
 pub fn resolve_port(home: &Path) -> Result<u16, PortError> {
+    resolve_port_with(home, env::var_os(PORT_VAR))
+}
+
+/// Returns the server port from `var`, else from the config for the home folder `home`.
+fn resolve_port_with(home: &Path, var: Option<OsString>) -> Result<u16, PortError> {
+    if let Some(value) = var {
+        return parse_port_var(value);
+    }
+
     let path = home.join(CONFIG_DIR).join(CONFIG_FILE);
 
-    let error = |reason: String| PortError {
+    let error = |reason: String| PortError::Config {
         path: path.clone(),
         reason,
     };
@@ -134,6 +148,16 @@ pub fn resolve_port(home: &Path) -> Result<u16, PortError> {
         None => Ok(DEFAULT_PORT),
         Some(0) => Err(error("port 0 is not between 1 and 65535".to_string())),
         Some(port) => Ok(port),
+    }
+}
+
+/// Parses a `JAM_FACTORY_PORT` value as a port from 1 to 65535.
+fn parse_port_var(value: OsString) -> Result<u16, PortError> {
+    let port = value.to_str().and_then(|text| text.parse::<u16>().ok());
+
+    match port {
+        Some(port) if port != 0 => Ok(port),
+        _ => Err(PortError::Var { value }),
     }
 }
 
@@ -312,7 +336,7 @@ mod tests {
     fn default_port_without_config() {
         let home = tempfile::tempdir().unwrap();
 
-        let port = resolve_port(home.path()).unwrap();
+        let port = resolve_port_with(home.path(), None).unwrap();
 
         assert_eq!(port, 8731);
     }
@@ -322,7 +346,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         write_config(home.path(), r#"{ "root": "/x/y" }"#);
 
-        let port = resolve_port(home.path()).unwrap();
+        let port = resolve_port_with(home.path(), None).unwrap();
 
         assert_eq!(port, 8731);
     }
@@ -332,7 +356,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         write_config(home.path(), r#"{ "port": 9000 }"#);
 
-        let port = resolve_port(home.path()).unwrap();
+        let port = resolve_port_with(home.path(), None).unwrap();
 
         assert_eq!(port, 9000);
     }
@@ -350,11 +374,60 @@ mod tests {
         ] {
             let config = write_config(home.path(), text);
 
-            let err = resolve_port(home.path()).unwrap_err();
+            let err = resolve_port_with(home.path(), None).unwrap_err();
 
             assert!(
                 err.to_string().contains(&config.display().to_string()),
                 "{text}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn port_var_wins_over_config() {
+        let home = tempfile::tempdir().unwrap();
+        write_config(home.path(), r#"{ "port": 9000 }"#);
+
+        let port = resolve_port_with(home.path(), Some("8732".into())).unwrap();
+
+        assert_eq!(port, 8732);
+    }
+
+    #[test]
+    fn port_var_ignores_a_bad_config() {
+        let home = tempfile::tempdir().unwrap();
+        write_config(home.path(), "not json");
+
+        let port = resolve_port_with(home.path(), Some("8732".into())).unwrap();
+
+        assert_eq!(port, 8732);
+    }
+
+    #[test]
+    fn unset_port_var_uses_config() {
+        let home = tempfile::tempdir().unwrap();
+        write_config(home.path(), r#"{ "port": 9000 }"#);
+
+        let port = resolve_port_with(home.path(), None).unwrap();
+
+        assert_eq!(port, 9000);
+    }
+
+    #[test]
+    fn bad_port_var_is_an_error() {
+        let home = tempfile::tempdir().unwrap();
+        write_config(home.path(), r#"{ "port": 9000 }"#);
+
+        for value in ["", "0", "65536", "-1", "abc", " 8732", "8732.0"] {
+            let err = resolve_port_with(home.path(), Some(value.into())).unwrap_err();
+
+            assert!(
+                err.to_string().contains("JAM_FACTORY_PORT"),
+                "{value}: {err}"
+            );
+            assert!(
+                err.to_string().contains(&format!("{value:?}")),
+                "{value}: {err}"
             );
         }
     }
@@ -377,7 +450,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         write_config(home.path(), r#"{ "root": 3, "port": 9000 }"#);
 
-        let port = resolve_port(home.path()).unwrap();
+        let port = resolve_port_with(home.path(), None).unwrap();
 
         assert_eq!(port, 9000);
     }
@@ -532,7 +605,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         write_config(home.path(), r#"{ "port": 9000, "githubSignInHosts": 3 }"#);
 
-        let port = resolve_port(home.path()).unwrap();
+        let port = resolve_port_with(home.path(), None).unwrap();
 
         assert_eq!(port, 9000);
     }
@@ -548,7 +621,7 @@ mod tests {
         let root = resolve(home.path()).unwrap();
         assert_eq!(root, PathBuf::from("/x/y"));
 
-        let port = resolve_port(home.path()).unwrap();
+        let port = resolve_port_with(home.path(), None).unwrap();
         assert_eq!(port, 9000);
     }
 }

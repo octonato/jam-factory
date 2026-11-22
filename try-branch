@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+# Builds this worktree's server and board, and runs them on their own port beside the installed board.
+set -euo pipefail
+
+usage() {
+    echo "Usage: ./try-branch [--port <port>]" >&2
+    exit 2
+}
+
+port=8732
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --port)
+            [[ $# -ge 2 ]] || usage
+            port="$2"
+            shift 2
+            ;;
+        *)
+            usage
+            ;;
+    esac
+done
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+app="$root/app"
+logs="$root/.nogit/try-branch"
+log="$logs/server.log"
+
+# Tells whether something answers on the port.
+answers() {
+    (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null
+}
+
+if answers; then
+    echo "Error: port $port is in use. Pass another one with --port." >&2
+    exit 1
+fi
+
+(cd "$app" && cargo build --release -p jam-factory-server -p jam-board)
+
+mkdir -p "$logs"
+JAM_FACTORY_PORT="$port" "$app/target/release/jam-factory-server" >"$log" 2>&1 &
+server=$!
+
+stop_server() {
+    kill "$server" 2>/dev/null || true
+    wait "$server" 2>/dev/null || true
+}
+
+trap stop_server EXIT
+trap 'exit 130' INT TERM
+
+for _ in $(seq 1 100); do
+    if answers; then
+        break
+    fi
+
+    if ! kill -0 "$server" 2>/dev/null; then
+        echo "Error: the branch server stopped. See $log:" >&2
+        cat "$log" >&2
+        exit 1
+    fi
+
+    sleep 0.1
+done
+
+if ! answers; then
+    echo "Error: the branch server does not answer on port $port. See $log." >&2
+    exit 1
+fi
+
+echo "Branch server on http://127.0.0.1:$port/dashboard.html, log in $log"
+
+JAM_FACTORY_PORT="$port" "$app/target/release/jam-board"
