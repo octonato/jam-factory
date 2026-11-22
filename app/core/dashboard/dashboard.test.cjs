@@ -3884,19 +3884,22 @@ const prList = [
   },
 ]
 const fixLogin = { path: '/s/akka/sdk/fix-login', branch: 'alice/fix-login', head: null }
+// The repos of `selectRepos` without the linked worktrees of `sdkMain`.
+const prPageRepos = { ...selectRepos, repos: [{ ...selectRepos.repos[0], worktrees: [] }, selectRepos.repos[1]] }
 
 // Returns a reply function that answers `api/prs` with `prs` and `error`.
 const prsJson = (prs, error = null) => () => response(JSON.stringify({ error, prs }))
 
-// Returns a dashboard on `hash` after one poll of an api that answers `api/repos` with `repos`, `api/prs?path=…` with `prsReply()`
-// and `api/prs/cached?path=…` with `cachedReply()`, once a reply that is ready has landed.
-async function prsApp(repos, prsReply, hash = prsHashOf(sdkMain), cachedReply = () => response('', false, { status: 404 })) {
+// Returns a dashboard on `hash` after one poll of an api that answers `api/repos` with `repos`, `api/prs?path=…` with `prsReply()`,
+// `api/prs/cached?path=…` with `cachedReply()` and `api/worktrees/stats?path=…` with `statsReply()`, once a reply that is ready has landed.
+async function prsApp(repos, prsReply, hash = prsHashOf(sdkMain), cachedReply = () => response('', false, { status: 404 }), statsReply = () => response('', false, { status: 404 })) {
   const app = dashboard({
     fetcher: (url) => {
       if (url === 'api/repos') return response(JSON.stringify(repos))
       if (url === 'api/sessions') return sessionsReply([])
       if (url.startsWith('api/prs?path=')) return prsReply()
       if (url.startsWith('api/prs/cached?path=')) return cachedReply()
+      if (url.startsWith('api/worktrees/stats?path=')) return statsReply()
       return response('', false, { status: 404 })
     },
   })
@@ -3938,7 +3941,7 @@ function clickPr(app, number, modifiers = {}) {
 const prTexts = ['#12 Fix login alice · +10 −3 CI passing · approved', '#7 Add <b>docs</b> bob · +5 −0 no CI · no reviews']
 
 test('the PRs page fetches the list once and shows it', async () => {
-  const app = await prsApp(selectRepos, prsJson(prList))
+  const app = await prsApp(prPageRepos, prsJson(prList))
 
   assert.deepEqual(prsCalls(app), ['api/prs?path=%2Fs%2Fakka%2Fsdk%2Fmain'])
   assert.deepEqual(cachedCalls(app), ['api/prs/cached?path=%2Fs%2Fakka%2Fsdk%2Fmain'])
@@ -3959,7 +3962,7 @@ test('the PRs page fetches the list once and shows it', async () => {
 })
 
 test('a checked-out PR shows the marker and its worktree', async () => {
-  const repos = plain(selectRepos)
+  const repos = plain(prPageRepos)
   repos.repos[1].worktrees.push({ path: '/s/o/r/docs', branch: 'docs', head: null })
   const app = await prsApp(repos, prsJson(prList))
 
@@ -3977,7 +3980,7 @@ test('a checked-out PR shows the marker and its worktree', async () => {
 test('a PR row shows its chips, its CI and review states, and its reviewers on hover', async () => {
   const failing = { ...prList[0], number: 3, ci: 'failing', review: 'changes-requested', reviewers: [{ login: 'erin', state: 'changes requested' }], draft: true }
   const idle = { ...prList[1], number: 2, draft: false, reviewRequested: false, ci: 'pending' }
-  const app = await prsApp(selectRepos, prsJson([...prList, failing, idle]))
+  const app = await prsApp(prPageRepos, prsJson([...prList, failing, idle]))
   const html = app.elements.get('pr-list').innerHTML
 
   assert.deepEqual(prRows(app).map((row) => [row.number, row.chips]), [[2, ''], [12, 'reviewed'], [7, 'to review draft'], [3, 'reviewed draft']])
@@ -4003,7 +4006,7 @@ test('the PR list shows checked-out PRs, then open PRs without reviews, then ope
     pr(7, { reviewers: reviewed }),
     pr(8, { draft: true, reviewers: reviewed }),
   ]
-  const repos = plain(selectRepos)
+  const repos = plain(prPageRepos)
   repos.repos[0].worktrees.push(fixLogin, { path: '/s/akka/sdk/docs', branch: 'docs', head: null })
   const app = await prsApp(repos, prsJson(prs))
 
@@ -4011,7 +4014,7 @@ test('the PR list shows checked-out PRs, then open PRs without reviews, then ope
 
   assert.ok(press(app, 'ArrowDown'))
   assert.ok(press(app, 'ArrowDown'))
-  assert.equal(app.run('selectedPr'), 6)
+  assert.equal(app.run('selectedItem'), 6)
 })
 
 // Returns the text of the worktree card.
@@ -4082,7 +4085,7 @@ test('the worktree card shows the cached PR until the fresh list lands', async (
 })
 
 test('the row icons show their keys', async () => {
-  const repos = plain(selectRepos)
+  const repos = plain(prPageRepos)
   repos.repos[0].worktrees.push(fixLogin)
   const app = await prsApp(repos, prsJson(prList))
 
@@ -4114,7 +4117,7 @@ test('the row icons show their keys', async () => {
 test('the PRs page states', async () => {
   let release
   const pending = new Promise((resolve) => { release = resolve })
-  const app = await prsApp(selectRepos, () => pending)
+  const app = await prsApp(prPageRepos, () => pending)
 
   assert.equal(prListText(app), 'loading…')
   assert.equal(prCardText(app), 'akka/sdk akka/sdk/main')
@@ -4123,17 +4126,17 @@ test('the PRs page states', async () => {
   assert.equal(prListText(app), 'No open PRs.')
   assert.equal(prCardText(app), 'akka/sdk akka/sdk/main 0 PRs')
 
-  const failed = await prsApp(selectRepos, () => response(JSON.stringify({ error: 'not logged in' })))
+  const failed = await prsApp(prPageRepos, () => response(JSON.stringify({ error: 'not logged in' })))
   assert.equal(prListText(failed), 'not logged in')
   assert.equal(prCardText(failed), 'akka/sdk akka/sdk/main')
 
-  const broken = await prsApp(selectRepos, () => response('', false, { status: 500 }))
+  const broken = await prsApp(prPageRepos, () => response('', false, { status: 500 }))
   assert.equal(prListText(broken), '500 api/prs?path=%2Fs%2Fakka%2Fsdk%2Fmain')
 
-  const offline = await prsApp(selectRepos, () => { throw new Error('disconnected') })
+  const offline = await prsApp(prPageRepos, () => { throw new Error('disconnected') })
   assert.equal(prListText(offline), 'disconnected')
 
-  const unknown = await prsApp(selectRepos, prsJson(prList), prsHashOf('/s/akka/sdk'))
+  const unknown = await prsApp(prPageRepos, prsJson(prList), prsHashOf('/s/akka/sdk'))
   assert.equal(pageText(unknown), 'not a configured repo')
   assert.deepEqual(prsCalls(unknown), [])
 })
@@ -4141,7 +4144,7 @@ test('the PRs page states', async () => {
 test('the PRs page shows the cached list while the fresh list loads', async () => {
   const releases = []
   const fresh = () => new Promise((resolve) => releases.push(resolve))
-  const app = await prsApp(selectRepos, fresh, prsHashOf(sdkMain), prsJson(prList))
+  const app = await prsApp(prPageRepos, fresh, prsHashOf(sdkMain), prsJson(prList))
 
   assert.deepEqual(prNumbers(app), [12, 7])
   assert.equal(prCardText(app), 'akka/sdk akka/sdk/main 2 PRs refreshing…')
@@ -4151,9 +4154,9 @@ test('the PRs page shows the cached list while the fresh list loads', async () =
   await settle()
   assert.deepEqual(prNumbers(app), [7])
   assert.equal(prCardText(app), 'akka/sdk akka/sdk/main 1 PR')
-  assert.equal(app.run('selectedPr'), null, 'a PR the fresh list drops loses the selection')
+  assert.equal(app.run('selectedItem'), null, 'a PR the fresh list drops loses the selection')
 
-  const empty = await prsApp(selectRepos, fresh, prsHashOf(sdkMain), prsJson(null))
+  const empty = await prsApp(prPageRepos, fresh, prsHashOf(sdkMain), prsJson(null))
   assert.equal(prListText(empty), 'loading…')
   assert.equal(prCardText(empty), 'akka/sdk akka/sdk/main')
   releases[1](prsJson(prList)())
@@ -4164,7 +4167,7 @@ test('the PRs page shows the cached list while the fresh list loads', async () =
 test('a cached list that lands after the fresh list is dropped', async () => {
   let release
   const late = () => new Promise((resolve) => { release = resolve })
-  const app = await prsApp(selectRepos, prsJson([prList[1]]), prsHashOf(sdkMain), late)
+  const app = await prsApp(prPageRepos, prsJson([prList[1]]), prsHashOf(sdkMain), late)
 
   assert.deepEqual(prNumbers(app), [7])
   release(prsJson(prList)())
@@ -4173,24 +4176,24 @@ test('a cached list that lands after the fresh list is dropped', async () => {
 })
 
 test('a failed refresh keeps the cached list below its error', async () => {
-  const app = await prsApp(selectRepos, prsJson([], 'not logged in'), prsHashOf(sdkMain), prsJson(prList))
+  const app = await prsApp(prPageRepos, prsJson([], 'not logged in'), prsHashOf(sdkMain), prsJson(prList))
 
   assert.match(prListText(app), /^not logged in/)
   assert.deepEqual(prNumbers(app), [12, 7])
   assert.equal(prCardText(app), 'akka/sdk akka/sdk/main 2 PRs')
 
   typePrFilter(app, 'zzz')
-  assert.equal(prListText(app), 'not logged in No PR matches.')
+  assert.equal(prListText(app), 'not logged in No branch matches.')
 })
 
 test('leaving and reopening the PRs page fetches again', async () => {
-  const app = await prsApp(selectRepos, prsJson(prList))
+  const app = await prsApp(prPageRepos, prsJson(prList))
   press(app, 'ArrowDown')
   typePrFilter(app, 'fix')
 
   navigate(app, '#/')
   assert.equal(app.run('prsState'), null)
-  assert.equal(app.run('selectedPr'), null)
+  assert.equal(app.run('selectedItem'), null)
   assert.equal(app.run('prFilter'), '')
 
   navigate(app, prsHashOf(sdkMain))
@@ -4200,7 +4203,7 @@ test('leaving and reopening the PRs page fetches again', async () => {
   assert.deepEqual(prClasses(app), ['row pr', 'row pr'])
 
   const releases = []
-  const late = await prsApp(selectRepos, () => new Promise((resolve) => releases.push(resolve)))
+  const late = await prsApp(prPageRepos, () => new Promise((resolve) => releases.push(resolve)))
   navigate(late, '#/')
   navigate(late, prsHashOf(sdkMain))
   releases[1](prsJson([prList[1]])())
@@ -4209,7 +4212,7 @@ test('leaving and reopening the PRs page fetches again', async () => {
   await settle()
   assert.deepEqual(prNumbers(late), [7], 'a reply for a page left meanwhile is dropped')
 
-  const another = await prsApp(selectRepos, () => new Promise((resolve) => releases.push(resolve)))
+  const another = await prsApp(prPageRepos, () => new Promise((resolve) => releases.push(resolve)))
   navigate(another, '#/')
   releases[2](prsJson(prList)())
   await settle()
@@ -4218,7 +4221,7 @@ test('leaving and reopening the PRs page fetches again', async () => {
 })
 
 test('arrow keys select PRs and stop at the ends', async () => {
-  const app = await prsApp(selectRepos, prsJson(prList))
+  const app = await prsApp(prPageRepos, prsJson(prList))
   const steps = [
     ['ArrowDown', 12, ['row pr selected', 'row pr']],
     ['ArrowDown', 7, ['row pr', 'row pr selected']],
@@ -4229,16 +4232,16 @@ test('arrow keys select PRs and stop at the ends', async () => {
 
   for (const [key, number, classes] of steps) {
     assert.ok(press(app, key), `${key} is taken`)
-    assert.equal(app.run('selectedPr'), number)
+    assert.equal(app.run('selectedItem'), number)
     assert.deepEqual(prClasses(app), classes)
   }
 
   await app.run('poll()')
-  assert.equal(app.run('selectedPr'), 12)
+  assert.equal(app.run('selectedItem'), 12)
 
-  const fresh = await prsApp(selectRepos, prsJson(prList))
+  const fresh = await prsApp(prPageRepos, prsJson(prList))
   assert.ok(press(fresh, 'ArrowUp'))
-  assert.equal(fresh.run('selectedPr'), 7)
+  assert.equal(fresh.run('selectedItem'), 7)
 })
 
 test('slash focuses the PR filter and the filter narrows the rows', async () => {
@@ -4246,7 +4249,7 @@ test('slash focuses the PR filter and the filter narrows the rows', async () => 
     number: 3, title: 'Bump deps', author: 'alice', branch: 'deps', draft: false, additions: 1, deletions: 1, url: 'https://github.com/akka/sdk/pull/3',
     ci: 'passing', review: 'commented', reviewers: [{ login: 'carol', state: 'commented' }], reviewRequested: false,
   }
-  const app = await prsApp(selectRepos, prsJson([...prList, bump]))
+  const app = await prsApp(prPageRepos, prsJson([...prList, bump]))
   const field = app.elements.get('pr-filter')
   const hash = prsHashOf(sdkMain)
 
@@ -4262,18 +4265,18 @@ test('slash focuses the PR filter and the filter narrows the rows', async () => 
   typePrFilter(app, 'deps')
   assert.deepEqual(prNumbers(app), [3])
   typePrFilter(app, 'zzz')
-  assert.equal(prListText(app), 'No PR matches.')
+  assert.equal(prListText(app), 'No branch matches.')
   assert.equal(prCardText(app), 'akka/sdk akka/sdk/main 3 PRs')
 
   typePrFilter(app, 'alice')
   assert.ok(press(app, 'ArrowDown', {}, field))
   assert.equal(field.focused, false)
-  assert.equal(app.run('selectedPr'), 12)
+  assert.equal(app.run('selectedItem'), 12)
 
   field.focus()
   assert.ok(press(app, 'ArrowDown', {}, field))
   assert.equal(field.focused, false)
-  assert.equal(app.run('selectedPr'), 3)
+  assert.equal(app.run('selectedItem'), 3)
 
   field.focus()
   for (const key of ['l', 'c']) assert.equal(press(app, key, {}, field), false, `${key} is text`)
@@ -4290,29 +4293,198 @@ test('slash focuses the PR filter and the filter narrows the rows', async () => 
   assert.equal(prsCalls(app).length, 1)
 
   typePrFilter(app, 'fix')
-  assert.equal(app.run('selectedPr'), null, 'a PR the filter hides loses the selection')
+  assert.equal(app.run('selectedItem'), null, 'a PR the filter hides loses the selection')
 
   field.focus()
   assert.ok(press(app, 'Enter', {}, field))
   assert.equal(field.focused, false)
-  assert.equal(app.run('selectedPr'), 12)
+  assert.equal(app.run('selectedItem'), 12)
   assert.equal(app.context.location.hash, hash)
 })
 
 test('a click on a PR row selects it', async () => {
-  const app = await prsApp(selectRepos, prsJson(prList))
+  const app = await prsApp(prPageRepos, prsJson(prList))
 
   clickPr(app, 7)
-  assert.equal(app.run('selectedPr'), 7)
+  assert.equal(app.run('selectedItem'), 7)
   assert.deepEqual(prClasses(app), ['row pr', 'row pr selected'])
 
   clickPr(app, null)
-  assert.equal(app.run('selectedPr'), 7)
+  assert.equal(app.run('selectedItem'), 7)
+})
+
+// Returns the worktree rows of the PRs page, each with its class, its path, its body text, its chips text and its icons HTML.
+const wipRows = (app) => [...app.elements.get('pr-list').innerHTML.matchAll(/<div class="(row wip[^"]*)" data-path="([^"]*)">\s*<div class="body">([\s\S]*?)<\/div>\s*<div class="foot">\s*<div class="pr-chips">([\s\S]*?)<\/div>\s*<div class="actions">([\s\S]*?)<\/div>/g)]
+  .map((match) => ({ class: match[1], path: match[2], text: textOf(match[3]), chips: textOf(match[4]), actions: match[5] }))
+
+// Returns the `api/worktrees/stats?path=…` URLs the dashboard fetched.
+const statsCalls = (app) => app.calls.filter((url) => url.startsWith('api/worktrees/stats?path='))
+
+// Returns a reply function that answers `api/worktrees/stats` with `worktrees`.
+const statsJson = (worktrees) => () => response(JSON.stringify({ worktrees }))
+
+// The stats of `pathA` with a commit and of `pathB` without one.
+const sdkStats = [
+  { path: pathA, title: 'feat: <b>alpha</b> work', additions: 4, deletions: 1 },
+  { path: pathB, title: null, additions: 0, deletions: 0 },
+  { path: fixLogin.path, title: 'fix: login', additions: 9, deletions: 9 },
+]
+
+test('worktrees without a PR show above the PRs with their first commit, branch, line counts and path', async () => {
+  const repos = plain(selectRepos)
+  repos.repos[0].worktrees.push(fixLogin)
+  const app = await prsApp(repos, prsJson(prList), prsHashOf(sdkMain), undefined, statsJson(sdkStats))
+  const html = app.elements.get('pr-list').innerHTML
+
+  assert.deepEqual(wipRows(app).map((row) => [row.path, row.text, row.chips]), [
+    [pathA, 'feat: <b>alpha</b> work alpha · +4 −1 ● akka/sdk/alpha', 'in progress'],
+    [pathB, '--- beta · +0 −0 ● akka/sdk/beta', 'in progress'],
+  ])
+  assert.doesNotMatch(html, /<b>/)
+  assert.ok(html.indexOf('row wip') < html.indexOf('row pr'), 'the worktrees come before the PRs')
+  assert.deepEqual(prNumbers(app), [12, 7])
+  assert.deepEqual(statsCalls(app), ['api/worktrees/stats?path=%2Fs%2Fakka%2Fsdk%2Fmain'])
+
+  const icons = [...wipRows(app)[0].actions.matchAll(/data-action="([^"]*)" title="([^"]*)" data-path="([^"]*)"/g)]
+    .map((match) => `${match[1]}: ${match[2]} ${match[3]}`)
+  assert.deepEqual(icons, [
+    `worktree: Open worktree page (c) ${pathA}`,
+    `zed: Open in Zed (e) ${pathA}`,
+    `intellij: Open in IntelliJ (i) ${pathA}`,
+    `refresh: Refresh line counts (u) ${pathA}`,
+  ])
+
+  await app.run('poll()')
+  await settle()
+  assert.equal(statsCalls(app).length, 1)
+
+  repos.repos[0].worktrees.push({ path: '/s/akka/sdk/gamma', branch: 'gamma', head: null })
+  await app.run('poll()')
+  await settle()
+  assert.equal(statsCalls(app).length, 2, 'a new worktree fetches the stats again')
+  assert.equal(wipRows(app)[2].text, '--- gamma ● akka/sdk/gamma')
+  assert.equal(wipRows(app)[0].text, 'feat: <b>alpha</b> work alpha · +4 −1 ● akka/sdk/alpha')
+})
+
+test('worktrees without stats show --- and no line counts, and show above No open PRs.', async () => {
+  const app = await prsApp(selectRepos, prsJson([]))
+
+  assert.deepEqual(wipRows(app).map((row) => row.text), ['--- alpha ● akka/sdk/alpha', '--- beta ● akka/sdk/beta'])
+  assert.match(prListText(app), /No open PRs\.$/)
+
+  const failed = await prsApp(selectRepos, prsJson([], 'not logged in'))
+  assert.match(prListText(failed), /^not logged in --- alpha/)
+  assert.doesNotMatch(prListText(failed), /No open PRs/)
+})
+
+test('the filter matches the title, branch and path of a worktree without a PR', async () => {
+  const app = await prsApp(selectRepos, prsJson(prList), prsHashOf(sdkMain), undefined, statsJson(sdkStats))
+
+  typePrFilter(app, 'alpha work')
+  assert.deepEqual(wipRows(app).map((row) => row.path), [pathA])
+  assert.deepEqual(prNumbers(app), [])
+
+  typePrFilter(app, 'beta')
+  assert.deepEqual(wipRows(app).map((row) => row.path), [pathB])
+
+  typePrFilter(app, 'login')
+  assert.deepEqual(wipRows(app), [])
+  assert.deepEqual(prNumbers(app), [12])
+
+  typePrFilter(app, 'zzz')
+  assert.equal(prListText(app), 'No branch matches.')
+})
+
+test('arrow keys move from the worktrees without a PR to the PRs', async () => {
+  const app = await prsApp(selectRepos, prsJson(prList))
+
+  for (const expected of [pathA, pathB, 12, 7, 7]) {
+    assert.ok(press(app, 'ArrowDown'))
+    assert.equal(app.run('selectedItem'), expected)
+  }
+  assert.deepEqual(wipRows(app).map((row) => row.class), ['row wip', 'row wip'])
+
+  for (const expected of [12, pathB, pathA, pathA]) {
+    assert.ok(press(app, 'ArrowUp'))
+    assert.equal(app.run('selectedItem'), expected)
+  }
+  assert.deepEqual(wipRows(app).map((row) => row.class), ['row wip selected', 'row wip'])
+
+  typePrFilter(app, 'beta')
+  assert.equal(app.run('selectedItem'), null, 'a worktree the filter hides loses the selection')
+})
+
+// Clicks the row of the worktree at `path` with `modifiers`.
+function clickWip(app, path, modifiers = {}) {
+  const row = { dataset: { path } }
+  const target = { closest: (selector) => (selector === '.row.wip' ? row : null) }
+  app.elements.get('pr-list').dispatch('click', { target, ...modifiers })
+}
+
+// Clicks the icon of `action` on the row of the worktree at `path`.
+function clickWipIcon(app, path, action) {
+  const button = { dataset: { action, path } }
+  const target = { closest: (selector) => (selector === 'button[data-action]' ? button : null) }
+  app.elements.get('pr-list').dispatch('click', { target })
+}
+
+test('the keys and icons of a worktree without a PR open it', async () => {
+  const { app, posts } = await checkoutApp(plain(selectRepos))
+
+  clickWip(app, pathB)
+  assert.equal(app.run('selectedItem'), pathB)
+  assert.deepEqual(wipRows(app).map((row) => row.class), ['row wip', 'row wip selected'])
+
+  assert.equal(press(app, 'o'), false, 'o has no worktree action')
+  for (const key of ['e', 'i']) assert.ok(press(app, key), `${key} is taken`)
+  clickWipIcon(app, pathA, 'zed')
+  await settle()
+  assert.deepEqual(posts, [
+    `api/open/zed?path=${encodeURIComponent(pathB)}`,
+    `api/open/intellij?path=${encodeURIComponent(pathB)}`,
+    `api/open/zed?path=${encodeURIComponent(pathA)}`,
+  ])
+  assert.equal(app.context.location.hash, prsHashOf(sdkMain))
+
+  assert.ok(press(app, 'c'))
+  assert.equal(app.context.location.hash, worktreeHashOf(pathB))
+
+  navigate(app, prsHashOf(sdkMain))
+  await settle()
+  clickWipIcon(app, pathA, 'worktree')
+  assert.equal(app.context.location.hash, worktreeHashOf(pathA))
+  assert.equal(app.run('selectedItem'), pathA)
+  assert.ok(!posts.some((url) => url.startsWith('api/prs/checkout')))
+})
+
+test('u refetches the line counts of a worktree without a PR', async () => {
+  let title = 'first'
+  const stats = () => statsJson([{ path: pathA, title, additions: 1, deletions: 0 }])()
+  const app = await prsApp(selectRepos, prsJson(prList), prsHashOf(sdkMain), undefined, stats)
+
+  press(app, 'ArrowDown')
+  title = 'second'
+  assert.ok(press(app, 'u'))
+  assert.equal(wipRows(app)[0].text, 'first alpha · +1 −0 ● akka/sdk/alpha', 'the shown stats stay while the fetch runs')
+  await settle()
+  assert.equal(statsCalls(app).length, 2)
+  assert.equal(wipRows(app)[0].text, 'second alpha · +1 −0 ● akka/sdk/alpha')
+})
+
+test('Cmd+click on a worktree without a PR opens its worktree page in a new app window', async () => {
+  const { app, posts } = await checkoutApp(plain(selectRepos))
+  const opened = appOpener(app)
+
+  clickWip(app, pathA, { metaKey: true })
+  await settle()
+  assert.equal(app.run('selectedItem'), pathA)
+  assert.deepEqual(opened, [worktreeHashOf(pathA)])
+  assert.deepEqual(posts, [])
 })
 
 test('back keys return to the repos page with the main row selected', async () => {
   for (const [key, modifiers] of [['l'], ['Escape'], ['[', { metaKey: true }]]) {
-    const app = await prsApp(selectRepos, prsJson(prList))
+    const app = await prsApp(prPageRepos, prsJson(prList))
 
     assert.ok(press(app, key, modifiers), `${key} is taken`)
     assert.equal(app.context.location.hash, '#/')
@@ -4331,7 +4503,7 @@ const checkoutUrl = (number) => `api/prs/checkout?path=%2Fs%2Fakka%2Fsdk%2Fmain&
 // Returns a dashboard on the PRs page of `sdkMain` after one poll, with fake terminal classes, the POST URLs, and the hash at each `api/repos` fetch.
 // It answers `api/repos` with `repos`, `api/sessions` with `sessions`, `POST api/prs/open` with `openReply()`,
 // and each checkout and PR view with the reply a test passes to the next of `checkouts` and `views`.
-async function checkoutApp(repos = plain(selectRepos), openReply = () => response('', true, { status: 204 }), sessions = []) {
+async function checkoutApp(repos = plain(prPageRepos), openReply = () => response('', true, { status: 204 }), sessions = []) {
   const posts = []
   const checkouts = []
   const views = []
@@ -4376,7 +4548,7 @@ function clickPrIcon(app, number, action) {
 }
 
 test('c on a checked-out PR goes to its worktree page', async () => {
-  const repos = plain(selectRepos)
+  const repos = plain(prPageRepos)
   repos.repos[0].worktrees.push(fixLogin)
 
   for (const key of ['c', 'Enter']) {
@@ -4485,7 +4657,7 @@ test('o posts to the PR open route', async () => {
   assert.equal(app.context.location.hash, prsHashOf(sdkMain))
   assert.notEqual(app.elements.get('modal').open, true)
 
-  const failing = await checkoutApp(plain(selectRepos), () => response('not logged in\n', false))
+  const failing = await checkoutApp(plain(prPageRepos), () => response('not logged in\n', false))
   press(failing.app, 'ArrowDown')
   assert.ok(press(failing.app, 'o'))
   await settle()
@@ -4494,7 +4666,7 @@ test('o posts to the PR open route', async () => {
 })
 
 test('the row icons run the same actions', async () => {
-  const repos = plain(selectRepos)
+  const repos = plain(prPageRepos)
   repos.repos[0].worktrees.push(fixLogin)
   const stubs = await checkoutApp(repos)
   const { app, posts } = stubs
@@ -4516,7 +4688,7 @@ test('the row icons run the same actions', async () => {
     'api/prs/open?path=%2Fs%2Fakka%2Fsdk%2Fmain&number=12',
   ])
   assert.equal(app.context.location.hash, prsHashOf(sdkMain))
-  assert.equal(app.run('selectedPr'), 12, 'the worktree icon selects its PR')
+  assert.equal(app.run('selectedItem'), 12, 'the worktree icon selects its PR')
 
   const docs = { path: '/s/akka/sdk/docs', branch: 'docs', head: null }
   clickPrIcon(app, 7, 'worktree')
@@ -4526,11 +4698,11 @@ test('the row icons run the same actions', async () => {
 
   await finishCheckout(stubs, docs)
   assert.equal(app.context.location.hash, worktreeHashOf(docs.path))
-  assert.equal(app.run('selectedPr'), 7)
+  assert.equal(app.run('selectedItem'), 7)
 })
 
 test('Cmd+click on a checked-out PR opens its worktree page in a new app window', async () => {
-  const repos = plain(selectRepos)
+  const repos = plain(prPageRepos)
   repos.repos[0].worktrees.push(fixLogin)
   const { app, posts } = await checkoutApp(repos)
   const opened = appOpener(app)
@@ -4540,7 +4712,7 @@ test('Cmd+click on a checked-out PR opens its worktree page in a new app window'
   assert.deepEqual(opened, [worktreeHashOf(fixLogin.path)])
   assert.deepEqual(posts, [])
   assert.equal(app.context.location.hash, prsHashOf(sdkMain))
-  assert.equal(app.run('selectedPr'), 12)
+  assert.equal(app.run('selectedItem'), 12)
 })
 
 test('Cmd+click on a new PR checks it out, then opens its worktree page in a new app window', async () => {
@@ -4569,7 +4741,7 @@ test('Cmd+click on a PR in a browser only selects it', async () => {
   clickPr(app, 12, { metaKey: true })
   await settle()
   assert.deepEqual(posts, [])
-  assert.equal(app.run('selectedPr'), 12)
+  assert.equal(app.run('selectedItem'), 12)
   assert.equal(app.context.location.hash, prsHashOf(sdkMain))
 })
 
@@ -4679,7 +4851,7 @@ test('a failed refresh tells the error and keeps the row', async () => {
 })
 
 test('back from a page entered from a PRs page restores its selection and filter', async () => {
-  const repos = plain(selectRepos)
+  const repos = plain(prPageRepos)
   repos.repos[0].worktrees.push(fixLogin)
   const fixSession = { ...session, org: 'akka', repo: 'sdk', branch: 'fix-login', id: 's2', dir: 'api/file/akka/sdk/fix-login/s2/', worktree: fixLogin.path }
 
@@ -4704,12 +4876,12 @@ test('back from a page entered from a PRs page restores its selection and filter
     await settle()
     assert.equal(app.elements.get('pr-filter').value, 'fix')
     assert.deepEqual(prClasses(app), ['row pr selected'])
-    assert.equal(app.run('selectedPr'), 12)
+    assert.equal(app.run('selectedItem'), 12)
   }
 })
 
 test('a worktree page opened another way returns to the repos page', async () => {
-  const repos = plain(selectRepos)
+  const repos = plain(prPageRepos)
   repos.repos[0].worktrees.push(fixLogin)
   const { app } = await checkoutApp(repos)
   press(app, 'ArrowDown')

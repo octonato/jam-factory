@@ -12,21 +12,123 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Creates and removes the linked worktrees of the configured main checkouts.
-//! Routes: `POST /api/worktrees?path=<main checkout>&name=<name>` and `POST /api/worktrees/remove?path=<worktree>`.
+//! Lists the titles and line counts of, creates and removes the linked worktrees of the configured main checkouts.
+//! Routes: `GET /api/worktrees/stats?path=<main checkout>`, `POST /api/worktrees?path=<main checkout>&name=<name>`
+//! and `POST /api/worktrees/remove?path=<worktree>`.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use serde::Serialize;
 use serde_json::json;
 
 use super::api::{json_response, query_field, same_origin, segments};
 use super::http::{Request, Response};
 use super::prs::{Runner, SystemRunner, configured_main, worktree_folder};
-use super::repos::{RepoList, list};
+use super::repos::{Repo, RepoList, list};
 use super::terminals::Terminals;
 
 const TEXT: &str = "text/plain; charset=utf-8";
+
+/// The title and the line counts of a linked worktree since it forked from the branch of its main checkout.
+#[derive(Serialize)]
+struct WorktreeStats {
+    path: String,
+    title: Option<String>,
+    additions: Option<u64>,
+    deletions: Option<u64>,
+}
+
+/// Answers `GET /api/worktrees/stats` with `repos`.
+pub fn get(repos: &dyn RepoList, target: &str) -> Response {
+    if segments(target)[..] != ["", "api", "worktrees", "stats"] {
+        return Response::error(404);
+    }
+
+    let Some(main) = configured_main(repos, target) else {
+        return Response::error(404);
+    };
+
+    json_response(&json!({ "worktrees": all_stats(&main, &SystemRunner { bin: None }) }))
+}
+
+/// The stats of each linked worktree of `main`.
+fn all_stats(main: &Repo, runner: &dyn Runner) -> Vec<WorktreeStats> {
+    let base = match &main.branch {
+        Some(branch) => Some(branch.clone()),
+        None => runner
+            .run(Path::new(&main.path), "git", &["rev-parse", "HEAD"])
+            .ok()
+            .map(|sha| sha.trim().to_string()),
+    };
+
+    main.worktrees
+        .iter()
+        .map(|worktree| stats(&worktree.path, base.as_deref(), runner))
+        .collect()
+}
+
+/// The stats of the worktree at `path` against its fork point from `base`, with no title and no counts when git fails.
+fn stats(path: &str, base: Option<&str>, runner: &dyn Runner) -> WorktreeStats {
+    let dir = Path::new(path);
+
+    let fork = base.and_then(|base| {
+        runner
+            .run(dir, "git", &["merge-base", base, "HEAD"])
+            .ok()
+            .map(|sha| sha.trim().to_string())
+    });
+
+    let Some(fork) = fork else {
+        return WorktreeStats {
+            path: path.to_string(),
+            title: None,
+            additions: None,
+            deletions: None,
+        };
+    };
+
+    let range = format!("{fork}..HEAD");
+    let title = runner
+        .run(dir, "git", &["log", "--reverse", "--format=%s", &range])
+        .ok()
+        .and_then(|log| first_line(&log));
+
+    let counts = runner
+        .run(dir, "git", &["diff", "--numstat", &fork])
+        .ok()
+        .map(|numstat| line_counts(&numstat));
+
+    WorktreeStats {
+        path: path.to_string(),
+        title,
+        additions: counts.map(|(additions, _)| additions),
+        deletions: counts.map(|(_, deletions)| deletions),
+    }
+}
+
+/// The first non-empty line of `text`, trimmed.
+fn first_line(text: &str) -> Option<String> {
+    text.lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(str::to_string)
+}
+
+/// The added and deleted lines in the output of `git diff --numstat`. Binary files count zero lines.
+fn line_counts(numstat: &str) -> (u64, u64) {
+    numstat
+        .lines()
+        .fold((0, 0), |(additions, deletions), line| {
+            let mut fields = line.split('\t');
+            let mut count = || fields.next().and_then(|field| field.parse::<u64>().ok());
+
+            let added = count().unwrap_or(0);
+            let deleted = count().unwrap_or(0);
+
+            (additions + added, deletions + deleted)
+        })
+}
 
 /// Answers `POST /api/worktrees` and `POST /api/worktrees/remove` with `repos` and `terminals`.
 pub fn post(repos: &dyn RepoList, terminals: &Terminals, request: &Request) -> Response {
@@ -555,6 +657,87 @@ mod tests {
         );
 
         folder
+    }
+
+    /// Writes `text` to `file` in `dir` and commits it with the message `message`.
+    fn commit_file(dir: &Path, file: &str, text: &str, message: &str) {
+        fs::write(dir.join(file), text).unwrap();
+        git(dir, &["add", file]);
+        commit(dir, message);
+    }
+
+    /// The `/api/worktrees/stats` reply for the main checkout `main` of `repos`.
+    fn stats_reply(repos: &UserRepos, main: &Path) -> Response {
+        let path = utf8_percent_encode(&main.to_string_lossy(), NON_ALPHANUMERIC).to_string();
+
+        get(repos, &format!("/api/worktrees/stats?path={path}"))
+    }
+
+    #[test]
+    fn line_counts_sum_the_numstat_and_skip_binary_files() {
+        assert_eq!(line_counts(""), (0, 0));
+        assert_eq!(
+            line_counts("3\t1\ta.txt\n-\t-\timage.png\n2\t0\tb.txt\n"),
+            (5, 1)
+        );
+    }
+
+    #[test]
+    fn stats_give_the_first_commit_and_the_lines_since_the_fork_point() {
+        let dir = tempfile::tempdir().unwrap();
+        let Some(main) = main_checkout(dir.path()) else {
+            eprintln!("skipped: git is missing");
+            return;
+        };
+        let repos = repos(&main, None);
+
+        commit_file(&main, "a.txt", "one\ntwo\n", "base");
+        let fix = add_worktree(&main, "fix");
+        let empty = add_worktree(&main, "empty");
+
+        commit_file(&fix, "a.txt", "one\n2\nthree\n", "feat: first");
+        commit(&fix, "second");
+        fs::write(fix.join("a.txt"), "one\n2\nthree\nfour\n").unwrap();
+        commit(&main, "later main work");
+
+        let response = stats_reply(&repos, &main);
+
+        assert_eq!(response.status, 200, "{}", text(&response));
+
+        let reply: Value = serde_json::from_slice(&response.body).unwrap();
+        let of = |folder: &Path| {
+            reply["worktrees"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|entry| entry["path"] == folder.to_string_lossy().as_ref())
+                .cloned()
+                .unwrap()
+        };
+
+        assert_eq!(reply["worktrees"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            of(&fix),
+            json!({ "path": fix, "title": "feat: first", "additions": 3, "deletions": 1 })
+        );
+        assert_eq!(
+            of(&empty),
+            json!({ "path": empty, "title": null, "additions": 0, "deletions": 0 })
+        );
+    }
+
+    #[test]
+    fn stats_answer_only_their_route_for_a_configured_main_checkout() {
+        let dir = tempfile::tempdir().unwrap();
+        let Some(main) = main_checkout(dir.path()) else {
+            eprintln!("skipped: git is missing");
+            return;
+        };
+        let linked = add_worktree(&main, "fix");
+
+        assert_eq!(stats_reply(&repos(&main, None), &linked).status, 404);
+        assert_eq!(get(&repos(&main, None), "/api/worktrees/stats").status, 404);
+        assert_eq!(get(&repos(&main, None), "/api/worktrees/other").status, 404);
     }
 
     /// Whether the main checkout `main` holds the branch `branch`.

@@ -209,7 +209,8 @@
   .row.main.error { --tone: var(--muted); color: var(--muted); }
 
   .row:has(> a.body:hover),
-  .row.pr:hover {
+  .row.pr:hover,
+  .row.wip:hover {
     border-color: var(--accent);
     border-left-color: var(--tone, var(--accent));
   }
@@ -217,7 +218,8 @@
   .row.card.selected,
   .row.main.selected,
   .row.worktree.selected,
-  .row.pr.selected {
+  .row.pr.selected,
+  .row.wip.selected {
     outline: 2px solid var(--ink-2);
     outline-offset: 3px;
   }
@@ -234,16 +236,21 @@
 
   .row.main .body,
   .row.worktree .body,
-  .row.pr .body {
+  .row.pr .body,
+  .row.wip .body {
     grid-template-columns: minmax(0, 1fr) auto;
   }
 
-  .row.pr { grid-template-columns: minmax(0, 1fr); cursor: pointer; }
-  .row.pr .body { gap: 4px 16px; padding-bottom: 4px; }
-  .row.pr .body > :nth-child(even) { justify-self: end; }
+  .row.pr,
+  .row.wip { grid-template-columns: minmax(0, 1fr); cursor: pointer; }
+  .row.pr .body,
+  .row.wip .body { gap: 4px 16px; padding-bottom: 4px; }
+  .row.pr .body > :nth-child(even),
+  .row.wip .body > :nth-child(even) { justify-self: end; }
   .row.pr.busy .actions { opacity: 0.4; }
 
-  .row.pr .foot {
+  .row.pr .foot,
+  .row.wip .foot {
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -265,6 +272,7 @@
   .pr-chip.to-review { --chip: var(--warning); }
   .pr-chip.reviewed { --chip: var(--good); }
   .pr-chip.draft { --chip: var(--muted); }
+  .pr-chip.wip { --chip: var(--accent); }
 
   .row .ci::before,
   .row .review::before { content: '● '; }
@@ -1287,6 +1295,12 @@ const PR_ACTIONS = [
   { action: 'github', title: 'Open on GitHub (o)', icon: ACTION_ICONS.github },
   { action: 'refresh', title: 'Refresh PR (u)', icon: ACTION_ICONS.refresh },
 ]
+const WIP_ACTIONS = [
+  { action: 'worktree', title: 'Open worktree page (c)', icon: ACTION_ICONS.worktree },
+  { action: 'zed', title: 'Open in Zed (e)', icon: ACTION_ICONS.zed },
+  { action: 'intellij', title: 'Open in IntelliJ (i)', icon: ACTION_ICONS.intellij },
+  { action: 'refresh', title: 'Refresh line counts (u)', icon: ACTION_ICONS.refresh },
+]
 const PRS_CARD_ACTIONS = [
   { action: 'new-worktree', title: 'Create a worktree (b)', icon: ACTION_ICONS['new-worktree'] },
 ]
@@ -1312,6 +1326,7 @@ const TOOL_LABELS = { intellij: 'IntelliJ', zed: 'Zed', iterm: 'iTerm', github: 
 const ACTION_KEYS = { c: 'worktree', a: 'archive', t: 'iterm', e: 'zed', i: 'intellij', o: 'github', g: 'lazygit' }
 const WORKTREE_KEYS = { o: 'github', i: 'intellij', e: 'zed', g: 'lazygit', t: 'shell' }
 const PR_KEYS = { c: 'worktree', Enter: 'worktree', r: 'claude', e: 'zed', i: 'intellij', o: 'github', u: 'refresh' }
+const WIP_KEYS = { c: 'worktree', Enter: 'worktree', r: 'claude', e: 'zed', i: 'intellij', u: 'refresh' }
 const BACK_KEYS = ['l', 'Escape', 'Meta+[']
 // The pop-up tabs in the order of the tab strip, each with its label.
 const JUMP_TABS = [
@@ -1441,7 +1456,7 @@ const SHORTCUTS = [
     rows: [
       { keys: ['l', 'Esc', '⌘['], text: 'Go back to the repos' },
       { keys: ['↑', '↓'], text: 'Move the selection' },
-      { keys: ['/'], text: 'Filter the PRs' },
+      { keys: ['/'], text: 'Filter the worktrees and PRs' },
       { keys: ['b'], text: 'Create a worktree' },
       { keys: ['c', 'Enter'], text: 'Check out the PR and open its worktree page' },
       { keys: ['⌘ click'], text: 'Check out the PR and open its worktree page in a new window' },
@@ -1449,7 +1464,7 @@ const SHORTCUTS = [
       { keys: ['e'], text: 'Check out the PR and open it in Zed' },
       { keys: ['i'], text: 'Check out the PR and open it in IntelliJ' },
       { keys: ['o'], text: 'Open the PR on GitHub' },
-      { keys: ['u'], text: 'Refresh the PR' },
+      { keys: ['u'], text: 'Refresh the PR, or the line counts of a worktree without a PR' },
     ],
   },
 ]
@@ -1479,6 +1494,9 @@ let reposState = null
 // The PRs of the shown PRs page: `{ path, prs, error, loading, refreshing }`, or null.
 // `loading` holds until the cached or the fresh list lands. `refreshing` holds until the fresh list lands.
 let prsState = null
+// The titles and line counts of the linked worktrees of the shown PRs page: `{ path, key, stats }`, or null.
+// `key` holds the worktree paths the fetch asked for. `stats` is empty until the reply lands.
+let worktreeStats = null
 // The PRs of the main checkout of the shown worktree page: `{ path, prs, fresh }`, or null.
 // `prs` is null until the cached or the fresh list lands. `fresh` holds once the fresh list lands.
 let worktreePrs = null
@@ -1520,13 +1538,14 @@ let viewerZoom = 1
 let githubZoom = 1
 let leftWidth = null
 let selectedDir = null
-// The page the shown worktree page was entered from: `{ hash, selectedPr, prFilter, dir }`, or null.
+// The page the shown worktree page was entered from: `{ hash, selectedItem, prFilter, dir }`, or null.
 // `hash` is `#/sessions`, a PRs hash, or null for the repos page. `dir` is the dir of the session last shown on the page.
 let pageOrigin = null
 let selectedWorktree = null
 let orgFilter = null
 let repoFilter = ''
-let selectedPr = null
+// The selected row of the PRs page: the number of a PR, the path of a worktree without a PR, or null.
+let selectedItem = null
 let prFilter = ''
 // The open pop-up: `{ tab, filter, selected }`, where `selected` is the path of the selected row or null. Null while the pop-up is closed.
 let jump = null
@@ -1758,6 +1777,24 @@ async function loadCachedPrs(state) {
 
   state.prs = prs
   state.loading = false
+  render()
+}
+
+// Fetches the titles and line counts of the linked worktrees of the main checkout at `path`, whose paths joined give `key`, into `worktreeStats`.
+// Keeps the stats of the same page until the reply lands. Drops the reply when the fetch fails or the shown page changed meanwhile.
+async function loadWorktreeStats(path, key) {
+  const state = { path, key, stats: worktreeStats?.path === path ? worktreeStats.stats : [] }
+  worktreeStats = state
+
+  let stats
+  try {
+    stats = JSON.parse(await fetchText(`api/worktrees/stats?path=${encodeURIComponent(path)}`)).worktrees
+  } catch {
+    return
+  }
+  if (worktreeStats !== state || !Array.isArray(stats)) return
+
+  state.stats = stats
   render()
 }
 
@@ -2818,6 +2855,60 @@ function shownPrs() {
     .sort((a, b) => prGroup(repo, a) - prGroup(repo, b))
 }
 
+// Returns the fetched stats of the worktree at `path` on the shown PRs page, or undefined.
+function worktreeStatsOf(path) {
+  return worktreeStats?.stats.find((stats) => stats.path === path)
+}
+
+// Returns the title of the row of `worktree`: the subject of its first commit since its fork point, or `---`.
+function wipTitle(worktree) {
+  return stringOrNull(worktreeStatsOf(worktree.path)?.title) ?? '---'
+}
+
+// Returns the linked worktrees of the shown PRs page that no listed PR holds and whose `{title} {branch} {short path}` holds every filter word.
+function shownWorktrees() {
+  const repo = findRepo(prsState?.path)
+  if (repo === undefined) return []
+
+  const words = filterWords(prFilter)
+  const prs = prsState?.prs ?? []
+
+  return repo.worktrees
+    .filter((worktree) => !prs.some((pr) => pr.branch === worktree.branch))
+    .filter((worktree) => holdsWords(`${wipTitle(worktree)} ${worktree.branch ?? worktree.head ?? ''} ${shortPath(worktree.path)}`, words))
+}
+
+// Returns the shown worktree at `path`, or undefined.
+function shownWorktree(path) {
+  return shownWorktrees().find((worktree) => worktree.path === path)
+}
+
+// Returns the keys of the shown rows of the PRs page, in order: the worktree paths, then the PR numbers.
+function shownKeys() {
+  return [...shownWorktrees().map((worktree) => worktree.path), ...shownPrs().map((pr) => pr.number)]
+}
+
+// Returns the row of `worktree`, outlined when `selected`: its title, branch, line counts and short path; its chip and icons.
+function wipRowHtml(worktree, selected) {
+  const stats = worktreeStatsOf(worktree.path)
+  const counted = Number.isInteger(stats?.additions) && Number.isInteger(stats?.deletions)
+  const lines = counted ? ` · <span class="added">+${escape(stats.additions)}</span> <span class="deleted">−${escape(stats.deletions)}</span>` : ''
+  const path = escape(worktree.path)
+
+  return `
+    <div class="row wip${selected ? ' selected' : ''}" data-path="${path}">
+      <div class="body">
+        <span class="name">${escape(wipTitle(worktree))}</span>
+        <span class="label">${escape(worktree.branch ?? worktree.head ?? '')}${lines}</span>
+        <span class="label"><span class="marker">● ${escape(shortPath(worktree.path))}</span></span>
+      </div>
+      <div class="foot">
+        <div class="pr-chips"><span class="pr-chip wip">in progress</span></div>
+        <div class="actions">${actionButtons(WIP_ACTIONS, ` data-path="${path}"`)}</div>
+      </div>
+    </div>`
+}
+
 // Returns the icons of a PR row, with the checkout title on the worktree icon when the PR is not `checkedOut`.
 function prActions(checkedOut) {
   return PR_ACTIONS.map((entry) => (entry.action === 'worktree' && !checkedOut ? { ...entry, title: PR_CHECKOUT_TITLE } : entry))
@@ -2909,16 +3000,20 @@ function onPrCardAction(event) {
   if (button?.dataset.action === 'new-worktree') createWorktree(prsView.path)
 }
 
-// Returns the PR list of the PRs page of `repo`: loading, the error, no PRs, no match, or one row per shown PR. A cached list shows below the error of its refresh.
+// Returns the list of the PRs page of `repo`: loading, or the error, then one row per shown worktree without a PR, then one row per shown PR.
+// Without PRs, `No open PRs.` replaces the PR rows. With PRs but no shown row, `No branch matches.` replaces the rows.
 function prListHtml(repo) {
   if (prsState === null || prsState.loading) return '<p class="empty">loading…</p>'
 
   const error = prsState.error === null ? '' : `<p class="config-error">${escape(prsState.error)}</p>`
-  if (prsState.prs.length === 0) return error || '<p class="empty">No open PRs.</p>'
+  const worktreeRows = shownWorktrees().map((worktree) => wipRowHtml(worktree, worktree.path === selectedItem))
+  const prRows = shownPrs().map((pr) => prRowHtml(repo, pr, pr.number === selectedItem))
+  const rows = [...worktreeRows, ...prRows].join('')
+  const list = rows === '' ? '' : `<div class="rows">${rows}</div>`
 
-  const prs = shownPrs()
-  if (prs.length === 0) return `${error}<p class="empty">No PR matches.</p>`
-  return `${error}<div class="rows">${prs.map((pr) => prRowHtml(repo, pr, pr.number === selectedPr)).join('')}</div>`
+  if (prsState.prs.length === 0) return `${error}${list}${error === '' ? '<p class="empty">No open PRs.</p>' : ''}`
+  if (rows === '') return `${error}<p class="empty">No branch matches.</p>`
+  return `${error}${list}`
 }
 
 // Returns why the repos list lacks the main checkout of a PRs page: still loading, the list's error, or not configured.
@@ -2936,7 +3031,9 @@ function updatePrsPart(key, id, html) {
   prsView[key] = html
 }
 
-// Renders the PRs page of the main checkout at `path`: its card, the filter field and the shown PRs. A page already shown keeps its field. A page without PRs for `path` fetches them. A PR no longer shown loses the selection once a list shows.
+// Renders the PRs page of the main checkout at `path`: its card, the filter field, the shown worktrees without a PR and the shown PRs.
+// A page already shown keeps its field. A page without PRs for `path` fetches them. A page whose worktrees changed fetches their stats.
+// A row no longer shown loses the selection once a list shows.
 function renderPrsPage(path) {
   const repo = findRepo(path)
   if (repo === undefined) {
@@ -2959,13 +3056,17 @@ function renderPrsPage(path) {
   }
 
   if (prsState?.path !== path) loadPrs(path)
-  if (!prsState.loading && !shownPrs().some((pr) => pr.number === selectedPr)) selectedPr = null
+
+  const statsKey = repo.worktrees.map((worktree) => worktree.path).join('\n')
+  if (worktreeStats?.path !== path || worktreeStats.key !== statsKey) loadWorktreeStats(path, statsKey)
+
+  if (!prsState.loading && !shownKeys().includes(selectedItem)) selectedItem = null
 
   updatePrsPart('card', 'pr-card', prCardHtml(repo))
   updatePrsPart('list', 'pr-list', prListHtml(repo))
 }
 
-// Shows the PRs that match the typed filter.
+// Shows the rows that match the typed filter.
 function onPrFilter(event) {
   prFilter = event.currentTarget.value
   renderPrsPage(prsView.path)
@@ -2976,39 +3077,48 @@ function shownPr(number) {
   return shownPrs().find((pr) => pr.number === number)
 }
 
-// Runs the action of the clicked PR icon, or selects the PR whose row was clicked.
-// Cmd+click on a row in the app also opens the PR's worktree page in a new window, after its checkout.
+// Runs the action of the clicked icon, or selects the worktree or PR whose row was clicked.
+// Cmd+click on a row in the app also opens its worktree page in a new window, after the checkout of a PR.
 function onPrListClick(event) {
   const button = event.target.closest('button[data-action]')
+  if (button?.dataset.path !== undefined) {
+    const worktree = shownWorktree(button.dataset.path)
+    if (worktree !== undefined) runWipAction(prsView.path, worktree.path, button.dataset.action)
+    return
+  }
+
   if (button) {
     const pr = shownPr(Number(button.dataset.number))
     if (pr !== undefined) runPrAction(prsView.path, pr, button.dataset.action)
     return
   }
 
-  const row = event.target.closest('.row.pr')
+  const wipRow = event.target.closest('.row.wip')
+  const row = wipRow ?? event.target.closest('.row.pr')
   if (!row) return
 
-  selectedPr = Number(row.dataset.number)
+  selectedItem = wipRow ? wipRow.dataset.path : Number(row.dataset.number)
   renderPrsPage(prsView.path)
 
   if (!event.metaKey || window.__TAURI__ === undefined) return
 
-  const pr = shownPr(selectedPr)
+  if (wipRow) return runWipAction(prsView.path, selectedItem, 'window')
+
+  const pr = shownPr(selectedItem)
   if (pr !== undefined) runPrAction(prsView.path, pr, 'window')
 }
 
-// Moves the selection by `step` shown PRs and stops at the first and last PRs.
+// Moves the selection by `step` shown rows and stops at the first and last rows.
 function movePrSelection(step) {
-  const numbers = shownPrs().map((pr) => pr.number)
-  if (numbers.length === 0) return
+  const keys = shownKeys()
+  if (keys.length === 0) return
 
-  const last = numbers.length - 1
+  const last = keys.length - 1
   const first = step > 0 ? 0 : last
-  const current = numbers.indexOf(selectedPr)
+  const current = keys.indexOf(selectedItem)
   const next = current < 0 ? first : Math.min(last, Math.max(0, current + step))
 
-  selectedPr = numbers[next]
+  selectedItem = keys[next]
   renderPrsPage(prsView.path)
   $('pr-list').querySelector('.row.selected')?.scrollIntoView({ block: 'nearest' })
 }
@@ -4803,9 +4913,23 @@ async function runPrAction(path, pr, action) {
   const route = parseRoute(location.hash)
   if (route.kind !== 'prs' || route.path !== path) return
 
-  selectedPr = pr.number
+  selectedItem = pr.number
   if (action === 'worktree') location.hash = worktreeHash(folder)
   else if (action === 'claude') openWorktree(folder, 'claude')
+}
+
+// Runs the action `action` on the worktree at `path` of the main checkout at `main`. The page actions run only while its PRs page shows.
+function runWipAction(main, path, action) {
+  if (action === 'refresh') return loadWorktreeStats(main, worktreeStats?.key ?? '')
+  if (action === 'zed' || action === 'intellij') return openWorktreeTool(path, action)
+  if (action === 'window') return openWindow(worktreeHash(path))
+
+  const route = parseRoute(location.hash)
+  if (route.kind !== 'prs' || route.path !== main) return
+
+  selectedItem = path
+  if (action === 'worktree') location.hash = worktreeHash(path)
+  else if (action === 'claude') openWorktree(path, 'claude')
 }
 
 // Scrolls the metro pane to show the card of stop `index`.
@@ -4976,7 +5100,8 @@ function render() {
 
   if (route.kind !== 'prs') {
     prsState = null
-    selectedPr = null
+    worktreeStats = null
+    selectedItem = null
     prFilter = ''
   }
 
@@ -5010,9 +5135,9 @@ function recordPageOrigin(route) {
 
   const shown = parseRoute(shownHash)
   if (pageOrigin === null || routePage(shown) !== page) {
-    pageOrigin = { hash: null, selectedPr: null, prFilter: '', dir: null }
+    pageOrigin = { hash: null, selectedItem: null, prFilter: '', dir: null }
     if (shown.kind === 'sessions') pageOrigin.hash = '#/sessions'
-    if (shown.kind === 'prs') Object.assign(pageOrigin, { hash: shownHash, selectedPr, prFilter })
+    if (shown.kind === 'prs') Object.assign(pageOrigin, { hash: shownHash, selectedItem, prFilter })
   }
 
   if (route.kind === 'session') pageOrigin.dir = state.sessions.find((s) => sessionHref(s) === sessionHref(route)).dir
@@ -5199,7 +5324,7 @@ function filterKey(key, field) {
 
   if (key === 'Enter' && prs) {
     field.blur()
-    if (selectedPr === null) movePrSelection(1)
+    if (selectedItem === null) movePrSelection(1)
     prsKey('Enter', prsView.path)
     return true
   }
@@ -5285,7 +5410,7 @@ function worktreeKey(key, path) {
 // Leaves the worktree page of `path` for `pageOrigin` once the editor holds no unsaved changes.
 // Selects there the session last shown on the page, or restores the PRs selection and filter, or selects `path` on the repos page.
 function leavePage(path) {
-  const origin = pageOrigin ?? { hash: null, selectedPr: null, prFilter: '', dir: null }
+  const origin = pageOrigin ?? { hash: null, selectedItem: null, prFilter: '', dir: null }
   const target = backTarget(origin.hash ?? '#/')
   if (target === null) return
 
@@ -5293,7 +5418,7 @@ function leavePage(path) {
     if (origin.hash === null) selectedWorktree = path
     else if (origin.hash === '#/sessions') selectedDir = origin.dir ?? selectedDir
     else {
-      selectedPr = origin.selectedPr
+      selectedItem = origin.selectedItem
       prFilter = origin.prFilter
     }
     location.hash = target
@@ -5326,7 +5451,15 @@ function prsKey(key, path) {
     return true
   }
 
-  const pr = shownPr(selectedPr)
+  const worktree = shownWorktree(selectedItem)
+  if (worktree !== undefined) {
+    if (!Object.hasOwn(WIP_KEYS, key)) return false
+
+    runWipAction(path, worktree.path, WIP_KEYS[key])
+    return true
+  }
+
+  const pr = shownPr(selectedItem)
   if (pr === undefined || !Object.hasOwn(PR_KEYS, key)) return false
 
   runPrAction(path, pr, PR_KEYS[key])

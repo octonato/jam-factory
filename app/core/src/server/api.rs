@@ -50,6 +50,7 @@ pub fn get(
         ["", "api", "version"] => Ok(json_response(&json!({ "version": BUILD_VERSION }))),
         ["", "api", "prs", ..] => return prs::get(repos, target),
         ["", "api", "github"] => return github::get(repos, target),
+        ["", "api", "worktrees", "stats"] => return worktrees::get(repos, target),
         ["", "api", "files", org, repo, branch, id] => files(store, [org, repo, branch, id]),
         ["", "api", "file", org, repo, branch, id, path @ ..] if !path.is_empty() => {
             file(store, [org, repo, branch, id], path)
