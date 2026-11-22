@@ -1548,7 +1548,7 @@ checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
 name = "jam-board"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "jam-factory-store",
  "percent-encoding",
@@ -1559,7 +1559,7 @@ dependencies = [
 
 [[package]]
 name = "jam-board-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "httparse",
  "jam-factory-store",
@@ -1575,7 +1575,7 @@ dependencies = [
 
 [[package]]
 name = "jam-factory-mcp"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "jam-factory-store",
  "rmcp",
@@ -1588,7 +1588,7 @@ dependencies = [
 
 [[package]]
 name = "jam-factory-server"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "jam-board-core",
  "jam-factory-store",
@@ -1597,7 +1597,7 @@ dependencies = [
 
 [[package]]
 name = "jam-factory-store"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "chrono",
  "serde",
@@ -1632,7 +1632,7 @@ dependencies = [
 
 [[package]]
 name = "jb"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "jam-board-core",
  "jam-factory-store",
