@@ -69,7 +69,7 @@ fn page_state(loaded: Option<&str>, path: &str, pending: bool) -> Page {
     }
 }
 
-/// Shows the GitHub view of the calling window at these logical bounds of the board page's viewport, and loads `url` when the view is new or last loaded another path.
+/// Shows the GitHub view of the calling window at these logical bounds of the board page's viewport and at `zoom`, and loads `url` when the view is new or last loaded another path.
 /// `viewport_height` is the height of the board page's viewport.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
@@ -82,6 +82,7 @@ pub async fn github_view_show(
     width: f64,
     height: f64,
     viewport_height: f64,
+    zoom: f64,
 ) -> Result<(), String> {
     let window = webview.window();
     let url = parse(&url)?;
@@ -97,6 +98,7 @@ pub async fn github_view_show(
 
             view.set_position(position)
                 .and_then(|_| view.set_size(size))
+                .and_then(|_| view.set_zoom(zoom))
                 .map_err(|e| format!("Cannot show the GitHub view: {e}"))?;
 
             match page {
@@ -108,8 +110,10 @@ pub async fn github_view_show(
             }
         }
         None => {
-            add_github_view(&window, url, position, size)?;
+            let view = add_github_view(&window, url, position, size)?;
             forget_on_destroy(&window);
+            view.set_zoom(zoom)
+                .map_err(|e| format!("Cannot zoom the GitHub view: {e}"))?;
         }
     }
 
@@ -134,7 +138,7 @@ pub async fn github_view_hide(webview: Webview) -> Result<(), String> {
 
 /// Reloads the GitHub view of the focused board window when it shows.
 pub fn reload_focused(app: &AppHandle) {
-    let Some(window) = focused_board_window(app) else {
+    let Some(window) = windows::focused_board_window(app) else {
         return;
     };
     if !shown().contains(window.label()) {
@@ -146,12 +150,6 @@ pub fn reload_focused(app: &AppHandle) {
     {
         eprintln!("jam-board: {e}");
     }
-}
-
-/// Returns the focused window when it holds a board web view.
-fn focused_board_window(app: &AppHandle) -> Option<Window> {
-    app.get_focused_window()
-        .filter(|window| windows::board_webview(window).is_some())
 }
 
 /// Returns the logical position in `window` of the top left corner of the viewport of `board`, whose page reports a viewport of height `viewport_height`.

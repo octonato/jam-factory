@@ -46,6 +46,8 @@ const SERVER_DEADLINE: Duration = Duration::from_secs(3);
 
 const ASK_PAGE_TO_CLOSE: &str = "onCloseRequested()";
 
+const STEP_TEXT_SIZE: &str = "stepTextSize";
+
 const LINK_SCHEME: &str = "jam-board";
 
 const LINK_HOST: &str = "open";
@@ -298,6 +300,27 @@ pub fn board_webview(window: &Window) -> Option<Webview> {
         .find(|webview| is_board_webview(window.label(), webview.label()))
 }
 
+/// Returns the focused window when it holds a board web view.
+pub fn focused_board_window(app: &AppHandle) -> Option<Window> {
+    app.get_focused_window()
+        .filter(|window| board_webview(window).is_some())
+}
+
+/// Asks the page of the focused board window to step the text size of its shown tab by `step`.
+pub fn step_text_size(app: &AppHandle, step: i32) {
+    let Some(page) = focused_board_window(app).and_then(|window| board_webview(&window)) else {
+        return;
+    };
+
+    if let Err(e) = page.eval(step_text_size_script(step)) {
+        eprintln!("jam-board: Cannot step the text size: {e}");
+    }
+}
+
+fn step_text_size_script(step: i32) -> String {
+    format!("{STEP_TEXT_SIZE}({step})")
+}
+
 /// Returns true when the web view labelled `webview_label` is the board web view of the window labelled `window_label`.
 fn is_board_webview(window_label: &str, webview_label: &str) -> bool {
     webview_label == window_label
@@ -471,6 +494,15 @@ mod tests {
         let dashboard = include_str!("../../core/dashboard/dashboard.html");
 
         assert!(dashboard.contains(&format!("function {ASK_PAGE_TO_CLOSE}")));
+    }
+
+    #[test]
+    fn the_dashboard_steps_the_text_size() {
+        let dashboard = include_str!("../../core/dashboard/dashboard.html");
+
+        assert!(dashboard.contains(&format!("function {STEP_TEXT_SIZE}(step)")));
+        assert_eq!(step_text_size_script(1), "stepTextSize(1)");
+        assert_eq!(step_text_size_script(-1), "stepTextSize(-1)");
     }
 
     #[test]

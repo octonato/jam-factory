@@ -550,6 +550,7 @@
     min-height: 0;
     overflow: auto;
     padding: 16px 24px;
+    zoom: var(--viewer-zoom, 1);
   }
 
   #view pre {
@@ -1194,6 +1195,13 @@ const FONT_KEY = 'jam-board-font-size'
 const FONT_MIN = 12
 const FONT_MAX = 24
 const FONT_DEFAULT = 18
+const TERMINAL_FONT_KEY = 'jam-board-terminal-font-size'
+const TERMINAL_FONT_MIN = 8
+const TERMINAL_FONT_MAX = 32
+const VIEWER_ZOOM_KEY = 'jam-board-viewer-zoom'
+const GITHUB_ZOOM_KEY = 'jam-board-github-zoom'
+// The zoom factors of the session viewer and the GitHub view.
+const ZOOM_LEVELS = [0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2]
 const MONO_FONT = 'ui-monospace, SFMono-Regular, Menlo, monospace'
 // The Octo Aurora Borealis iTerm colors.
 const TERMINAL_THEME = {
@@ -1313,6 +1321,7 @@ const SHORTCUTS = [
       { keys: ['⇧⌘B'], text: 'Open the pop-up on Branches' },
       { keys: ['⇧⌘W'], text: 'Open the pop-up on Worktrees' },
       { keys: ['⇧⌘T'], text: 'Open the pop-up on Terminals' },
+      { keys: ['⌘=', '⌘-'], text: 'Make the text of the shown tab bigger or smaller' },
     ],
   },
   {
@@ -1471,7 +1480,7 @@ let sessionView = { dir: null, card: '', metro: '', head: '', stops: [], selecte
 let worktreeView = { path: null, el: null, item: null, card: '', bar: '', tabs: '' }
 // The GitHub item last entered: its worktree path, its URL or the error that replaced it, whether its fetch runs, and the number of its last fetch.
 let githubTab = { path: null, url: null, error: null, loading: false, seq: 0 }
-// The GitHub view of this window: `shown` while the page asked it to show, and the `bounds` last sent.
+// The GitHub view of this window: `shown` while the page asked it to show, and the `bounds` and zoom last sent.
 let githubView = { shown: false, bounds: null }
 // The GitHub view commands sent so far, each run after the one before.
 let githubQueue = Promise.resolve()
@@ -1495,6 +1504,10 @@ const standaloneRoot = rootHash === null ? null : parseRoute(rootHash)
 let windowTitle = null
 let renderSeq = 0
 let fontSize = FONT_DEFAULT
+// The font size of the worktree terminals, or null to follow the board font size.
+let terminalSize = null
+let viewerZoom = 1
+let githubZoom = 1
 let leftWidth = null
 let selectedDir = null
 // The page the shown worktree page was entered from: `{ hash, selectedPr, prFilter, dir }`, or null.
@@ -2684,14 +2697,14 @@ function queueGithub(step) {
   return run
 }
 
-// Shows the GitHub view over its placeholder, or moves it there when the placeholder or the viewport moved.
-// Sends the placeholder bounds in viewport coordinates and the viewport height.
+// Shows the GitHub view over its placeholder, or moves it there when the placeholder or the viewport moved, or zooms it when its zoom changed.
+// Sends the placeholder bounds in viewport coordinates, the viewport height and the zoom.
 // Does nothing unless the page shows the GitHub item of `githubTab` with its URL and no pop-up shows.
 function showGithubView() {
   if (githubTab.url === null || !githubItemShows() || githubOverlayOpen()) return
 
   const rect = $('github-view').getBoundingClientRect()
-  const bounds = { x: rect.left, y: rect.top, width: rect.width, height: rect.height, viewportHeight: window.innerHeight }
+  const bounds = { x: rect.left, y: rect.top, width: rect.width, height: rect.height, viewportHeight: window.innerHeight, zoom: githubZoom }
   if (githubView.shown && JSON.stringify(bounds) === JSON.stringify(githubView.bounds)) return
 
   const { path, url, seq } = githubTab
@@ -4131,7 +4144,7 @@ async function postOpen(url, name, tool) {
 }
 
 function terminalFontSize() {
-  return Math.round(fontSize * 0.8)
+  return terminalSize ?? Math.round(fontSize * 0.8)
 }
 
 // Returns an xterm in the board's font and colours, opened in `container`, and its fit addon.
@@ -4206,7 +4219,7 @@ function addWorktreeTab(path, { name, program, serverId }) {
   sendXterm(term, () => tab.socket)
 
   term.attachCustomKeyEventHandler((event) => {
-    if (!isShiftEnter(event)) return zoomKey(event) === null && tabKey(event) === null && barKey(event) === null && !clearKey(event)
+    if (!isShiftEnter(event)) return zoomKey(event) === null && tabKey(event) === null && barKey(event) === null && textSizeKey(event) === null && !clearKey(event)
     if (event.type === 'keydown' && tab.socket?.readyState === WebSocket.OPEN) tab.socket.send(new TextEncoder().encode(SHIFT_ENTER))
     return false
   })
@@ -5369,6 +5382,15 @@ function jumpShortcut(event) {
   return Object.hasOwn(JUMP_SHIFT_KEYS, key) ? JUMP_SHIFT_KEYS[key] : null
 }
 
+// Returns the text size step of `event`: 1 for Cmd+= and Cmd++, -1 for Cmd+-, and null for any other key.
+function textSizeKey(event) {
+  if (!event.metaKey || event.ctrlKey || event.altKey) return null
+
+  if (event.key === '=' || event.key === '+') return 1
+  if (event.key === '-' && !event.shiftKey) return -1
+  return null
+}
+
 // Returns the window action of `event`: `detach` for Cmd+N, `board` for Cmd+0, and null for any other key.
 function windowKey(event) {
   if (!event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return null
@@ -5442,6 +5464,13 @@ function onKey(event) {
   const windowAction = windowKey(event)
   if (windowAction !== null && !$('modal').open && !$('shortcuts').open && runWindowAction(windowAction)) {
     event.preventDefault()
+    return
+  }
+
+  const textStep = textSizeKey(event)
+  if (textStep !== null && window.__TAURI__ === undefined && !$('modal').open && !$('shortcuts').open) {
+    event.preventDefault()
+    stepTextSize(textStep)
     return
   }
 
@@ -5529,20 +5558,41 @@ function onKey(event) {
   if (session ? sessionKey(key, session) : missingSessionKey(key, route)) event.preventDefault()
 }
 
-// Returns the stored font size, or the default when it is missing or out of range.
-function readFontSize() {
+// Returns the number stored at `key` when `valid` accepts it, or null.
+function readStoredNumber(key, valid) {
   try {
-    const size = Number(localStorage.getItem(FONT_KEY))
-    return Number.isInteger(size) && size >= FONT_MIN && size <= FONT_MAX ? size : FONT_DEFAULT
+    const stored = localStorage.getItem(key)
+    const value = Number(stored)
+    return stored !== null && valid(value) ? value : null
   } catch {
-    return FONT_DEFAULT
+    return null
   }
 }
 
-function writeFontSize(size) {
+function writeStored(key, value) {
   try {
-    localStorage.setItem(FONT_KEY, String(size))
+    localStorage.setItem(key, String(value))
   } catch {}
+}
+
+function isIntegerIn(value, min, max) {
+  return Number.isInteger(value) && value >= min && value <= max
+}
+
+function isZoomLevel(value) {
+  return ZOOM_LEVELS.includes(value)
+}
+
+// Returns the stored font size, or the default when it is missing or out of range.
+function readFontSize() {
+  return readStoredNumber(FONT_KEY, (size) => isIntegerIn(size, FONT_MIN, FONT_MAX)) ?? FONT_DEFAULT
+}
+
+// Reads the stored terminal font size and zoom factors.
+function readTabSizes() {
+  terminalSize = readStoredNumber(TERMINAL_FONT_KEY, (size) => isIntegerIn(size, TERMINAL_FONT_MIN, TERMINAL_FONT_MAX))
+  viewerZoom = readStoredNumber(VIEWER_ZOOM_KEY, isZoomLevel) ?? 1
+  githubZoom = readStoredNumber(GITHUB_ZOOM_KEY, isZoomLevel) ?? 1
 }
 
 function showFontSize(size) {
@@ -5552,20 +5602,61 @@ function showFontSize(size) {
   $('font-down').disabled = size <= FONT_MIN
   $('font-up').disabled = size >= FONT_MAX
 
+  resizeTerminals()
+  showGithubView()
+}
+
+// Sets the font size of every worktree terminal and fits it to its element.
+function resizeTerminals() {
   for (const { tabs } of worktreeTerms.values()) {
     for (const tab of tabs) {
       tab.term.options.fontSize = terminalFontSize()
       tab.fit.fit()
     }
   }
+}
 
-  showGithubView()
+function showViewerZoom() {
+  document.documentElement.style.setProperty('--viewer-zoom', String(viewerZoom))
 }
 
 function stepFontSize(step) {
   const size = Math.min(FONT_MAX, Math.max(FONT_MIN, fontSize + step))
   showFontSize(size)
-  writeFontSize(size)
+  writeStored(FONT_KEY, size)
+}
+
+function stepTerminalSize(step) {
+  terminalSize = Math.min(TERMINAL_FONT_MAX, Math.max(TERMINAL_FONT_MIN, terminalFontSize() + step))
+  writeStored(TERMINAL_FONT_KEY, terminalSize)
+  resizeTerminals()
+}
+
+// Returns the zoom level `step` levels away from `zoom`, within the first and the last level.
+function stepZoom(zoom, step) {
+  const index = Math.max(0, ZOOM_LEVELS.indexOf(zoom))
+  return ZOOM_LEVELS[Math.min(ZOOM_LEVELS.length - 1, Math.max(0, index + step))]
+}
+
+function stepViewerZoom(step) {
+  viewerZoom = stepZoom(viewerZoom, step)
+  writeStored(VIEWER_ZOOM_KEY, viewerZoom)
+  showViewerZoom()
+}
+
+function stepGithubZoom(step) {
+  githubZoom = stepZoom(githubZoom, step)
+  writeStored(GITHUB_ZOOM_KEY, githubZoom)
+  showGithubView()
+}
+
+// Steps the text size of the shown tab by `step`: the GitHub view, the worktree terminals, the session viewer, or else the board.
+function stepTextSize(step) {
+  const { kind } = parseRoute(location.hash)
+  if (kind === 'github') stepGithubZoom(step)
+  else if (kind === 'worktree') stepTerminalSize(step)
+  else if (kind === 'session') stepViewerZoom(step)
+  else stepFontSize(step)
 }
 
 // Returns the stored org filter, or null for every org.
@@ -5607,7 +5698,9 @@ async function poll() {
 
 $('font-down').addEventListener('click', () => stepFontSize(-1))
 $('font-up').addEventListener('click', () => stepFontSize(1))
+readTabSizes()
 showFontSize(readFontSize())
+showViewerZoom()
 orgFilter = readOrgFilter()
 if (standaloneRoot !== null) $('board-header').hidden = true
 

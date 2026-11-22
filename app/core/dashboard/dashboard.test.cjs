@@ -177,7 +177,7 @@ function dashboard({ script = source, pageWidth = 1200, pageLeft = 0, pageTop = 
   const document = Object.assign(new Target(), {
     getElementById: (id) => elements.get(id) ?? null,
     createElement,
-    documentElement: { style: {} },
+    documentElement: { style: { setProperty(name, value) { this[name] = value } } },
     visibilityState: 'visible',
     focused: true,
     hasFocus() { return this.focused },
@@ -3072,6 +3072,101 @@ test('a font size change resizes the worktree terminals', async () => {
   app.run('stepFontSize(1)')
   assert.equal(terminals[0].options.fontSize, Math.round((18 + 1) * 0.8))
   assert.deepEqual(sockets[0].sent, ['{"cols":120,"rows":36}'])
+})
+
+test('Cmd+= and Cmd+- step the terminal font size on the Terminal item and store it', async () => {
+  const { app, terminals } = await worktreeApp()
+  clickTab(app, 'add')
+  assert.equal(app.context.location.hash, worktreeHashOf(worktreePath))
+
+  assert.ok(press(app, '=', { metaKey: true }, terminals[0].element))
+  assert.ok(press(app, '=', { metaKey: true }))
+  assert.equal(terminals[0].options.fontSize, Math.round(18 * 0.8) + 2)
+  assert.equal(app.run('fontSize'), 18)
+
+  assert.ok(press(app, '-', { metaKey: true }))
+  assert.equal(terminals[0].options.fontSize, Math.round(18 * 0.8) + 1)
+  assert.equal(app.run("localStorage.getItem('jam-board-terminal-font-size')"), String(Math.round(18 * 0.8) + 1))
+})
+
+test('a stored terminal font size outlives a board font size change', async () => {
+  const { app, terminals } = await worktreeApp()
+  clickTab(app, 'add')
+  app.run('stepTerminalSize(1)')
+
+  app.run('stepFontSize(2)')
+  assert.equal(terminals[0].options.fontSize, Math.round(18 * 0.8) + 1)
+})
+
+test('Cmd+= and Cmd+- step the viewer zoom on a session and store it', async () => {
+  const { app } = await worktreeApp(worktreePath, [sessionAt('s1', worktreePath)])
+  navigate(app, '#/o/r/main/s1')
+  await settle()
+  const zoom = () => app.context.document.documentElement.style['--viewer-zoom']
+  assert.equal(zoom(), '1')
+
+  assert.ok(press(app, '+', { metaKey: true, shiftKey: true }))
+  assert.equal(zoom(), '1.1')
+  assert.ok(press(app, '-', { metaKey: true }))
+  assert.ok(press(app, '-', { metaKey: true }))
+  assert.equal(zoom(), '0.9')
+  assert.equal(app.run('fontSize'), 18)
+  assert.equal(app.run("localStorage.getItem('jam-board-viewer-zoom')"), '0.9')
+})
+
+test('Cmd+= steps the board font size on the board pages', () => {
+  for (const hash of ['#/', '#/sessions', '#/terminals']) {
+    const storage = new Map()
+    const app = dashboard({ hash, storage })
+    assert.ok(press(app, '=', { metaKey: true }))
+    assert.equal(app.run('fontSize'), 19)
+    assert.equal(storage.get('jam-board-font-size'), '19')
+  }
+})
+
+test('the stored tab text sizes come back when the board opens', () => {
+  const storage = new Map([['jam-board-terminal-font-size', '20'], ['jam-board-viewer-zoom', '1.25'], ['jam-board-github-zoom', '0.8']])
+  const app = dashboard({ storage })
+
+  assert.equal(app.run('terminalFontSize()'), 20)
+  assert.equal(app.context.document.documentElement.style['--viewer-zoom'], '1.25')
+  assert.equal(app.run('githubZoom'), 0.8)
+})
+
+test('stored tab text sizes out of range fall back to the defaults', () => {
+  const storage = new Map([['jam-board-terminal-font-size', '99'], ['jam-board-viewer-zoom', '1.3'], ['jam-board-github-zoom', 'big']])
+  const app = dashboard({ storage })
+
+  assert.equal(app.run('terminalFontSize()'), Math.round(18 * 0.8))
+  assert.equal(app.context.document.documentElement.style['--viewer-zoom'], '1')
+  assert.equal(app.run('githubZoom'), 1)
+})
+
+test('the zoom stops at the first and the last level', () => {
+  const app = dashboard()
+  assert.equal(app.run('stepZoom(2, 1)'), 2)
+  assert.equal(app.run('stepZoom(0.5, -1)'), 0.5)
+  assert.equal(app.run('stepZoom(1, 1)'), 1.1)
+})
+
+test('the app leaves Cmd+= and Cmd+- to its menu', () => {
+  const app = dashboard({ tauri: { core: { invoke: async () => {} } } })
+
+  assert.equal(press(app, '=', { metaKey: true }), false)
+  assert.equal(press(app, '-', { metaKey: true }), false)
+  assert.equal(app.run('fontSize'), 18)
+})
+
+test('worktree terminals keep the text size keys', async () => {
+  const { app, terminals } = await worktreeApp()
+  clickTab(app, 'add')
+  const { key } = terminals[0].handlers
+  const event = (name, modifiers = {}) => ({ key: name, metaKey: true, ctrlKey: false, altKey: false, shiftKey: false, ...modifiers })
+
+  assert.equal(key(event('=')), false)
+  assert.equal(key(event('+', { shiftKey: true })), false)
+  assert.equal(key(event('-')), false)
+  assert.equal(key(event('-', { metaKey: false })), true)
 })
 
 const zoomKeys = { metaKey: true, shiftKey: true }
@@ -6146,7 +6241,13 @@ test('the shortcuts dialog lists the three pop-up shortcuts', () => {
   app.context.location.hash = '#/'
   press(app, '?', { shiftKey: true })
 
+<<<<<<< HEAD
   assert.match(shortcutsText(app), /^Everywhere \? Show or hide the shortcuts ⌘ click Open a row or bar item in a new window ⇧⌘B Open the pop-up on Branches ⇧⌘W Open the pop-up on Worktrees ⇧⌘T Open the pop-up on Terminals Pop-up /)
+||||||| 94416d2
+  assert.match(shortcutsText(app), /^Everywhere \? Show or hide the shortcuts ⌘ click Open a row or bar item in a new window ⌘K Open the pop-up on All ⇧⌘B Open the pop-up on Branches ⇧⌘W Open the pop-up on Worktrees ⇧⌘T Open the pop-up on Terminals Pop-up /)
+=======
+  assert.match(shortcutsText(app), /^Everywhere \? Show or hide the shortcuts ⌘ click Open a row or bar item in a new window ⌘K Open the pop-up on All ⇧⌘B Open the pop-up on Branches ⇧⌘W Open the pop-up on Worktrees ⇧⌘T Open the pop-up on Terminals ⌘= ⌘- Make the text of the shown tab bigger or smaller Pop-up /)
+>>>>>>> octonato/increase-font-size
 })
 
 test('the shortcuts dialog lists the pop-up tab keys', () => {
@@ -6322,8 +6423,8 @@ const githubBounds = { x: 0, y: 96, width: 1200, height: 640 }
 // Returns the `api/github` reply that carries `url` or `error`.
 const githubReply = (url, error = null) => response(JSON.stringify({ url, error }))
 
-// Returns the `github_view_show` call of `url` for `githubWorktree` at `bounds`, in a viewport that ends at the bottom of `bounds`.
-const githubShow = (url, bounds = githubBounds) => ['github_view_show', { path: githubWorktree, url, ...bounds, viewportHeight: bounds.y + bounds.height }]
+// Returns the `github_view_show` call of `url` for `githubWorktree` at `bounds` and `zoom`, in a viewport that ends at the bottom of `bounds`.
+const githubShow = (url, bounds = githubBounds, zoom = 1) => ['github_view_show', { path: githubWorktree, url, ...bounds, viewportHeight: bounds.y + bounds.height, zoom }]
 
 const githubPlaceholder = (app) => app.elements.get('github-view').textContent
 
@@ -6521,4 +6622,14 @@ test('the view follows its placeholder on resize and font-size change', async ()
   await settle()
   assert.deepEqual(invoked.at(-1), githubShow(githubPr, { ...githubBounds, y: 120, height: 500 }))
   assert.equal(invoked.length, 3)
+})
+
+test('a text size step on the GitHub item zooms the view and stores the zoom', async () => {
+  const { app, invoked } = await shownGithubApp()
+
+  app.run('stepTextSize(1)')
+  await settle()
+  assert.deepEqual(invoked, [githubShow(githubPr), githubShow(githubPr, githubBounds, 1.1)])
+  assert.equal(app.run('fontSize'), 18)
+  assert.equal(app.run("localStorage.getItem('jam-board-github-zoom')"), '1.1')
 })
