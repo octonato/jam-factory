@@ -2002,6 +2002,7 @@ function terminalStubs(app) {
     rows = 24
     size = { cols: 100, rows: 30 }
     written = []
+    cleared = 0
     focused = false
     disposed = false
     fits = 0
@@ -2022,6 +2023,7 @@ function terminalStubs(app) {
 
     write(data) { this.written.push(data) }
     reset() { this.written = [] }
+    clear() { this.cleared += 1 }
     focus() { this.focused = true }
     blur() { this.focused = false }
     dispose() { this.disposed = true }
@@ -3218,6 +3220,44 @@ test('Cmd+T opens a shell tab', async () => {
 
   assert.ok(press(app, 't', cmd, terminals[0].element))
   assert.deepEqual(tabNames(app), ['shell 1', 'shell 2*'])
+})
+
+test('Cmd+K clears the active terminal', async () => {
+  const { app, terminals } = await worktreeApp()
+  clickTab(app, 'add')
+  clickTab(app, 'add')
+  terminals[1].blur()
+
+  assert.ok(press(app, 'k', cmd))
+  assert.deepEqual(terminals.map((terminal) => terminal.cleared), [0, 1])
+  assert.equal(terminals[1].focused, true)
+
+  assert.ok(press(app, 'K', cmd, terminals[1].element))
+  assert.deepEqual(terminals.map((terminal) => terminal.cleared), [0, 2])
+  assert.equal(app.run('jump'), null)
+})
+
+test('the terminal leaves Cmd+K to the board', async () => {
+  const { terminals } = await runningApp([shellOnServer])
+  const key = (modifiers) => ({ type: 'keydown', key: 'k', metaKey: true, shiftKey: false, altKey: false, ctrlKey: false, ...modifiers })
+
+  assert.equal(terminals[0].handlers.key(key()), false)
+  assert.equal(terminals[0].handlers.key(key({ metaKey: false })), true)
+})
+
+test('Cmd+K does nothing without tabs, off the Terminal item or under the modal', async () => {
+  const { app, terminals } = await worktreeApp(worktreePath, [sessionAt('s1', worktreePath)])
+  assert.equal(press(app, 'k', cmd), false)
+
+  clickTab(app, 'add')
+  app.elements.get('modal').open = true
+  assert.equal(press(app, 'k', cmd), false)
+  app.elements.get('modal').open = false
+
+  navigate(app, '#/o/r/main/s1')
+  await settle()
+  assert.equal(press(app, 'k', cmd), false)
+  assert.equal(terminals[0].cleared, 0)
 })
 
 test('the tab keys do nothing without tabs or off the worktree page', async () => {
@@ -5560,7 +5600,6 @@ const jumpRepos = {
 
 test('each shortcut opens the pop-up on its tab', async () => {
   const cases = [
-    ['k', cmd, 'all', 'akka/sdk/main akka/sdk/alpha akka/sdk/beta o/r/main o/r/gamma'],
     ['b', shift, 'branches', 'akka/sdk/main o/r/main'],
     ['w', shift, 'worktrees', 'akka/sdk/alpha akka/sdk/beta o/r/gamma'],
     ['t', shift, 'terminals', 'No match.'],
@@ -5574,7 +5613,7 @@ test('each shortcut opens the pop-up on its tab', async () => {
     assert.equal(app.elements.get('jump-input').focused, true)
     assert.equal(app.run('jump.tab'), tab)
     assert.equal(jumpText(app), text)
-    assert.equal(jumpTabsText(app), 'All Branches Worktrees Terminals')
+    assert.equal(jumpTabsText(app), 'Branches Worktrees Terminals')
     assert.deepEqual(activeJumpTab(app), [plain(app.run('JUMP_TABS')).find((entry) => entry.tab === tab).label])
   }
 })
@@ -5597,10 +5636,10 @@ test('Cmd+B opens no pop-up', async () => {
   assert.notEqual(jumpDialog(app).open, true)
 })
 
-test('Cmd+K with Shift, Ctrl or Alt and the tab shortcuts with Ctrl or Alt open no pop-up', async () => {
+test('Cmd+K with any modifiers and the tab shortcuts with Ctrl or Alt open no pop-up', async () => {
   const app = await reposApp(selectRepos)
 
-  for (const modifiers of [{ shiftKey: true }, { ctrlKey: true }, { altKey: true }]) {
+  for (const modifiers of [{}, { shiftKey: true }, { ctrlKey: true }, { altKey: true }]) {
     press(app, 'k', { ...cmd, ...modifiers })
     assert.equal(app.run('jump'), null)
   }
@@ -5616,14 +5655,14 @@ test('Cmd+K with Shift, Ctrl or Alt and the tab shortcuts with Ctrl or Alt open 
 
 test('typing in the pop-up filters its rows and selects the first one', async () => {
   const app = await reposApp(selectRepos)
-  press(app, 'k', cmd)
-  for (let i = 0; i < 4; i += 1) press(app, 'ArrowDown')
+  press(app, 'w', shift)
+  for (let i = 0; i < 2; i += 1) press(app, 'ArrowDown')
   assert.equal(app.run('jump.selected'), pathC)
 
   typeJump(app, 'AKKA')
-  assert.deepEqual(jumpPaths(app), [sdkMain, pathA, pathB])
-  assert.equal(app.run('jump.selected'), sdkMain)
-  assert.equal(jumpText(app), 'akka/sdk/main akka/sdk/alpha akka/sdk/beta')
+  assert.deepEqual(jumpPaths(app), [pathA, pathB])
+  assert.equal(app.run('jump.selected'), pathA)
+  assert.equal(jumpText(app), 'akka/sdk/alpha akka/sdk/beta')
 
   typeJump(app, 'sdk  ETA')
   assert.deepEqual(jumpPaths(app), [pathB])
@@ -5637,35 +5676,34 @@ test('typing in the pop-up filters its rows and selects the first one', async ()
 
 test('arrows move the pop-up selection and stop at the ends', async () => {
   const app = await reposApp(selectRepos)
-  press(app, 'k', cmd)
-  assert.equal(app.run('jump.selected'), sdkMain)
-  assert.deepEqual(selectedJumpText(app), ['akka/sdk/main'])
+  press(app, 'w', shift)
+  assert.equal(app.run('jump.selected'), pathA)
+  assert.deepEqual(selectedJumpText(app), ['akka/sdk/alpha'])
 
   assert.ok(press(app, 'ArrowUp'))
-  assert.equal(app.run('jump.selected'), sdkMain)
+  assert.equal(app.run('jump.selected'), pathA)
 
-  for (const path of [pathA, pathB, orMain, pathC, pathC]) {
+  for (const path of [pathB, pathC, pathC]) {
     assert.ok(press(app, 'ArrowDown'))
     assert.equal(app.run('jump.selected'), path)
   }
   assert.deepEqual(selectedJumpText(app), ['o/r/gamma'])
 
   assert.ok(press(app, 'ArrowUp'))
-  assert.equal(app.run('jump.selected'), orMain)
+  assert.equal(app.run('jump.selected'), pathB)
 })
 
 test('Enter opens the PRs page of a branch and the worktree page of a worktree', async () => {
   const app = await reposApp(selectRepos)
 
-  press(app, 'k', cmd)
+  press(app, 'b', shift)
   assert.ok(press(app, 'Enter'))
   assert.equal(app.context.location.hash, prsHashOf(sdkMain))
   assert.equal(app.run('jump'), null)
   assert.equal(jumpDialog(app).open, false)
 
   app.window.dispatch('hashchange')
-  press(app, 'k', cmd)
-  press(app, 'ArrowDown')
+  press(app, 'w', shift)
   assert.ok(press(app, 'Enter'))
   assert.equal(app.context.location.hash, worktreeHashOf(pathA))
   assert.equal(app.run('jump'), null)
@@ -5675,13 +5713,10 @@ test('Enter opens the PRs page of a branch and the worktree page of a worktree',
 test('the shortcut of the active tab closes the pop-up; another shortcut switches the tab', async () => {
   const app = await reposApp(selectRepos)
 
-  press(app, 'k', cmd)
+  press(app, 'w', shift)
   press(app, 'ArrowDown')
-  assert.equal(app.run('jump.selected'), pathA)
-
-  assert.ok(press(app, 'w', shift))
   assert.equal(app.run('jump.tab'), 'worktrees')
-  assert.equal(app.run('jump.selected'), pathA)
+  assert.equal(app.run('jump.selected'), pathB)
 
   assert.ok(press(app, 'b', shift))
   assert.equal(app.run('jump.tab'), 'branches')
@@ -5694,16 +5729,16 @@ test('the shortcut of the active tab closes the pop-up; another shortcut switche
 
 test('Shift+Cmd+[ and Shift+Cmd+] step through the tabs and wrap', async () => {
   const app = await reposApp(selectRepos)
-  press(app, 'k', cmd)
+  press(app, 'b', shift)
 
-  for (const tab of ['branches', 'worktrees', 'terminals', 'all']) {
+  for (const tab of ['worktrees', 'terminals', 'branches']) {
     assert.ok(press(app, ']', shift))
     assert.equal(app.run('jump.tab'), tab)
   }
   assert.ok(press(app, '{', shift))
   assert.equal(app.run('jump.tab'), 'terminals')
   assert.ok(press(app, '}', shift))
-  assert.equal(app.run('jump.tab'), 'all')
+  assert.equal(app.run('jump.tab'), 'branches')
   assert.ok(press(app, '[', shift))
   assert.equal(app.run('jump.tab'), 'terminals')
   assert.deepEqual(activeJumpTab(app), ['Terminals'])
@@ -5711,7 +5746,7 @@ test('Shift+Cmd+[ and Shift+Cmd+] step through the tabs and wrap', async () => {
 
 test('clicking a tab label switches the tab and focuses the field', async () => {
   const app = await reposApp(selectRepos)
-  press(app, 'k', cmd)
+  press(app, 'b', shift)
   app.elements.get('jump-input').focused = false
 
   clickJumpTab(app, 'worktrees')
@@ -5722,10 +5757,10 @@ test('clicking a tab label switches the tab and focuses the field', async () => 
 
 test('a tab with no match has no selection and Enter does nothing', async () => {
   const app = await reposApp(selectRepos)
-  press(app, 'k', cmd)
+  press(app, 'w', shift)
   typeJump(app, 'alpha')
 
-  press(app, ']', shift)
+  press(app, '[', shift)
   assert.equal(app.run('jump.tab'), 'branches')
   assert.equal(jumpText(app), 'No match.')
   assert.equal(app.run('jump.selected'), null)
@@ -5754,14 +5789,14 @@ test('Esc and a native close clear the pop-up', async () => {
   assert.equal(jumpDialog(app).open, false)
   assert.equal(app.context.location.hash, '#/')
 
-  press(app, 'k', cmd)
+  press(app, 'b', shift)
   jumpDialog(app).close()
   assert.equal(app.run('jump'), null, 'a native Esc clears the pop-up')
 })
 
 test('the filter stays when the tab changes and matches the branch name', async () => {
   const { app } = await worktreeApp(worktreePath, [], () => response(JSON.stringify(linkedRepos)))
-  press(app, 'k', cmd)
+  press(app, 'w', shift)
 
   typeJump(app, 'feature')
   assert.equal(jumpText(app), "o/r/work tree's")
@@ -5779,8 +5814,8 @@ test('a worktree with terminal tabs shows ▣ and the Terminals tab lists it', a
   assert.equal(jumpText(app), "o/r/work tree's ▣")
   assert.equal(app.run('jump.selected'), worktreePath)
 
-  press(app, 'k', cmd)
-  assert.equal(jumpText(app), "o/r/main o/r/work tree's ▣")
+  press(app, 'w', shift)
+  assert.equal(jumpText(app), "o/r/work tree's ▣")
 
   press(app, 't', shift)
   sockets[0].onclose({ code: 1000, reason: '' })
@@ -5794,8 +5829,8 @@ test('a main checkout with terminal tabs shows no ▣ and has no row in Terminal
   clickTab(app, 'add')
   assert.equal(tabsOf(app, mainPath).length, 1)
 
-  press(app, 'k', cmd)
-  assert.equal(jumpText(app), "o/r/main o/r/work tree's")
+  press(app, 'w', shift)
+  assert.equal(jumpText(app), "o/r/work tree's")
 
   press(app, 't', shift)
   assert.equal(jumpText(app), 'No match.')
@@ -5829,17 +5864,17 @@ test('the header and pop-up Terminals tabs show ⚠ while a tab needs attention'
   const { app } = await worktreeApp(worktreePath, [], undefined, () => terminalsReply(running))
   const alert = '<span class="term-attention" title="needs you">⚠</span>'
   const headerText = () => textOf(app.elements.get('tabs').innerHTML)
-  press(app, 'k', cmd)
+  press(app, 'b', shift)
 
   assert.ok(app.elements.get('tabs').innerHTML.includes(`>Terminals ${alert}</a>`))
   assert.ok(app.elements.get('jump-tabs').innerHTML.includes(`>Terminals ${alert}</button>`))
   assert.equal(headerText(), 'Repos Sessions Terminals ⚠')
-  assert.equal(jumpTabsText(app), 'All Branches Worktrees Terminals ⚠')
+  assert.equal(jumpTabsText(app), 'Branches Worktrees Terminals ⚠')
 
   running = [shellOnServer, { ...claudeOnServer, state: 'idle' }]
   await app.run('poll()')
   assert.equal(headerText(), 'Repos Sessions Terminals')
-  assert.equal(jumpTabsText(app), 'All Branches Worktrees Terminals')
+  assert.equal(jumpTabsText(app), 'Branches Worktrees Terminals')
 })
 
 test('closing a tab in attention drops the red marks', async () => {
@@ -5847,7 +5882,7 @@ test('closing a tab in attention drops the red marks', async () => {
   const [, claude] = tabsOf(app)
   const parts = ['tabs', 'jump-tabs', 'jump-list', 'worktree-bar', 'term-tabs']
   const marked = () => parts.filter((id) => /term-attention|⚠/.test(app.elements.get(id).innerHTML))
-  press(app, 'k', cmd)
+  press(app, 'w', shift)
   assert.deepEqual(marked(), parts)
 
   clickTab(app, 'close', claude.id)
@@ -5862,12 +5897,12 @@ test('closing a tab in attention drops the red marks', async () => {
   assert.doesNotMatch(app.elements.get('page').innerHTML, /term-attention/)
 })
 
-test('Cmd+K opens the pop-up from a terminal tab and from the editor', async () => {
+test('the pop-up shortcuts open the pop-up from a terminal tab and from the editor', async () => {
   const terminal = { closest: (selector) => (selector === '#term-view' ? {} : null) }
-  for (const [key, modifiers] of [['k', cmd], ['b', shift]]) {
+  for (const key of ['b', 'w', 't']) {
     const app = await reposApp(selectRepos, [], worktreeHashOf(pathA))
 
-    assert.ok(press(app, key, modifiers, terminal))
+    assert.ok(press(app, key, shift, terminal))
     assert.equal(jumpDialog(app).open, true)
   }
 
@@ -5876,10 +5911,10 @@ test('Cmd+K opens the pop-up from a terminal tab and from the editor', async () 
   press(app, 'w')
   editor(app).value = '# Typed\n'
 
-  assert.ok(press(app, 'k', cmd, editor(app)))
+  assert.ok(press(app, 'w', shift, editor(app)))
   await settle()
   assert.equal(jumpDialog(app).open, true)
-  assert.equal(app.run('jump.tab'), 'all')
+  assert.equal(app.run('jump.tab'), 'worktrees')
   assert.deepEqual(api.puts, [])
   assert.equal(app.run('editing.editor.value()'), '# Typed\n')
 })
@@ -5890,30 +5925,30 @@ test('keys in the pop-up do not reach the page', async () => {
   press(app, 'ArrowDown')
   assert.equal(app.run('selectedWorktree'), pathA)
 
-  press(app, 'k', cmd)
+  press(app, 'w', shift)
   assert.equal(press(app, 'd'), false)
   assert.notEqual(app.elements.get('modal').open, true)
   assert.equal(app.run('removingWorktree'), false)
 
   assert.ok(press(app, 'ArrowDown'))
   assert.ok(press(app, 'ArrowDown'))
-  assert.equal(app.run('jump.selected'), pathB)
+  assert.equal(app.run('jump.selected'), pathC)
   assert.equal(app.run('selectedWorktree'), pathA)
 
   assert.equal(press(app, '?', { shiftKey: true }), false)
   assert.notEqual(shortcutsDialog(app).open, true)
 
   const { app: page, sockets } = await worktreeApp()
-  press(page, 'k', cmd)
+  press(page, 'w', shift)
   assert.equal(press(page, 't', cmd), false)
   assert.equal(sockets.length, 0)
 })
 
-test('Cmd+K does nothing while the modal is open', async () => {
+test('the pop-up shortcuts do nothing while the modal is open', async () => {
   const app = await reposApp(selectRepos)
 
   app.elements.get('modal').open = true
-  assert.equal(press(app, 'k', cmd), false)
+  assert.equal(press(app, 'w', shift), false)
   assert.equal(app.run('jump'), null)
   assert.notEqual(jumpDialog(app).open, true)
 
@@ -5928,7 +5963,7 @@ test('the modal above the pop-up keeps its keys', async () => {
   const app = await reposApp(selectRepos)
   const opened = appOpener(app)
 
-  press(app, 'k', cmd)
+  press(app, 'b', shift)
   app.run('tell("Could not refresh.")')
   assert.equal(app.elements.get('modal').open, true)
 
@@ -5939,8 +5974,8 @@ test('the modal above the pop-up keeps its keys', async () => {
   assert.deepEqual(opened, [])
 
   assert.equal(press(app, 'Escape'), false)
-  assert.equal(press(app, 'k', cmd), false)
-  assert.equal(app.run('jump.tab'), 'all')
+  assert.equal(press(app, 'b', shift), false)
+  assert.equal(app.run('jump.tab'), 'branches')
   assert.equal(jumpDialog(app).open, true)
 
   closeModal(app, '')
@@ -5958,7 +5993,7 @@ test('Enter on the discard prompt above the pop-up opens no row', async () => {
 
   press(app, 'w')
   editor(app).value = '# Typed\n'
-  press(app, 'k', cmd, editor(app))
+  press(app, 'b', shift, editor(app))
   assert.equal(app.run('onCloseRequested()'), false)
   assert.equal(app.elements.get('modal-text').textContent, 'Discard your changes?')
 
@@ -5975,7 +6010,7 @@ test('the pop-up is empty and Enter does nothing before the repos load', () => {
   const app = dashboard()
   app.context.location.hash = '#/'
 
-  assert.ok(press(app, 'k', cmd))
+  assert.ok(press(app, 'b', shift))
   assert.equal(jumpText(app), 'No match.')
   assert.equal(app.run('jump.selected'), null)
 
@@ -5987,9 +6022,8 @@ test('the pop-up is empty and Enter does nothing before the repos load', () => {
 test('a poll keeps the pop-up filter and selection', async () => {
   const repos = plain(selectRepos)
   const app = await reposApp(repos)
-  press(app, 'k', cmd)
+  press(app, 'w', shift)
   typeJump(app, 'akka')
-  press(app, 'ArrowDown')
   press(app, 'ArrowDown')
 
   await app.run('poll()')
@@ -5999,8 +6033,8 @@ test('a poll keeps the pop-up filter and selection', async () => {
 
   repos.repos[0].worktrees = repos.repos[0].worktrees.filter((worktree) => worktree.path !== pathB)
   await app.run('poll()')
-  assert.equal(app.run('jump.selected'), sdkMain)
-  assert.equal(jumpText(app), 'akka/sdk/main akka/sdk/alpha')
+  assert.equal(app.run('jump.selected'), pathA)
+  assert.equal(jumpText(app), 'akka/sdk/alpha')
 })
 
 // Returns a counter of the writes to the innerHTML of the element `id`.
@@ -6021,7 +6055,7 @@ function countHtmlWrites(app, id) {
 
 test('a poll leaves the pop-up tab strip unwritten; a tab switch and a fresh open draw it', async () => {
   const app = await reposApp(selectRepos)
-  press(app, 'k', cmd)
+  press(app, 'b', shift)
   const writes = countHtmlWrites(app, 'jump-tabs')
 
   await app.run('poll()')
@@ -6030,7 +6064,7 @@ test('a poll leaves the pop-up tab strip unwritten; a tab switch and a fresh ope
 
   press(app, ']', shift)
   assert.equal(writes.count, 1)
-  assert.deepEqual(activeJumpTab(app), ['Branches'])
+  assert.deepEqual(activeJumpTab(app), ['Worktrees'])
 
   press(app, 'Escape')
   press(app, 'b', shift)
@@ -6047,8 +6081,7 @@ test('Enter on a worktree row while the editor holds unsaved changes asks to dis
 
   press(app, 'w')
   editor(app).value = '# Typed\n'
-  press(app, 'k', cmd, editor(app))
-  press(app, 'ArrowDown')
+  press(app, 'w', shift, editor(app))
   assert.ok(press(app, 'Enter'))
   app.window.dispatch('hashchange')
   assert.equal(app.elements.get('modal').open, true)
@@ -6059,8 +6092,7 @@ test('Enter on a worktree row while the editor holds unsaved changes asks to dis
   assert.equal(app.context.location.hash, href)
   assert.equal(app.run('editing.editor.value()'), '# Typed\n')
 
-  press(app, 'k', cmd, editor(app))
-  press(app, 'ArrowDown')
+  press(app, 'w', shift, editor(app))
   press(app, 'Enter')
   app.window.dispatch('hashchange')
   closeModal(app, 'ok')
@@ -6073,8 +6105,7 @@ test('Cmd+Enter in the main window opens the row in its own window', async () =>
   const app = await reposApp(selectRepos)
   const opened = appOpener(app)
 
-  press(app, 'k', cmd)
-  press(app, 'ArrowDown')
+  press(app, 'w', shift)
   assert.ok(press(app, 'Enter', cmd))
   await settle()
 
@@ -6102,8 +6133,7 @@ test('Enter in a standalone window opens the row in its own window and keeps the
 test('Cmd+Enter in a browser behaves like Enter', async () => {
   const app = await reposApp(selectRepos)
 
-  press(app, 'k', cmd)
-  press(app, 'ArrowDown')
+  press(app, 'w', shift)
   assert.ok(press(app, 'Enter', cmd))
 
   assert.equal(app.context.location.hash, worktreeHashOf(pathA))
@@ -6111,12 +6141,12 @@ test('Cmd+Enter in a browser behaves like Enter', async () => {
   assert.equal(jumpDialog(app).open, false)
 })
 
-test('the shortcuts dialog lists the four pop-up shortcuts', () => {
+test('the shortcuts dialog lists the three pop-up shortcuts', () => {
   const app = dashboard()
   app.context.location.hash = '#/'
   press(app, '?', { shiftKey: true })
 
-  assert.match(shortcutsText(app), /^Everywhere \? Show or hide the shortcuts ⌘ click Open a row or bar item in a new window ⌘K Open the pop-up on All ⇧⌘B Open the pop-up on Branches ⇧⌘W Open the pop-up on Worktrees ⇧⌘T Open the pop-up on Terminals Pop-up /)
+  assert.match(shortcutsText(app), /^Everywhere \? Show or hide the shortcuts ⌘ click Open a row or bar item in a new window ⇧⌘B Open the pop-up on Branches ⇧⌘W Open the pop-up on Worktrees ⇧⌘T Open the pop-up on Terminals Pop-up /)
 })
 
 test('the shortcuts dialog lists the pop-up tab keys', () => {
@@ -6399,7 +6429,7 @@ test('a worktree gone from the repos hides the view', async () => {
 test('pop-ups hide and restore the view', async () => {
   const { app, invoked } = await shownGithubApp()
   const popUps = [
-    [() => press(app, 'k', { metaKey: true }), () => press(app, 'Escape')],
+    [() => press(app, 'b', { metaKey: true, shiftKey: true }), () => press(app, 'Escape')],
     [() => press(app, '?', { shiftKey: true }), () => press(app, '?', { shiftKey: true })],
     [() => app.run('tell("Done.")'), () => closeModal(app, 'ok')],
   ]
@@ -6420,7 +6450,7 @@ test('a late fetch does not show the view under a pop-up', async () => {
   const { app, invoked, fetches } = await githubViewApp()
 
   navigate(app, githubHashOf(githubWorktree))
-  assert.ok(press(app, 'k', { metaKey: true }))
+  assert.ok(press(app, 'b', { metaKey: true, shiftKey: true }))
   fetches[0].answer(githubReply(githubPr))
   await settle()
   assert.deepEqual(invoked, [])

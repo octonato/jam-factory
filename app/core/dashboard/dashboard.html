@@ -1297,7 +1297,6 @@ const PR_KEYS = { c: 'worktree', Enter: 'worktree', r: 'claude', e: 'zed', i: 'i
 const BACK_KEYS = ['l', 'Escape', 'Meta+[']
 // The pop-up tabs in the order of the tab strip, each with its label.
 const JUMP_TABS = [
-  { tab: 'all', label: 'All' },
   { tab: 'branches', label: 'Branches' },
   { tab: 'worktrees', label: 'Worktrees' },
   { tab: 'terminals', label: 'Terminals' },
@@ -1311,7 +1310,6 @@ const SHORTCUTS = [
     rows: [
       { keys: ['?'], text: 'Show or hide the shortcuts' },
       { keys: ['⌘ click'], text: 'Open a row or bar item in a new window' },
-      { keys: ['⌘K'], text: 'Open the pop-up on All' },
       { keys: ['⇧⌘B'], text: 'Open the pop-up on Branches' },
       { keys: ['⇧⌘W'], text: 'Open the pop-up on Worktrees' },
       { keys: ['⇧⌘T'], text: 'Open the pop-up on Terminals' },
@@ -1397,6 +1395,7 @@ const SHORTCUTS = [
       { keys: ['⌘T'], text: 'Open a shell in a new tab' },
       { keys: ['⌘I'], text: 'Rename the tab' },
       { keys: ['⇧⌘[', '⇧⌘]'], text: 'Show the previous or next tab' },
+      { keys: ['⌘K'], text: 'Clear the terminal' },
       { keys: ['⇧⌘K'], text: 'Show the terminal alone' },
       { keys: ['⇧⌘J'], text: 'Show the whole page again' },
     ],
@@ -3873,8 +3872,7 @@ function tabRows(tab) {
 
   if (tab === 'branches') return rows.filter((row) => row.kind === 'branch')
   if (tab === 'worktrees') return rows.filter((row) => row.kind === 'worktree')
-  if (tab === 'terminals') return rows.filter((row) => row.kind === 'worktree' && row.terminals)
-  return rows
+  return rows.filter((row) => row.kind === 'worktree' && row.terminals)
 }
 
 // Returns the rows of the active pop-up tab that hold every word of the filter.
@@ -4208,7 +4206,7 @@ function addWorktreeTab(path, { name, program, serverId }) {
   sendXterm(term, () => tab.socket)
 
   term.attachCustomKeyEventHandler((event) => {
-    if (!isShiftEnter(event)) return zoomKey(event) === null && tabKey(event) === null && barKey(event) === null
+    if (!isShiftEnter(event)) return zoomKey(event) === null && tabKey(event) === null && barKey(event) === null && !clearKey(event)
     if (event.type === 'keydown' && tab.socket?.readyState === WebSocket.OPEN) tab.socket.send(new TextEncoder().encode(SHIFT_ENTER))
     return false
   })
@@ -4472,6 +4470,18 @@ function zoomWorktreeTerminal(on) {
 
   worktreeView.el.classList.toggle('zoomed', on)
   tab.fit.fit()
+  tab.term.focus()
+  return true
+}
+
+// Clears the active terminal of the shown Terminal item. Returns false when no Terminal item shows or it has no active tab.
+function clearWorktreeTerminal() {
+  if (worktreeView.el !== $('page').firstElementChild || worktreeView.item !== null) return false
+
+  const tab = activeWorktreeTerminal(worktreeView.path)
+  if (tab === undefined) return false
+
+  tab.term.clear()
   tab.term.focus()
   return true
 }
@@ -5321,6 +5331,11 @@ function zoomKey(event) {
   return null
 }
 
+// Returns true for Cmd+K with no other modifier.
+function clearKey(event) {
+  return event.metaKey && !event.shiftKey && !event.ctrlKey && !event.altKey && event.key.toLowerCase() === 'k'
+}
+
 // Returns the terminal tab action of `event`: `previous` for Shift+Cmd+[, `next` for Shift+Cmd+], `rename` for Cmd+I, `new` for Cmd+T, and null for any other key.
 function tabKey(event) {
   if (!event.metaKey || event.ctrlKey || event.altKey) return null
@@ -5346,12 +5361,11 @@ function barKey(event) {
   return null
 }
 
-// Returns the pop-up tab of `event`: `all` for Cmd+K, `branches`, `worktrees` and `terminals` for Shift+Cmd+B, W and T, and null for any other key.
+// Returns the pop-up tab of `event`: `branches`, `worktrees` and `terminals` for Shift+Cmd+B, W and T, and null for any other key.
 function jumpShortcut(event) {
-  if (!event.metaKey || event.ctrlKey || event.altKey) return null
+  if (!event.metaKey || !event.shiftKey || event.ctrlKey || event.altKey) return null
 
   const key = event.key.toLowerCase()
-  if (!event.shiftKey) return key === 'k' ? 'all' : null
   return Object.hasOwn(JUMP_SHIFT_KEYS, key) ? JUMP_SHIFT_KEYS[key] : null
 }
 
@@ -5443,6 +5457,11 @@ function onKey(event) {
 
   const zoom = zoomKey(event)
   if (zoom !== null && zoomWorktreeTerminal(zoom)) {
+    event.preventDefault()
+    return
+  }
+
+  if (clearKey(event) && !$('modal').open && clearWorktreeTerminal()) {
     event.preventDefault()
     return
   }
