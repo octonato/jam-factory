@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Gives the GitHub page of a configured checkout with `gh`: its pull request in any state, else its repository.
+//! Gives the GitHub page of a configured checkout from its `.nogit` notes and `gh`.
 //! Route: `GET /api/github?path=<checkout>`.
 
 use std::path::{Path, PathBuf};
@@ -22,6 +22,7 @@ use serde_json::json;
 
 use super::api::{configured_worktree, json_response};
 use super::http::Response;
+use super::notes::{ISSUE_NOTE, PR_NOTE, note_url};
 use super::prs::{Runner, SystemRunner, configured_main};
 use super::repos::RepoList;
 
@@ -65,12 +66,22 @@ fn configured_checkout(repos: &dyn RepoList, target: &str) -> Option<PathBuf> {
     main.or_else(|| configured_worktree(repos, target))
 }
 
-/// The URL of the pull request of the checkout `dir`, else the URL of its repository.
+/// The page of the checkout `dir`: the link in its PR note, the PR of its branch, the link in its issue note,
+/// else its repository.
 fn page_url(dir: &Path, runner: &dyn Runner) -> Result<String, String> {
-    match pr_url(dir, runner) {
-        Some(url) => Ok(url),
-        None => repo_url(dir, runner),
+    if let Some(url) = note_url(dir, PR_NOTE) {
+        return Ok(url);
     }
+
+    if let Some(url) = pr_url(dir, runner) {
+        return Ok(url);
+    }
+
+    if let Some(url) = note_url(dir, ISSUE_NOTE) {
+        return Ok(url);
+    }
+
+    repo_url(dir, runner)
 }
 
 /// The URL of the pull request of the branch of `dir`: open, closed or merged.
@@ -105,10 +116,14 @@ mod tests {
     use serde_json::Value;
 
     use super::*;
+    use crate::server::notes::write_note;
     use crate::server::repos::FixedRepos;
 
     /// The `gh repo view` output of the repository `o/r`.
     const REPO: &str = r#"{"url":"https://github.com/o/r"}"#;
+
+    /// The URL of the issue `45` of `o/r`.
+    const ISSUE: &str = "https://github.com/o/r/issues/45";
 
     /// A runner call: the folder, the program and its arguments.
     type Call = (PathBuf, String, Vec<String>);
@@ -260,6 +275,66 @@ mod tests {
             json!({ "url": "https://github.com/o/r", "error": null })
         );
         assert_eq!(runner.calls(), [pr_view(&linked), repo_view(&linked)]);
+    }
+
+    #[test]
+    fn a_pr_note_gives_its_url_without_gh() {
+        let dir = tempfile::tempdir().unwrap();
+        let Some((main, linked)) = repo_with_worktree(dir.path()) else {
+            eprintln!("skipped: git is missing");
+            return;
+        };
+        let repos = FixedRepos(vec![main]);
+        let runner = StubRunner::new(vec![]);
+        let pr = "https://github.com/o/r/pull/12";
+
+        write_note(&linked, PR_NOTE, "Fix it", pr).unwrap();
+        write_note(&linked, ISSUE_NOTE, "Bug", ISSUE).unwrap();
+
+        let response = get_with(&repos, &github_target(&linked), &runner);
+
+        assert_eq!(body(&response), json!({ "url": pr, "error": null }));
+        assert!(runner.calls().is_empty());
+    }
+
+    #[test]
+    fn the_branch_pr_comes_before_the_issue_note() {
+        let dir = tempfile::tempdir().unwrap();
+        let Some((main, linked)) = repo_with_worktree(dir.path()) else {
+            eprintln!("skipped: git is missing");
+            return;
+        };
+        let repos = FixedRepos(vec![main]);
+        let runner = StubRunner::new(vec![Ok(PR.to_string())]);
+
+        write_note(&linked, ISSUE_NOTE, "Bug", ISSUE).unwrap();
+
+        let response = get_with(&repos, &github_target(&linked), &runner);
+
+        assert_eq!(
+            body(&response),
+            json!({ "url": "https://github.com/o/r/pull/7", "error": null })
+        );
+        assert_eq!(runner.calls(), [pr_view(&linked)]);
+    }
+
+    #[test]
+    fn an_issue_note_gives_its_url_when_the_branch_has_no_pr() {
+        let dir = tempfile::tempdir().unwrap();
+        let Some((main, linked)) = repo_with_worktree(dir.path()) else {
+            eprintln!("skipped: git is missing");
+            return;
+        };
+        let repos = FixedRepos(vec![main]);
+        let no_pr = "no pull requests found for branch \"feature\"";
+        let runner = StubRunner::new(vec![Err(no_pr.to_string())]);
+
+        write_note(&linked, ISSUE_NOTE, "Bug", ISSUE).unwrap();
+
+        let response = get_with(&repos, &github_target(&linked), &runner);
+
+        assert_eq!(body(&response), json!({ "url": ISSUE, "error": null }));
+        assert_eq!(runner.calls(), [pr_view(&linked)]);
     }
 
     #[test]

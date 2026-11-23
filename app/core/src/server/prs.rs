@@ -31,13 +31,14 @@ use serde_json::json;
 
 use super::api::{json_response, query_field, same_origin, segments};
 use super::http::{Request, Response};
+use super::notes::{PR_NOTE, write_note};
 use super::repos::{Repo, RepoList, find_main};
 
 /// The fields that `gh pr list` prints for each pull request.
 pub const LIST_FIELDS: &str = "number,title,author,headRefName,headRepositoryOwner,isCrossRepository,isDraft,additions,deletions,url,updatedAt,statusCheckRollup,reviewDecision,latestReviews,reviewRequests";
 
 /// The fields that `gh pr view` prints for the pull request to check out.
-const HEAD_FIELDS: &str = "headRefName,headRepositoryOwner,isCrossRepository";
+const HEAD_FIELDS: &str = "title,url,headRefName,headRepositoryOwner,isCrossRepository";
 
 /// The Homebrew folders at the end of the `PATH` of every program.
 const BREW_FOLDERS: &str = "/opt/homebrew/bin:/usr/local/bin";
@@ -265,6 +266,15 @@ struct Head {
     is_cross_repository: bool,
 }
 
+/// The pull request to check out, in the output of `gh pr view`.
+#[derive(Deserialize)]
+struct ViewedHead {
+    title: String,
+    url: String,
+    #[serde(flatten)]
+    head: Head,
+}
+
 /// The owner of the head repository of a pull request.
 #[derive(Deserialize)]
 struct Owner {
@@ -349,8 +359,8 @@ fn parse_open_pr(json: &str) -> Result<Option<Pr>, String> {
     Ok((open && !bot).then(|| Pr::from(pr)))
 }
 
-/// The head branch in the `gh pr view` output `json`.
-fn parse_head(json: &str) -> Result<Head, String> {
+/// The pull request to check out in the `gh pr view` output `json`.
+fn parse_head(json: &str) -> Result<ViewedHead, String> {
     serde_json::from_str(json)
         .map_err(|error| format!("Cannot parse the gh pr view output: {error}"))
 }
@@ -529,18 +539,20 @@ pub(super) fn pr_number(target: &str) -> Option<u64> {
 }
 
 /// Checks out the PR `number` of `main` into a new sibling worktree, or finds the linked worktree on its local branch.
+/// It writes the PR note in a new worktree.
 fn checkout(main: &Repo, number: u64, runner: &dyn Runner) -> Response {
     let dir = Path::new(&main.path);
     let number = number.to_string();
 
     let view = ["pr", "view", &number, "--json", HEAD_FIELDS];
-    let head = match runner
+    let pr = match runner
         .run(dir, "gh", &view)
         .and_then(|json| parse_head(&json))
     {
-        Ok(head) => head,
+        Ok(pr) => pr,
         Err(error) => return text_response(500, &error),
     };
+    let head = &pr.head;
     let branch = head.local_branch();
 
     let linked = main
@@ -588,6 +600,15 @@ fn checkout(main: &Repo, number: u64, runner: &dyn Runner) -> Response {
     }
 
     let listed = fs::canonicalize(&folder).unwrap_or_else(|_| folder.clone());
+
+    if let Err(error) = write_note(&listed, PR_NOTE, &pr.title, &pr.url) {
+        let message = format!(
+            "Created {} but could not write its PR note: {error}",
+            listed.display()
+        );
+
+        return text_response(500, &message);
+    }
 
     path_response(&listed.to_string_lossy())
 }
@@ -711,6 +732,8 @@ mod tests {
     /// The `gh pr view` head of a PR on `branch` in the repository of `owner`, cross-repo when `cross`.
     fn head(branch: &str, owner: Value, cross: bool) -> Value {
         json!({
+            "title": "Fix it",
+            "url": "https://github.com/o/r/pull/12",
             "headRefName": branch,
             "headRepositoryOwner": owner,
             "isCrossRepository": cross,
@@ -851,7 +874,7 @@ case "$1 $2" in
     "pr view")
         if [ "$4" = --web ]; then
             echo "$@" > "$bin/viewed"
-        elif [ "$4 $5" = "--json headRefName,headRepositoryOwner,isCrossRepository" ]; then
+        elif [ "$4 $5" = "--json title,url,headRefName,headRepositoryOwner,isCrossRepository" ]; then
             cat "$bin/head"
         else
             exit 1
@@ -1472,6 +1495,10 @@ esac
                 branch: Some("alice/fix-login".to_string()),
                 head: None,
             }]
+        );
+        assert_eq!(
+            fs::read_to_string(folder.join(".nogit/pr.md")).unwrap(),
+            "# Fix it\n\nhttps://github.com/o/r/pull/12\n"
         );
     }
 

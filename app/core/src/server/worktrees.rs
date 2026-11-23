@@ -25,17 +25,12 @@ use serde_json::json;
 use super::api::{json_response, query_field, same_origin, segments};
 use super::http::{Request, Response};
 use super::issues::view_issue;
+use super::notes::{ISSUE_NOTE, write_note};
 use super::prs::{Runner, SystemRunner, configured_main, worktree_folder};
 use super::repos::{Repo, RepoList, list};
 use super::terminals::Terminals;
 
 const TEXT: &str = "text/plain; charset=utf-8";
-
-/// The folder of a worktree that holds its untracked notes.
-const NOTES_FOLDER: &str = ".nogit";
-
-/// The note of a worktree that holds the title and the link of its issue.
-const ISSUE_NOTE: &str = "issue.md";
 
 /// The title and the line counts of a linked worktree since it forked from the branch of its main checkout.
 #[derive(Serialize)]
@@ -233,11 +228,8 @@ fn write_issue_note(
     runner: &dyn Runner,
 ) -> Result<(), String> {
     let issue = view_issue(main, number, runner)?;
-    let notes = folder.join(NOTES_FOLDER);
-    let note = format!("# {}\n\n{}\n", issue.title, issue.url);
 
-    fs::create_dir_all(&notes).map_err(|error| error.to_string())?;
-    fs::write(notes.join(ISSUE_NOTE), note).map_err(|error| error.to_string())
+    write_note(folder, ISSUE_NOTE, &issue.title, &issue.url)
 }
 
 /// The branch of the worktree `name`: `{user}/{name}` with a user, else `name`.

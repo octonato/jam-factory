@@ -22,6 +22,7 @@ mod fake_store;
 pub mod github;
 pub mod http;
 pub mod issues;
+pub mod notes;
 pub mod open;
 pub mod prs;
 pub mod pty;

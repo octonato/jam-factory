@@ -172,7 +172,14 @@ To create a worktree, press `b` on the PRs page of a main checkout. Enter the wo
 
 The GitHub tab of Jam Board shows your pull requests on github.com, and ⌘R reloads it.
 
-A worktree's GitHub tab shows the worktree's GitHub page inside Jam Board: the branch's PR, open, closed or merged, or the repo page when the branch has no PR. A worktree opens on its GitHub tab, unless it has a terminal tab. The tab keeps GitHub pages and opens other links in your default browser. If your GitHub organization signs in through an identity provider such as Okta, set `githubSignInHosts` to the provider's hosts. The tab then keeps the sign-in pages too. Each entry is a host, such as `sso.example.org`, or `*.` plus a domain, such as `*.okta.com`. A `*.` entry matches every subdomain of the domain, but not the domain itself:
+A worktree's GitHub tab shows the worktree's GitHub page inside Jam Board. Jam Board takes the first page it finds:
+
+1. The PR in `.nogit/pr.md`.
+2. The branch's PR, open, closed or merged.
+3. The issue in `.nogit/issue.md`.
+4. The repo page.
+
+A worktree opens on its GitHub tab, unless it has a terminal tab. The tab keeps GitHub pages and opens other links in your default browser. If your GitHub organization signs in through an identity provider such as Okta, set `githubSignInHosts` to the provider's hosts. The tab then keeps the sign-in pages too. Each entry is a host, such as `sso.example.org`, or `*.` plus a domain, such as `*.okta.com`. A `*.` entry matches every subdomain of the domain, but not the domain itself:
 
 ```json
 { "githubSignInHosts": ["*.okta.com"] }
@@ -182,7 +189,7 @@ Jam Board reads `githubSignInHosts` when a window first shows its GitHub tab. Re
 
 Press ⇧⌘G while a GitHub tab shows to open the GitHub pop-up over it. Type to filter the rows. Press ↑ and ↓ to move, `Enter` to run the selected row and `Esc` to close. When the tab shows a PR or an issue of a repo in `repos`, the pop-up lists an action row first:
 
-- **Check out PR #N** checks out the PR into a new sibling worktree, or finds the worktree that holds it. Then it opens the worktree in its own window.
+- **Check out PR #N** checks out the PR into a new sibling worktree, or finds the worktree that holds it. A new worktree gets the PR title and link in `.nogit/pr.md`. Then it opens the worktree in its own window.
 - **Start work on issue #N** asks for the worktree name, with a suggested name in the field. The suggestion joins the first 4 words of the issue title with `_`, in lowercase, and appends `_N`. Every character that is not a letter or a digit splits words. The issue `[SDK] Add rate-limit: per tenant` #45 gives `sdk_add_rate_limit_45`, and a title with no words gives `issue_45`. Edit the name, or press `Enter` to keep it. Jam Board creates the worktree as `b` does on the PRs page. It writes the issue title and link to `.nogit/issue.md` in the worktree, then opens the worktree in its own window.
 
 Then the pop-up lists each repo in `repos` by its local `org/repo`, with its GitHub `owner/name` when the two differ. `Enter` on a repo loads its GitHub page in the tab.
