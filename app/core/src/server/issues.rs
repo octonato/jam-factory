@@ -78,8 +78,8 @@ pub fn view_issue(dir: &Path, number: u64, runner: &dyn Runner) -> Result<Issue,
         .map_err(|error| format!("Cannot parse the gh issue view output: {error}"))
 }
 
-/// The worktree name for the issue `number` titled `title`: its first 4 lowercase words joined by `_`, then `_{number}`.
-/// A title without words gives `issue_{number}`.
+/// The worktree name for the issue `number` titled `title`: its first 4 lowercase words joined by `-`, then `-{number}`.
+/// A title without words gives `issue-{number}`.
 pub fn slug(title: &str, number: u64) -> String {
     let title = title.to_lowercase();
 
@@ -90,10 +90,10 @@ pub fn slug(title: &str, number: u64) -> String {
         .collect();
 
     if words.is_empty() {
-        return format!("issue_{number}");
+        return format!("issue-{number}");
     }
 
-    format!("{}_{number}", words.join("_"))
+    format!("{}-{number}", words.join("-"))
 }
 
 /// A plain-text reply with `status` and the body `text`.
@@ -175,12 +175,12 @@ mod tests {
     fn slug_follows_the_rule() {
         assert_eq!(
             slug("[SDK] Add rate-limit: per tenant, configurable", 45),
-            "sdk_add_rate_limit_45"
+            "sdk-add-rate-limit-45"
         );
-        assert_eq!(slug("Fix bug", 7), "fix_bug_7");
-        assert_eq!(slug("Élan: café crème", 3), "élan_café_crème_3");
-        assert_eq!(slug("🚀 !!!", 9), "issue_9");
-        assert_eq!(slug("", 1), "issue_1");
+        assert_eq!(slug("Fix bug", 7), "fix-bug-7");
+        assert_eq!(slug("Élan: café crème", 3), "élan-café-crème-3");
+        assert_eq!(slug("🚀 !!!", 9), "issue-9");
+        assert_eq!(slug("", 1), "issue-1");
     }
 
     #[test]
@@ -198,7 +198,7 @@ mod tests {
                 "number": 45,
                 "title": "[SDK] Add rate-limit",
                 "url": "https://github.com/o/r/issues/45",
-                "slug": "sdk_add_rate_limit_45",
+                "slug": "sdk-add-rate-limit-45",
             })
         );
 
