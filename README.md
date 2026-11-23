@@ -151,7 +151,7 @@ just app::uninstall-server
 
 The environment variable `JAM_FACTORY_PORT` overrides `port` for `jam-factory-server` and Jam Board. It must be a number from 1 to 65535. `./try-branch` uses it to run a second server and board, as [Try a branch's board](#try-a-branchs-board) shows.
 
-To list main checkouts on the Repos tab of Jam Board, set `repos` to a list of their paths. A leading `~` expands to your home folder. Each path must be absolute after expansion:
+To list main checkouts in the Jam Board pop-up (⇧⌘B and ⇧⌘W) and on its PRs pages, set `repos` to a list of their paths. A leading `~` expands to your home folder. Each path must be absolute after expansion:
 
 ```json
 {
@@ -162,13 +162,15 @@ To list main checkouts on the Repos tab of Jam Board, set `repos` to a list of t
 }
 ```
 
-The Repos tab lists each checkout with its linked worktrees. A worktree's page lists its live sessions and runs a shell or lazygit in each tab. When the worktree's branch has an open PR, the page's card is the PR's row as the PRs page shows it, with the reviewed and draft chips and the worktree's actions. `jam-factory-server` reads `repos` on each request, so a change to `repos` needs no restart.
+The pop-up lists each checkout with its linked worktrees. A worktree's page lists its live sessions and runs a shell or lazygit in each tab. When the worktree's branch has an open PR, the page's card is the PR's row as the PRs page shows it, with the reviewed and draft chips and the worktree's actions. `jam-factory-server` reads `repos` on each request, so a change to `repos` needs no restart.
 
-To create a worktree, select a main row on the Repos tab and press `b`, or press `b` on the PRs page of a main checkout. Enter the worktree name. Jam Board creates a new branch at the main checkout's HEAD in a sibling folder named after the worktree, then opens the worktree page. To prefix the branch with your GitHub user, set `githubUser`. With `"githubUser": "octonato"`, the name `rate-limit` gives the branch `octonato/rate-limit` in the folder `rate-limit`:
+To create a worktree, press `b` on the PRs page of a main checkout. Enter the worktree name. Jam Board creates a new branch at the main checkout's HEAD in a sibling folder named after the worktree, then opens the worktree page. To prefix the branch with your GitHub user, set `githubUser`. With `"githubUser": "octonato"`, the name `rate-limit` gives the branch `octonato/rate-limit` in the folder `rate-limit`:
 
 ```json
 { "githubUser": "octonato" }
 ```
+
+The GitHub tab of Jam Board shows your pull requests on github.com, and ⌘R reloads it.
 
 A worktree's GitHub tab shows the worktree's GitHub page inside Jam Board: the branch's PR, open, closed or merged, or the repo page when the branch has no PR. A worktree opens on its GitHub tab, unless it has a terminal tab. The tab keeps GitHub pages and opens other links in your default browser. If your GitHub organization signs in through an identity provider such as Okta, set `githubSignInHosts` to the provider's hosts. The tab then keeps the sign-in pages too. Each entry is a host, such as `sso.example.org`, or `*.` plus a domain, such as `*.okta.com`. A `*.` entry matches every subdomain of the domain, but not the domain itself:
 
@@ -184,7 +186,7 @@ To open a worktree from a terminal, run `jb` in it, or pass its path or a folder
 jb ~/Sources/octonato/jam-factory/rate-limit
 ```
 
-To remove a worktree, select its row on the Repos tab and press `d`, or press `d` on its worktree page. Confirm in the dialog. Jam Board runs `git worktree remove`, which refuses a worktree with modified or untracked files. It then deletes the branch when it is merged, and closes the worktree's terminals. From the worktree page, Jam Board then returns to the Repos tab. A standalone window closes.
+To remove a worktree, press `d` on its worktree page. Confirm in the dialog. Jam Board runs `git worktree remove`, which refuses a worktree with modified or untracked files. It then deletes the branch when it is merged, and closes the worktree's terminals. Jam Board then returns to the GitHub tab. A standalone window closes.
 
 Restart `jam-factory-server` after you change `root` or `port`:
 

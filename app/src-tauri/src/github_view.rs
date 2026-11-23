@@ -12,11 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! The GitHub view of each board window.
+//! The GitHub views of each board window.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{LazyLock, Mutex, MutexGuard, PoisonError};
 
+use serde::Deserialize;
 use tauri::webview::{NewWindowResponse, PageLoadEvent};
 use tauri::{
     AppHandle, LogicalPosition, LogicalSize, Manager, Url, Webview, WebviewBuilder, WebviewUrl,
@@ -28,14 +29,27 @@ use jam_factory_store::root::resolve_sign_in_hosts;
 use crate::navigation::{self, Navigation};
 use crate::windows;
 
-/// The worktree path that each GitHub view last loaded, by window label.
+/// The path that each GitHub view last loaded, by view label.
 static LOADED: LazyLock<Mutex<HashMap<String, String>>> = LazyLock::new(Mutex::default);
 
-/// The labels of the windows whose GitHub view shows.
+/// The labels of the GitHub views that show.
 static SHOWN: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(Mutex::default);
 
-/// The URL that each GitHub view loads while it stays hidden for a new worktree, by window label.
+/// The URL that each GitHub view loads while it stays hidden for a new path, by view label.
 static PENDING: LazyLock<Mutex<HashMap<String, Url>>> = LazyLock::new(Mutex::default);
+
+/// The GitHub views of each board window.
+const VIEWS: [View; 2] = [View::Home, View::Worktree];
+
+/// A GitHub view of a board window.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum View {
+    /// The view of the board's main page.
+    Home,
+    /// The view of a worktree's GitHub item.
+    Worktree,
+}
 
 /// The state of a GitHub view's page for a worktree.
 #[derive(Debug, PartialEq)]
@@ -48,9 +62,20 @@ enum Page {
     Stale,
 }
 
-/// Returns the label of the GitHub view of the window labelled `window_label`.
-fn github_label(window_label: &str) -> String {
-    format!("{window_label}-github")
+/// Returns the label of the GitHub view `view` of the window labelled `window_label`.
+fn view_label(window_label: &str, view: View) -> String {
+    match view {
+        View::Home => format!("{window_label}-github-home"),
+        View::Worktree => format!("{window_label}-github"),
+    }
+}
+
+/// Returns the GitHub view of a window that is not `view`.
+fn other(view: View) -> View {
+    match view {
+        View::Home => View::Worktree,
+        View::Worktree => View::Home,
+    }
 }
 
 /// Returns true when a GitHub view that last loaded the worktree `loaded` must load the URL of `path`.
@@ -69,12 +94,13 @@ fn page_state(loaded: Option<&str>, path: &str, pending: bool) -> Page {
     }
 }
 
-/// Shows the GitHub view of the calling window at these logical bounds of the board page's viewport and at `zoom`, and loads `url` when the view is new or last loaded another path.
+/// Shows the GitHub view `view` of the calling window at these logical bounds of the board page's viewport and at `zoom`, hides its other view, and loads `url` when the view is new or last loaded another path.
 /// `viewport_height` is the height of the board page's viewport.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn github_view_show(
     webview: Webview,
+    view: View,
     path: String,
     url: String,
     x: f64,
@@ -90,66 +116,85 @@ pub async fn github_view_show(
     let position = LogicalPosition::new(origin.x + x, origin.y + y);
     let size = LogicalSize::new(width, height);
 
-    shown().insert(window.label().to_string());
+    hide(&window, other(view))?;
 
-    match github_view(&window) {
-        Some(view) => {
-            let page = worktree_page(&window, &path);
+    let label = view_label(window.label(), view);
+    shown().insert(label.clone());
 
-            view.set_position(position)
-                .and_then(|_| view.set_size(size))
-                .and_then(|_| view.set_zoom(zoom))
+    match window.get_webview(&label) {
+        Some(github) => {
+            let page = worktree_page(&label, &path);
+
+            github
+                .set_position(position)
+                .and_then(|_| github.set_size(size))
+                .and_then(|_| github.set_zoom(zoom))
                 .map_err(|e| format!("Cannot show the GitHub view: {e}"))?;
 
             match page {
-                Page::Ready => view
+                Page::Ready => github
                     .show()
                     .map_err(|e| format!("Cannot show the GitHub view: {e}"))?,
                 Page::Pending => {}
-                Page::Stale => load_hidden(&window, &view, url)?,
+                Page::Stale => load_hidden(&label, &github, url)?,
             }
         }
         None => {
-            let view = add_github_view(&window, url, position, size)?;
-            forget_on_destroy(&window);
-            view.set_zoom(zoom)
+            let github = add_github_view(&window, &label, url, position, size)?;
+
+            // The first GitHub view of the window registers the cleanup of both views.
+            if github_view(&window, other(view)).is_none() {
+                forget_on_destroy(&window);
+            }
+
+            github
+                .set_zoom(zoom)
                 .map_err(|e| format!("Cannot zoom the GitHub view: {e}"))?;
         }
     }
 
-    loaded().insert(window.label().to_string(), path);
+    loaded().insert(label, path);
 
     Ok(())
 }
 
-/// Hides the GitHub view of the calling window, if it has one.
+/// Hides the GitHub view `view` of the calling window, if it has one.
 #[tauri::command]
-pub async fn github_view_hide(webview: Webview) -> Result<(), String> {
-    let window = webview.window();
-    shown().remove(window.label());
-
-    let Some(view) = github_view(&window) else {
-        return Ok(());
-    };
-
-    view.hide()
-        .map_err(|e| format!("Cannot hide the GitHub view: {e}"))
+pub async fn github_view_hide(webview: Webview, view: View) -> Result<(), String> {
+    hide(&webview.window(), view)
 }
 
-/// Reloads the GitHub view of the focused board window when it shows.
+/// Reloads the GitHub view that shows in the focused board window.
 pub fn reload_focused(app: &AppHandle) {
     let Some(window) = windows::focused_board_window(app) else {
         return;
     };
-    if !shown().contains(window.label()) {
+    let Some(label) = VIEWS
+        .map(|view| view_label(window.label(), view))
+        .into_iter()
+        .find(|label| shown().contains(label))
+    else {
         return;
-    }
+    };
 
-    if let Some(view) = github_view(&window)
+    if let Some(view) = window.get_webview(&label)
         && let Err(e) = reload(&view)
     {
         eprintln!("jam-board: {e}");
     }
+}
+
+/// Hides the GitHub view `view` of `window`, if it has one.
+fn hide(window: &Window, view: View) -> Result<(), String> {
+    shown().remove(&view_label(window.label(), view));
+
+    let Some(github) = github_view(window, view) else {
+        return Ok(());
+    };
+
+    github
+        .hide()
+        .map_err(|e| format!("Cannot hide the GitHub view: {e}"))
 }
 
 /// Returns the logical position in `window` of the top left corner of the viewport of `board`, whose page reports a viewport of height `viewport_height`.
@@ -177,32 +222,32 @@ fn top_inset(frame_height: f64, viewport_height: f64) -> f64 {
     (frame_height - viewport_height).max(0.0)
 }
 
-/// Returns the GitHub view of `window`.
-fn github_view(window: &Window) -> Option<Webview> {
-    window.get_webview(&github_label(window.label()))
+/// Returns the GitHub view `view` of `window`.
+fn github_view(window: &Window, view: View) -> Option<Webview> {
+    window.get_webview(&view_label(window.label(), view))
 }
 
-/// Returns the state of the page of `path` in the GitHub view of `window`.
-fn worktree_page(window: &Window, path: &str) -> Page {
-    let loaded = loaded().get(window.label()).cloned();
-    let pending = pending().contains_key(window.label());
+/// Returns the state of the page of `path` in the GitHub view labelled `label`.
+fn worktree_page(label: &str, path: &str) -> Page {
+    let loaded = loaded().get(label).cloned();
+    let pending = pending().contains_key(label);
 
     page_state(loaded.as_deref(), path, pending)
 }
 
-/// Hides `view` until the page of `url` commits, and loads `url` in it.
-fn load_hidden(window: &Window, view: &Webview, url: Url) -> Result<(), String> {
+/// Hides `view`, the GitHub view labelled `label`, until the page of `url` commits, and loads `url` in it.
+fn load_hidden(label: &str, view: &Webview, url: Url) -> Result<(), String> {
     view.hide()
         .map_err(|e| format!("Cannot hide the GitHub view: {e}"))?;
-    pending().insert(window.label().to_string(), url.clone());
+    pending().insert(label.to_string(), url.clone());
 
     navigate(view, url)
 }
 
-/// Shows `view`, the GitHub view of the window labelled `window_label`, when its pending page commits and the board asked it to show.
-fn show_on_commit(view: &Webview, window_label: &str) {
-    let committed = pending().remove(window_label).is_some();
-    if !committed || !shown().contains(window_label) {
+/// Shows `view`, the GitHub view labelled `label`, when its pending page commits and the board asked it to show.
+fn show_on_commit(view: &Webview, label: &str) {
+    let committed = pending().remove(label).is_some();
+    if !committed || !shown().contains(label) {
         return;
     }
 
@@ -211,15 +256,15 @@ fn show_on_commit(view: &Webview, window_label: &str) {
     }
 }
 
-/// Returns the URL that `view` loads while it stays hidden for a new worktree.
-fn pending_url(view: &Webview) -> Option<Url> {
-    let window = view.window();
-    pending().get(window.label()).cloned()
+/// Returns the URL that the GitHub view labelled `label` loads while it stays hidden for a new path.
+fn pending_url(label: &str) -> Option<Url> {
+    pending().get(label).cloned()
 }
 
-/// Adds the GitHub view on `url` to `window`. It keeps GitHub and the configured sign-in hosts and sends other links to the browser.
+/// Adds the GitHub view labelled `label` on `url` to `window`. It keeps GitHub and the configured sign-in hosts and sends other links to the browser.
 fn add_github_view(
     window: &Window,
+    label: &str,
     url: Url,
     position: LogicalPosition<f64>,
     size: LogicalSize<f64>,
@@ -228,10 +273,8 @@ fn add_github_view(
     let sign_in_hosts = resolve_sign_in_hosts(&home).map_err(|e| e.to_string())?;
     let new_window_hosts = sign_in_hosts.clone();
 
-    let label = github_label(window.label());
     let app = window.app_handle().clone();
-    let opener = label.clone();
-    let window_label = window.label().to_string();
+    let opener = label.to_string();
 
     let view = WebviewBuilder::new(label, WebviewUrl::External(url))
         .on_navigation(
@@ -250,7 +293,7 @@ fn add_github_view(
         })
         .on_page_load(move |view, payload| {
             if matches!(payload.event(), PageLoadEvent::Started) {
-                show_on_commit(&view, &window_label);
+                show_on_commit(&view, view.label());
             }
         });
 
@@ -274,15 +317,17 @@ fn open_new_window(app: &AppHandle, label: &str, url: Url, sign_in_hosts: &[Stri
     }
 }
 
-/// Forgets the GitHub view of `window` once the window is destroyed.
+/// Forgets the GitHub views of `window` once the window is destroyed.
 fn forget_on_destroy(window: &Window) {
-    let label = window.label().to_string();
+    let labels = VIEWS.map(|view| view_label(window.label(), view));
 
     window.on_window_event(move |event| {
         if matches!(event, WindowEvent::Destroyed) {
-            loaded().remove(&label);
-            shown().remove(&label);
-            pending().remove(&label);
+            for label in &labels {
+                loaded().remove(label);
+                shown().remove(label);
+                pending().remove(label);
+            }
         }
     });
 }
@@ -298,7 +343,7 @@ fn navigate(view: &Webview, url: Url) -> Result<(), String> {
 
 /// Reloads `view`, or loads its pending page again.
 fn reload(view: &Webview) -> Result<(), String> {
-    if let Some(url) = pending_url(view) {
+    if let Some(url) = pending_url(view.label()) {
         return navigate(view, url);
     }
 
@@ -323,9 +368,33 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_github_view_label_follows_the_window() {
-        assert_eq!(github_label("main"), "main-github");
-        assert_eq!(github_label("board-3"), "board-3-github");
+    fn each_view_has_its_own_label() {
+        assert_eq!(view_label("main", View::Worktree), "main-github");
+        assert_eq!(view_label("board-3", View::Worktree), "board-3-github");
+        assert_eq!(view_label("main", View::Home), "main-github-home");
+        assert_ne!(
+            view_label("main", View::Home),
+            view_label("main", View::Worktree)
+        );
+    }
+
+    #[test]
+    fn each_view_has_an_other() {
+        assert_eq!(other(View::Home), View::Worktree);
+        assert_eq!(other(View::Worktree), View::Home);
+    }
+
+    #[test]
+    fn the_view_names_come_from_the_board() {
+        assert_eq!(
+            serde_json::from_str::<View>("\"home\"").unwrap(),
+            View::Home
+        );
+        assert_eq!(
+            serde_json::from_str::<View>("\"worktree\"").unwrap(),
+            View::Worktree
+        );
+        assert!(serde_json::from_str::<View>("\"other\"").is_err());
     }
 
     #[test]

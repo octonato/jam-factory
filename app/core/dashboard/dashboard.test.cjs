@@ -633,14 +633,17 @@ test('parses the new routes', () => {
   const app = dashboard()
   const route = (hash) => plain(app.run(`parseRoute(${JSON.stringify(hash)})`))
 
-  assert.deepEqual(route(''), { kind: 'repos' })
-  assert.deepEqual(route('#/'), { kind: 'repos' })
+  assert.deepEqual(route(''), { kind: 'sessions' })
+  assert.deepEqual(route('#/'), { kind: 'sessions' })
   assert.deepEqual(route('#/sessions'), { kind: 'sessions' })
   assert.deepEqual(route('#/worktree/%2Fa%2Fb%20c'), { kind: 'worktree', path: '/a/b c' })
   assert.deepEqual(route("#/prs/%2Fs%2Fo%2Fr%2Fwork%20tree's"), { kind: 'prs', path: "/s/o/r/work tree's" })
   assert.deepEqual(route('#/o/r/b/id/spec.md'), { kind: 'session', org: 'o', repo: 'r', branch: 'b', id: 'id', path: 'spec.md' })
 
   assert.equal(app.run(`prsHash(${JSON.stringify("/s/o/r/work tree's")})`), "#/prs/%2Fs%2Fo%2Fr%2Fwork%20tree's")
+
+  const inApp = dashboard({ tauri: { core: { invoke: async () => {} } } })
+  for (const hash of ['', '#/']) assert.deepEqual(plain(inApp.run(`parseRoute(${JSON.stringify(hash)})`)), { kind: 'home' }, hash)
 })
 
 test('a worktree route keeps a path with a space and a quote', () => {
@@ -663,7 +666,7 @@ const pageText = (app) => textOf(app.elements.get('page').innerHTML)
 const sessionEntry = ({ org, repo, branch, id, dir, ...data }) => ({ org, repo, branch, session: id, category: 'session', data })
 
 // Returns a dashboard on `hash` after one poll of an api that lists `sessions` and answers `api/repos` with `repos`.
-async function reposApp(repos, sessions = [], hash = '#/') {
+async function reposApp(repos, sessions = [], hash = '#/sessions') {
   const app = dashboard({
     fetcher: (url) => {
       if (url === 'api/repos') return response(JSON.stringify(repos))
@@ -676,197 +679,61 @@ async function reposApp(repos, sessions = [], hash = '#/') {
   return app
 }
 
-// Returns the main rows of the repos page, each with its class, its decoded link or null, and its text.
-const mainRows = (app) => [...app.elements.get('repo-list').innerHTML.matchAll(/<div class="(row main[^"]*)">\s*<(?:a class="body" href="([^"]*)"|div class="body")>([\s\S]*?)<\/(?:a|div)>/g)]
-  .map((match) => ({ class: match[1], href: match[2] === undefined ? null : unescapeHtml(match[2]), text: textOf(match[3]) }))
-
-// Returns the worktree rows of the repos page, each with its decoded link and its text.
-const worktreeRows = (app) => [...app.elements.get('repo-list').innerHTML.matchAll(/<div class="row worktree[^"]*">\s*<a class="body" href="([^"]*)">([\s\S]*?)<\/a>/g)]
-  .map((match) => ({ href: unescapeHtml(match[1]), text: textOf(match[2]) }))
-
-const listText = (app) => textOf(app.elements.get('repo-list').innerHTML)
-
-// Types `text` into the filter field of the repos page.
-function typeFilter(app, text) {
-  const field = app.elements.get('repo-filter')
-  field.value = text
-  field.dispatch('input')
+// Returns the text of each line of the problems strip, without the lines of missing page scripts.
+function problemLines(app) {
+  const missing = Array.from(app.run('missingScripts()'))
+  return [...app.elements.get('problems').innerHTML.matchAll(/<div>([\s\S]*?)<\/div>/g)]
+    .map((match) => textOf(match[1]))
+    .filter((line) => !missing.includes(line))
 }
 
-test('the repos page lists checkouts and worktree links', async () => {
-  const linked = "/s/akka/sdk/work tree's"
-  const repos = {
-    error: null,
-    repos: [
-      {
-        org: 'akka',
-        repo: 'sdk',
-        path: '/s/akka/sdk/main',
-        branch: 'main',
-        error: null,
-        worktrees: [
-          { path: '/s/akka/sdk/main', branch: 'main', head: null },
-          { path: linked, branch: null, head: '1234567' },
-        ],
-      },
-      {
-        org: 'octonato',
-        repo: 'jam-factory',
-        path: '/s/octonato/jam-factory/main',
-        branch: null,
-        error: null,
-        worktrees: [{ path: '/s/octonato/jam-factory/main', branch: 'fix/<b>', head: null }],
-      },
-    ],
-  }
-  const at = (id, worktree) => ({ ...session, id, worktree })
-  const sessions = [at('s1', '/s/akka/sdk/main'), at('s2', '/s/akka/sdk/main/'), at('s3', linked), at('s4', '/s/akka/sdk')]
-  const app = await reposApp(repos, sessions)
-  const list = app.elements.get('repo-list').innerHTML
+test('the problems strip shows the repos config error', async () => {
+  const app = await reposApp({ error: 'bad <b>', repos: [] }, [], '#/sessions')
 
-  // Returns the number of worktree rows in each nested block of the repos page.
-  const nestedCounts = [...list.matchAll(/<div class="rows nested">([\s\S]*?)<\/section>/g)]
-    .map((match) => [...match[1].matchAll(/<div class="row worktree/g)].length)
-
-  assert.ok(app.calls.includes('api/repos'))
-  assert.deepEqual(plain(app.run('reposState')), repos)
-  assert.deepEqual(mainRows(app), [
-    { class: 'row main', href: '#/prs/%2Fs%2Fakka%2Fsdk%2Fmain', text: 'akka/sdk main PRs ›' },
-    { class: 'row main', href: '#/prs/%2Fs%2Foctonato%2Fjam-factory%2Fmain', text: 'octonato/jam-factory PRs ›' },
-  ])
-  assert.deepEqual(worktreeRows(app), [
-    { href: '#/worktree/%2Fs%2Fakka%2Fsdk%2Fmain', text: 'main akka/sdk/main 2 sessions' },
-    { href: "#/worktree/%2Fs%2Fakka%2Fsdk%2Fwork%20tree's", text: "1234567 akka/sdk/work tree's 1 session" },
-    { href: '#/worktree/%2Fs%2Foctonato%2Fjam-factory%2Fmain', text: 'fix/<b> octonato/jam-factory/main 0 sessions' },
-  ])
-  assert.deepEqual(nestedCounts, [2, 1])
-  assert.doesNotMatch(list, /<b>/)
+  assert.deepEqual(problemLines(app), ['bad <b>'])
+  assert.doesNotMatch(app.elements.get('problems').innerHTML, /<b>/)
 })
 
-test('the repos page explains an empty config', async () => {
-  const app = await reposApp({ error: null, repos: [] })
+test('the problems strip explains an empty repos list', async () => {
+  const app = await reposApp({ error: null, repos: [] }, [], '#/sessions')
 
-  assert.ok(listText(app).includes('~/.jam-factory/config.json'), listText(app))
-  assert.ok(listText(app).includes('"repos"'), listText(app))
-  assert.deepEqual(worktreeRows(app), [])
+  assert.deepEqual(problemLines(app), ['Add repos, a list of paths to main checkouts, to ~/.jam-factory/config.json'])
 })
 
-test('a checkout with an error is greyed with the reason', async () => {
-  const repos = { error: null, repos: [{ org: 'o', repo: 'r', path: '/s/o/r/main', branch: null, error: 'not a git repository', worktrees: [] }] }
-  const app = await reposApp(repos)
+test('the problems strip lists each checkout that fails to load', async () => {
+  const broken = { org: 'o', repo: 'r', path: '/s/o/r/main', branch: null, error: 'not a git repository', worktrees: [] }
+  const fine = { org: 'akka', repo: 'sdk', path: '/s/akka/sdk/main', branch: 'main', error: null, worktrees: [] }
+  const app = await reposApp({ error: null, repos: [broken, fine] }, [], '#/sessions')
 
-  assert.deepEqual(mainRows(app), [{ class: 'row main error', href: null, text: 'o/r o/r/main not a git repository' }])
-  assert.deepEqual(worktreeRows(app), [])
-  assert.deepEqual(plain(app.run('shownRows()')), [])
-  assert.match(html, /\.row\.main\.error \{[^}]*color: var\(--muted\);/)
-
-  press(app, 'ArrowDown')
-  assert.equal(app.run('selectedWorktree'), null)
+  assert.deepEqual(problemLines(app), ['o/r (o/r/main): not a git repository'])
 })
 
-test('a checkout without worktrees says so', async () => {
-  const repos = { error: null, repos: [{ org: 'o', repo: 'r', path: '/s/o/r/main', branch: 'main', error: null, worktrees: [] }] }
-  const app = await reposApp(repos)
-
-  assert.deepEqual(mainRows(app), [{ class: 'row main', href: '#/prs/%2Fs%2Fo%2Fr%2Fmain', text: 'o/r main PRs ›' }])
-  assert.equal(listText(app), 'o/r main PRs › No worktrees.')
-})
-
-const filterRepos = {
-  error: null,
-  repos: [
-    {
-      org: 'akka',
-      repo: 'sdk',
-      path: '/s/akka/sdk/main',
-      branch: 'main',
-      error: null,
-      worktrees: [
-        { path: '/s/akka/sdk/rate-limit', branch: 'rate-limit', head: null },
-        { path: '/s/akka/sdk/wt', branch: 'feature', head: null },
-      ],
-    },
-    { org: 'o', repo: 'r', path: '/s/o/r/main', branch: 'main', error: null, worktrees: [{ path: '/s/o/r/feature', branch: 'feature', head: null }] },
-  ],
-}
-
-// Returns the texts of the worktree rows of the repos page.
-const rowTexts = (app) => worktreeRows(app).map((row) => row.text)
-
-test('the filter shows the worktrees whose short path or branch holds every word', async () => {
-  const app = await reposApp(filterRepos)
-
-  typeFilter(app, 'FEAT')
-  assert.deepEqual(rowTexts(app), ['feature akka/sdk/wt 0 sessions', 'feature o/r/feature 0 sessions'])
-  assert.deepEqual(mainRows(app).map((row) => row.text), ['akka/sdk main PRs ›', 'o/r main PRs ›'])
-
-  typeFilter(app, 'sdk feat')
-  assert.deepEqual(rowTexts(app), ['feature akka/sdk/wt 0 sessions'])
-  assert.deepEqual(mainRows(app).map((row) => row.text), ['akka/sdk main PRs ›'])
-
-  typeFilter(app, '  ')
-  assert.deepEqual(rowTexts(app), [
-    'rate-limit akka/sdk/rate-limit 0 sessions',
-    'feature akka/sdk/wt 0 sessions',
-    'feature o/r/feature 0 sessions',
-  ])
-})
-
-test('a checkout whose name matches shows without a matching worktree', async () => {
-  const docs = { org: 'akka', repo: 'docs', path: '/s/akka/docs/main', branch: 'main', error: null, worktrees: [] }
-  const repos = { error: null, repos: [...filterRepos.repos, docs] }
-  const app = await reposApp(repos)
-
-  typeFilter(app, 'docs')
-  assert.deepEqual(mainRows(app), [{ class: 'row main', href: '#/prs/%2Fs%2Fakka%2Fdocs%2Fmain', text: 'akka/docs main PRs ›' }])
-  assert.equal(listText(app), 'akka/docs main PRs › No worktrees.')
-})
-
-test('a filter that hides everything says so', async () => {
-  const app = await reposApp(filterRepos)
-
-  typeFilter(app, 'zzz')
-  assert.equal(listText(app), 'No worktree matches.')
-})
-
-test('a poll keeps the filter field', async () => {
-  const app = await reposApp(filterRepos)
-  const field = app.elements.get('repo-filter')
-
-  typeFilter(app, 'sdk')
-  await app.run('poll()')
-  assert.equal(app.elements.get('repo-filter'), field)
-  assert.equal(field.value, 'sdk')
-  assert.deepEqual(rowTexts(app), ['rate-limit akka/sdk/rate-limit 0 sessions', 'feature akka/sdk/wt 0 sessions'])
-})
-
-test('the filter survives leaving and returning', async () => {
-  const app = await reposApp(filterRepos)
-  typeFilter(app, 'sdk')
-
-  navigate(app, worktreeHashOf('/s/akka/sdk/wt'))
-  assert.match(app.elements.get('page').innerHTML, /id="worktree-card"/)
-
-  navigate(app, '#/')
-  assert.equal(app.elements.get('repo-filter').value, 'sdk')
-  assert.deepEqual(rowTexts(app), ['rate-limit akka/sdk/rate-limit 0 sessions', 'feature akka/sdk/wt 0 sessions'])
-})
-
-test('a config error is shown', async () => {
-  const app = await reposApp({ error: 'bad', repos: [] })
-
-  assert.match(listText(app), /\bbad\b/)
-  assert.doesNotMatch(listText(app), /config\.json/)
-})
-
-test('a failed repos fetch keeps the sessions and shows the failure', async () => {
+test('the problems strip shows a failed repos fetch and the sessions stay', async () => {
   const app = dashboard({
     fetcher: (url) => (url === 'api/sessions' ? sessionsReply([sessionEntry(session)]) : response('', false, { status: 500 })),
   })
+  app.context.location.hash = '#/sessions'
   await app.run('poll()')
 
+  assert.deepEqual(problemLines(app), ['500 api/repos'])
   assert.equal(app.elements.get('status').textContent, '1 sessions')
-  assert.match(listText(app), /500 api\/repos/)
+})
+
+test('the problems strip shows no repos line for a loaded list', async () => {
+  const app = await reposApp(selectRepos, [], '#/sessions')
+
+  assert.deepEqual(problemLines(app), [])
+})
+
+test('the problems strip lists the repos lines after the session lines', async () => {
+  const entries = [{ org: 'a', repo: 'repo', branch: 'main', session: 'broken', category: 'session', error: 'bad json' }]
+  const app = dashboard({
+    fetcher: (url) => (url === 'api/sessions' ? sessionsReply(entries) : response(JSON.stringify({ error: 'bad', repos: [] }))),
+  })
+  app.context.location.hash = '#/sessions'
+  await app.run('poll()')
+
+  assert.deepEqual(problemLines(app), ['a/repo/main/broken: bad json', 'bad'])
 })
 
 test('sessions match a worktree with or without a trailing slash', () => {
@@ -890,25 +757,40 @@ test('the sessions tab lists sessions', async () => {
   assert.match(page, /<h2 class="org">org<\/h2>/)
 })
 
-test('the tab strip marks the shown page', async () => {
-  // Returns the tabs as their label and link, with `*` after the current one.
-  const tabs = (app) => [...app.elements.get('tabs').innerHTML.matchAll(/<a class="tab" href="([^"]*)"( aria-current="page")?>([^<]*)<\/a>/g)]
-    .map((match) => `${match[3]} ${match[1]}${match[2] ? '*' : ''}`)
+// Returns the header tabs as their label and link, with `*` after the current one.
+const headerTabs = (app) => [...app.elements.get('tabs').innerHTML.matchAll(/<a class="tab" href="([^"]*)"( aria-current="page")?>([^<]*)<\/a>/g)]
+  .map((match) => `${match[3]} ${match[1]}${match[2] ? '*' : ''}`)
 
-  const app = await reposApp({ error: null, repos: [] }, [session])
-  assert.deepEqual(tabs(app), ['Repos #/*', 'Sessions #/sessions', 'Terminals #/terminals'])
+test('the app header tabs are GitHub, Sessions and Terminals', async () => {
+  const { app } = await homeApp()
+  const shown = [
+    ['#/', ['GitHub #/*', 'Sessions #/sessions', 'Terminals #/terminals']],
+    ['#/sessions', ['GitHub #/', 'Sessions #/sessions*', 'Terminals #/terminals']],
+    ['#/terminals', ['GitHub #/', 'Sessions #/sessions', 'Terminals #/terminals*']],
+    ['#/worktree/%2Fa', ['GitHub #/', 'Sessions #/sessions', 'Terminals #/terminals']],
+    ['', ['GitHub #/*', 'Sessions #/sessions', 'Terminals #/terminals']],
+  ]
+
+  for (const [hash, expected] of shown) {
+    navigate(app, hash)
+    assert.deepEqual(headerTabs(app), expected, hash)
+  }
+})
+
+test('the browser header tabs are Sessions and Terminals', async () => {
+  const app = await reposApp({ error: null, repos: [] }, [session], '#/')
+  assert.deepEqual(headerTabs(app), ['Sessions #/sessions*', 'Terminals #/terminals'])
+  assert.deepEqual(cardRows(app.elements.get('page').innerHTML).map((row) => row.dataset.dir), [session.dir])
 
   const shown = [
-    ['#/sessions', ['Repos #/', 'Sessions #/sessions*', 'Terminals #/terminals']],
-    ['#/terminals', ['Repos #/', 'Sessions #/sessions', 'Terminals #/terminals*']],
-    [app.run('sessionHref(state.sessions[0])'), ['Repos #/', 'Sessions #/sessions', 'Terminals #/terminals']],
-    ['#/worktree/%2Fa', ['Repos #/', 'Sessions #/sessions', 'Terminals #/terminals']],
-    ['', ['Repos #/*', 'Sessions #/sessions', 'Terminals #/terminals']],
+    ['#/terminals', ['Sessions #/sessions', 'Terminals #/terminals*']],
+    [app.run('sessionHref(state.sessions[0])'), ['Sessions #/sessions', 'Terminals #/terminals']],
+    ['', ['Sessions #/sessions*', 'Terminals #/terminals']],
   ]
+
   for (const [hash, expected] of shown) {
-    app.context.location.hash = hash
-    app.window.dispatch('hashchange')
-    assert.deepEqual(tabs(app), expected, hash)
+    navigate(app, hash)
+    assert.deepEqual(headerTabs(app), expected, hash)
   }
 })
 
@@ -972,6 +854,7 @@ test('groups sessions by org and filters them', () => {
 test('archive and open post to the api routes with the org', async () => {
   const posts = []
   const app = dashboard({
+    hash: '#/terminals',
     fetcher: (url, options) => {
       if (options?.method === 'POST') posts.push(url)
       return url === 'api/sessions' ? sessionsReply([]) : response('')
@@ -1018,7 +901,7 @@ function press(app, key, modifiers = {}, target = { closest: () => null }) {
   return prevented
 }
 
-test('l, Escape and Cmd+[ return from a worktree page to the repos', () => {
+test('l, Escape and Cmd+[ return from a worktree page to the home page', () => {
   for (const [key, modifiers] of [['l'], ['Escape'], ['[', { metaKey: true }]]) {
     const app = dashboard()
     app.context.location.hash = '#/worktree/%2Fa'
@@ -1028,7 +911,7 @@ test('l, Escape and Cmd+[ return from a worktree page to the repos', () => {
   }
 })
 
-test('other modified keys, an open dialog, the list and the repos page ignore the back keys', () => {
+test('other modified keys, an open dialog, the list and the home page ignore the back keys', () => {
   const app = dashboard()
   app.context.session = session
   app.run('state.sessions = [session]')
@@ -1050,9 +933,11 @@ test('other modified keys, an open dialog, the list and the repos page ignore th
   assert.equal(press(app, 'Escape'), false)
   assert.equal(press(app, '[', { metaKey: true }), false)
 
-  app.context.location.hash = '#/'
-  assert.equal(press(app, 'Escape'), false)
-  assert.equal(press(app, 'l'), false)
+  const inApp = dashboard({ tauri: { core: { invoke: async () => {} } } })
+  inApp.context.location.hash = '#/'
+  assert.equal(press(inApp, 'Escape'), false)
+  assert.equal(press(inApp, 'l'), false)
+  assert.equal(inApp.context.location.hash, '#/')
 })
 
 const shortcutsDialog = (app) => app.elements.get('shortcuts')
@@ -1066,7 +951,7 @@ test('? opens the shortcuts dialog on every page, and ? closes it', () => {
     assert.ok(press(app, '?', { shiftKey: true }), `? is taken on ${hash}`)
     assert.equal(shortcutsDialog(app).open, true)
     assert.match(shortcutsText(app), /^Everywhere \? Show or hide the shortcuts/)
-    assert.match(shortcutsText(app), /PRs page l Esc ⌘\[ Go back to the repos/)
+    assert.match(shortcutsText(app), /PRs page l Esc ⌘\[ Go back ↑ ↓ Move the selection/)
 
     assert.ok(press(app, '?', { shiftKey: true }))
     assert.equal(shortcutsDialog(app).open, false)
@@ -1107,7 +992,6 @@ test('the shortcuts dialog lists every key of the key tables', () => {
 
   const expected = [
     ['Sessions', Object.keys(tables.ACTION_KEYS)],
-    ['Repos', [...Object.keys(tables.WORKTREE_KEYS), ...tables.keys]],
     ['Worktree page', [...Object.keys(tables.WORKTREE_KEYS), tables.keys[1]]],
     ['Session item', [...Object.keys(tables.WORKTREE_KEYS), tables.keys[1]]],
     ['PRs page', [...Object.keys(tables.PR_KEYS), tables.keys[0]]],
@@ -1140,49 +1024,6 @@ const selectRepos = {
 // Returns the hash of the PRs page of `path`.
 const prsHashOf = (path) => `#/prs/${encodeURIComponent(path)}`
 
-// Returns the decoded links of the outlined main and worktree rows of the repos page.
-const selectedRows = (app) => [...app.elements.get('repo-list').innerHTML.matchAll(/<div class="row (?:main|worktree) selected">\s*<a class="body" href="([^"]*)">/g)]
-  .map((match) => unescapeHtml(match[1]))
-
-test('arrow keys move the selection across main rows and worktree rows', async () => {
-  const app = await reposApp(selectRepos)
-  const steps = [
-    [sdkMain, prsHashOf(sdkMain)],
-    [pathA, worktreeHashOf(pathA)],
-    [pathB, worktreeHashOf(pathB)],
-    [orMain, prsHashOf(orMain)],
-    [pathC, worktreeHashOf(pathC)],
-    [pathC, worktreeHashOf(pathC)],
-  ]
-
-  for (const [path, hash] of steps) {
-    assert.ok(press(app, 'ArrowDown'))
-    assert.equal(app.run('selectedWorktree'), path)
-    assert.deepEqual(selectedRows(app), [hash])
-  }
-
-  assert.ok(press(app, 'ArrowUp'))
-  assert.equal(app.run('selectedWorktree'), orMain)
-  assert.match(app.elements.get('repo-list').innerHTML, /<div class="row main selected">/)
-
-  const fresh = await reposApp(selectRepos)
-  assert.ok(press(fresh, 'ArrowUp'))
-  assert.equal(fresh.run('selectedWorktree'), pathC)
-  assert.deepEqual(selectedRows(fresh), [worktreeHashOf(pathC)])
-})
-
-test('Enter opens the selected worktree', async () => {
-  const app = await reposApp(selectRepos)
-
-  assert.equal(press(app, 'Enter'), false)
-  assert.equal(app.context.location.hash, '#/')
-
-  press(app, 'ArrowDown')
-  press(app, 'ArrowDown')
-  assert.ok(press(app, 'Enter'))
-  assert.equal(app.context.location.hash, worktreeHashOf(pathA))
-})
-
 // Gives `app` a fake app API and returns the arguments of each `open_window` call.
 function appOpener(app) {
   const opened = []
@@ -1198,7 +1039,7 @@ function appOpener(app) {
 }
 
 // Clicks the link `href` of a `kind` row in the element `container` with `modifiers`, and returns true when the page prevented the default.
-function clickRow(app, kind, href, modifiers = {}, container = 'repo-list') {
+function clickRow(app, kind, href, modifiers = {}, container = 'list') {
   let prevented = false
   const link = { getAttribute: (name) => (name === 'href' ? href : null) }
   const target = { closest: (selector) => (selector.includes(`.row.${kind} > a.body`) ? link : null) }
@@ -1206,159 +1047,6 @@ function clickRow(app, kind, href, modifiers = {}, container = 'repo-list') {
   app.elements.get(container).dispatch('click', { target, ...modifiers, preventDefault: () => { prevented = true } })
   return prevented
 }
-
-test('Cmd+click on a main or worktree row opens its page in a new app window', async () => {
-  const app = await reposApp(selectRepos)
-  const opened = appOpener(app)
-
-  assert.ok(clickRow(app, 'main', prsHashOf(sdkMain), { metaKey: true }))
-  assert.ok(clickRow(app, 'worktree', worktreeHashOf(pathA), { metaKey: true }))
-  await settle()
-
-  assert.deepEqual(opened, [prsHashOf(sdkMain), worktreeHashOf(pathA)])
-  assert.equal(app.context.location.hash, '#/')
-})
-
-test('a plain click on a row follows its link in the same window', async () => {
-  const app = await reposApp(selectRepos)
-  const opened = appOpener(app)
-
-  assert.equal(clickRow(app, 'worktree', worktreeHashOf(pathA)), false)
-  assert.deepEqual(opened, [])
-})
-
-test('Cmd+click on a row in a browser keeps the browser behaviour', async () => {
-  const app = await reposApp(selectRepos)
-
-  assert.equal(clickRow(app, 'worktree', worktreeHashOf(pathA), { metaKey: true }), false)
-})
-
-test('Enter on a main row opens its PRs page', async () => {
-  const app = await reposApp(selectRepos)
-
-  press(app, 'ArrowDown')
-  assert.equal(app.run('selectedWorktree'), sdkMain)
-  assert.ok(press(app, 'Enter'))
-  assert.equal(app.context.location.hash, '#/prs/%2Fs%2Fakka%2Fsdk%2Fmain')
-})
-
-test('the worktree keys do nothing on a main row', async () => {
-  const { app, posts, sockets } = await worktreeApp(worktreePath, [], () => response(JSON.stringify(selectRepos)))
-  navigate(app, '#/')
-
-  press(app, 'ArrowDown')
-  assert.equal(app.run('selectedWorktree'), sdkMain)
-  for (const key of ['o', 'i', 'e', 'g', 't']) assert.equal(press(app, key), false, `${key} does nothing`)
-  await settle()
-  assert.deepEqual(posts, [])
-  assert.equal(sockets.length, 0)
-  assert.equal(app.context.location.hash, '#/')
-})
-
-test('a filtered-out or removed worktree loses the selection', async () => {
-  const repos = plain(selectRepos)
-  const app = await reposApp(repos)
-
-  for (let i = 0; i < 3; i += 1) press(app, 'ArrowDown')
-  assert.equal(app.run('selectedWorktree'), pathB)
-  typeFilter(app, 'alpha')
-  assert.equal(app.run('selectedWorktree'), null)
-  assert.deepEqual(selectedRows(app), [])
-
-  typeFilter(app, '')
-  press(app, 'ArrowDown')
-  press(app, 'ArrowDown')
-  assert.equal(app.run('selectedWorktree'), pathA)
-  repos.repos[0].worktrees.shift()
-  await app.run('poll()')
-  assert.equal(app.run('selectedWorktree'), null)
-  assert.deepEqual(selectedRows(app), [])
-})
-
-test('a poll keeps the selection', async () => {
-  const app = await reposApp(selectRepos)
-  for (let i = 0; i < 3; i += 1) press(app, 'ArrowDown')
-
-  await app.run('poll()')
-  assert.equal(app.run('selectedWorktree'), pathB)
-  assert.deepEqual(selectedRows(app), [worktreeHashOf(pathB)])
-})
-
-test('slash focuses the filter', async () => {
-  const app = await reposApp(selectRepos)
-
-  assert.ok(press(app, '/'))
-  assert.equal(app.elements.get('repo-filter').focused, true)
-})
-
-test('keys in the filter field', async () => {
-  const app = await reposApp(selectRepos)
-  const field = app.elements.get('repo-filter')
-
-  field.focus()
-  assert.ok(press(app, 'ArrowDown', {}, field))
-  assert.equal(field.focused, false)
-  assert.equal(app.run('selectedWorktree'), sdkMain)
-
-  field.focus()
-  for (const key of ['t', 'l']) assert.equal(press(app, key, {}, field), false, `${key} is text`)
-  assert.equal(field.focused, true)
-  assert.equal(app.run('selectedWorktree'), sdkMain)
-  assert.equal(app.context.location.hash, '#/')
-
-  assert.ok(press(app, 'Escape', {}, field))
-  assert.equal(field.focused, false)
-  assert.equal(app.context.location.hash, '#/')
-
-  press(app, 'ArrowDown')
-  field.focus()
-  assert.ok(press(app, 'Enter', {}, field))
-  assert.equal(field.focused, false)
-  assert.equal(app.context.location.hash, worktreeHashOf(pathA))
-
-  const fresh = await reposApp(selectRepos)
-  const freshField = fresh.elements.get('repo-filter')
-  freshField.focus()
-  assert.ok(press(fresh, 'Enter', {}, freshField))
-  assert.equal(freshField.focused, false)
-  assert.equal(fresh.run('selectedWorktree'), pathA)
-  assert.equal(fresh.context.location.hash, worktreeHashOf(pathA))
-})
-
-test('Enter in the filter opens the first matching worktree', async () => {
-  const app = await reposApp(selectRepos)
-  const field = app.elements.get('repo-filter')
-
-  typeFilter(app, 'beta')
-  field.focus()
-  assert.ok(press(app, 'Enter', {}, field))
-  assert.equal(app.run('selectedWorktree'), pathB)
-  assert.equal(app.context.location.hash, worktreeHashOf(pathB))
-})
-
-test('Enter in a filter that matches only a checkout name opens its PRs page', async () => {
-  const docsMain = '/s/akka/docs/main'
-  const docs = { org: 'akka', repo: 'docs', path: docsMain, branch: 'main', error: null, worktrees: [] }
-  const app = await reposApp({ error: null, repos: [...selectRepos.repos, docs] })
-  const field = app.elements.get('repo-filter')
-
-  typeFilter(app, 'docs')
-  field.focus()
-  assert.ok(press(app, 'Enter', {}, field))
-  assert.equal(app.run('selectedWorktree'), docsMain)
-  assert.equal(app.context.location.hash, prsHashOf(docsMain))
-})
-
-test('a back key on a worktree page selects it on the repos page', async () => {
-  const app = await reposApp(selectRepos, [], worktreeHashOf(pathB))
-
-  assert.ok(press(app, 'Escape'))
-  assert.equal(app.context.location.hash, '#/')
-  assert.equal(app.run('selectedWorktree'), pathB)
-
-  app.window.dispatch('hashchange')
-  assert.deepEqual(selectedRows(app), [worktreeHashOf(pathB)])
-})
 
 const editSession = { ...session, org: 'o', repo: 'r', id: 's', dir: 'api/file/o/r/main/s/' }
 
@@ -1497,7 +1185,7 @@ test('a CRLF file without typing leaves the editor without a PUT or a discard pr
 
   assert.equal(app.elements.get('modal').open, undefined)
   assert.equal(app.run('editing'), null)
-  assert.equal(app.context.location.hash, '#/')
+  assert.equal(app.context.location.hash, '#/sessions')
   assert.deepEqual(api.puts, [])
 })
 
@@ -1555,7 +1243,7 @@ test('Escape outside the editor leaves the page', async () => {
   assert.ok(press(app, 'Escape'))
 
   assert.equal(app.run('editing'), null)
-  assert.equal(app.context.location.hash, '#/')
+  assert.equal(app.context.location.hash, '#/sessions')
 })
 
 test('a conflict keeps edit mode and the text, and shows a message in the viewer head', async () => {
@@ -1615,7 +1303,7 @@ test('leaving with changes asks to discard them', async () => {
   closeModal(app, 'ok')
   await settle()
   assert.equal(app.run('editing'), null)
-  assert.equal(app.context.location.hash, '#/')
+  assert.equal(app.context.location.hash, '#/sessions')
   assert.deepEqual(api.puts, [])
 })
 
@@ -2492,21 +2180,6 @@ test('each worktree keeps its own tabs', async () => {
   assert.deepEqual(sockets.map((socket) => socket.closed), [false, false, false])
 })
 
-test('the repos page counts open terminals', async () => {
-  const { app, sockets } = await worktreeApp()
-  clickTab(app, 'add')
-  clickTab(app, 'add')
-
-  navigate(app, '#/')
-  assert.deepEqual(worktreeRows(app).map((row) => row.text), [
-    'main o/r/main 0 sessions',
-    "feature o/r/work tree's 0 sessions · ▣ 2",
-  ])
-
-  sockets[0].onclose({ code: 1000, reason: '' })
-  assert.equal(worktreeRows(app)[1].text, "feature o/r/work tree's 0 sessions · ▣ 1")
-})
-
 // Returns a reply to `api/terminals` that lists `terminals`.
 const terminalsReply = (terminals) => response(JSON.stringify({ terminals }))
 
@@ -2828,28 +2501,6 @@ test('the worktree state takes attention over busy over idle', async () => {
   assert.equal(worktreeStateOf(app, mainPath), null)
 })
 
-test('the repos row colors its square by worktree state', async () => {
-  let running = [shellOnServer, { ...claudeOnServer, state: 'attention' }]
-  const { app } = await worktreeApp(worktreePath, [], undefined, () => terminalsReply(running))
-  const list = () => app.elements.get('repo-list').innerHTML
-  navigate(app, '#/')
-
-  assert.match(list(), /<span class="term-attention" title="needs you">▣ 2<\/span>/)
-  assert.equal(worktreeRows(app)[1].text, "feature o/r/work tree's 0 sessions · ▣ 2")
-
-  running = [{ ...shellOnServer, state: 'idle' }, { ...claudeOnServer, state: 'idle' }]
-  await app.run('poll()')
-  assert.match(list(), /<span class="term-idle" title="idle">▣ 2<\/span>/)
-
-  running = [shellOnServer, { ...claudeOnServer, state: 'idle' }]
-  await app.run('poll()')
-  assert.match(list(), /<span class="term-busy" title="busy">▣ 2<\/span>/)
-
-  assert.match(html, /\.term-attention \{ color: var\(--critical\); \}/)
-  assert.match(html, /\.term-idle \{ color: var\(--accent\); \}/)
-  assert.match(html, /\.term-busy \{ color: var\(--ink-2\); \}/)
-})
-
 // Returns each tab of the tab strip as its name and the markup of its dot, or null.
 const tabDots = (app) => [...app.elements.get('term-tabs').innerHTML.matchAll(/class="term-name"[^>]*>(<span class="term-dot[^"]*"[^>]*>●<\/span>)?([^<]*)<\/button>/g)]
   .map((match) => [match[2], match[1] ?? null])
@@ -3061,7 +2712,7 @@ test('keys inside a worktree terminal fire no board shortcut', async () => {
   assert.equal(app.context.location.hash, hash)
 
   assert.ok(press(app, 'Escape'))
-  assert.equal(app.context.location.hash, '#/')
+  assert.equal(app.context.location.hash, '#/sessions')
 })
 
 test('a font size change resizes the worktree terminals', async () => {
@@ -3538,29 +3189,18 @@ test('the edit ends when its tab closes or the page changes', async () => {
   assert.deepEqual(tabNames(app), ['shell 1*'])
 })
 
-// Returns `worktreeApp()` on the repos page with `worktreePath` selected.
-async function selectedWorktreeApp() {
-  const stubs = await worktreeApp()
-  const { app } = stubs
-  navigate(app, '#/')
-
-  press(app, 'ArrowUp')
-  assert.equal(app.run('selectedWorktree'), worktreePath)
-  return stubs
-}
-
-test('o, i and e post to the worktree open route and stay on the repos page', async () => {
-  const { app, posts, sockets } = await selectedWorktreeApp()
+test('o, i and e post to the worktree open route and stay on the worktree page', async () => {
+  const { app, posts, sockets } = await worktreeApp()
 
   for (const key of ['o', 'i', 'e']) assert.ok(press(app, key), `${key} is taken`)
   await settle()
   assert.deepEqual(posts, ['github', 'intellij', 'zed'].map((tool) => `api/open/${tool}?path=${encodedWorktree}`))
-  assert.equal(app.context.location.hash, '#/')
+  assert.equal(app.context.location.hash, worktreeHashOf(worktreePath))
   assert.equal(sockets.length, 0)
 })
 
-test('t opens the worktree page with one shell', async () => {
-  const { app, sockets, terminals } = await selectedWorktreeApp()
+test('t opens one shell on the worktree page', async () => {
+  const { app, sockets, terminals } = await worktreeApp()
 
   assert.ok(press(app, 't'))
   assert.equal(app.context.location.hash, worktreeHashOf(worktreePath))
@@ -3569,28 +3209,24 @@ test('t opens the worktree page with one shell', async () => {
   assert.deepEqual(tabNames(app), ['shell 1*'])
   assert.equal(terminals[0].focused, true)
 
-  assert.ok(press(app, 'Escape'))
-  app.window.dispatch('hashchange')
   assert.ok(press(app, 't'))
-  assert.equal(app.context.location.hash, worktreeHashOf(worktreePath))
   assert.equal(sockets.length, 1)
   assert.deepEqual(tabNames(app), ['shell 1*'])
 })
 
 test('t keeps the active shell', async () => {
-  const { app } = await selectedWorktreeApp()
+  const { app } = await worktreeApp()
   press(app, 't')
   clickTab(app, 'add')
   const [, second] = tabsOf(app)
   clickTab(app, 'select', second.id)
 
-  navigate(app, '#/')
   assert.ok(press(app, 't'))
   assert.deepEqual(tabNames(app), ['shell 1', 'shell 2*'])
 })
 
 test('t with only lazygit open opens a shell', async () => {
-  const { app } = await selectedWorktreeApp()
+  const { app } = await worktreeApp()
 
   assert.ok(press(app, 'g'))
   assert.ok(press(app, 't'))
@@ -3599,7 +3235,7 @@ test('t with only lazygit open opens a shell', async () => {
 })
 
 test('g opens lazygit once', async () => {
-  const { app, sockets } = await selectedWorktreeApp()
+  const { app, sockets } = await worktreeApp()
 
   assert.ok(press(app, 'g'))
   assert.ok(press(app, 'g'))
@@ -3609,22 +3245,20 @@ test('g opens lazygit once', async () => {
 })
 
 test('t opens a new shell beside a failed one', async () => {
-  const { app, sockets } = await selectedWorktreeApp()
+  const { app, sockets } = await worktreeApp()
   assert.ok(press(app, 't'))
   sockets[0].onclose({ code: 1006, reason: '' })
 
-  navigate(app, '#/')
   assert.ok(press(app, 't'))
   assert.equal(sockets.length, 2)
   assert.deepEqual(tabNames(app), ['shell 1!', 'shell 2*'])
 })
 
 test('g opens a new lazygit beside a failed one', async () => {
-  const { app, sockets } = await selectedWorktreeApp()
+  const { app, sockets } = await worktreeApp()
   assert.ok(press(app, 'g'))
   sockets[0].onclose({ code: 1006, reason: '' })
 
-  navigate(app, '#/')
   assert.ok(press(app, 'g'))
   assert.equal(sockets.length, 2)
   assert.deepEqual(tabNames(app), ['lazygit!', 'lazygit*'])
@@ -3642,18 +3276,6 @@ test('the worktree keys work on a worktree page', async () => {
   assert.deepEqual(tabNames(app), ['shell 1*'])
 })
 
-test('the action keys need a selection', async () => {
-  const { app, posts, sockets } = await worktreeApp()
-  navigate(app, '#/')
-
-  assert.equal(app.run('selectedWorktree'), null)
-  for (const key of ['t', 'o']) assert.equal(press(app, key), false, `${key} needs a selection`)
-  await settle()
-  assert.deepEqual(posts, [])
-  assert.equal(sockets.length, 0)
-  assert.equal(app.context.location.hash, '#/')
-})
-
 test('the action keys do nothing on an unknown worktree page', async () => {
   const { app, posts, sockets } = await worktreeApp('/s/o/r')
 
@@ -3664,7 +3286,7 @@ test('the action keys do nothing on an unknown worktree page', async () => {
   assert.equal(app.context.location.hash, worktreeHashOf('/s/o/r'))
 
   assert.ok(press(app, 'Escape'))
-  assert.equal(app.context.location.hash, '#/')
+  assert.equal(app.context.location.hash, '#/sessions')
 })
 
 test("the worktree card's lazygit button still opens a new tab", async () => {
@@ -3830,18 +3452,15 @@ test('back from a page entered from the Sessions tab returns there', async () =>
   }
 })
 
-test('back from a page entered from the Repos tab returns there', async () => {
-  for (const from of ['#/', '#/terminals']) {
-    const { app } = await worktreeApp(worktreePath, [worktreeSession])
-    navigate(app, from)
-    navigate(app, worktreeHashOf(worktreePath))
-    navigate(app, '#/o/r/main/s1')
-    await settle()
+test('back from a page entered from the Terminals tab goes to the home page', async () => {
+  const { app } = await worktreeApp(worktreePath, [worktreeSession])
+  navigate(app, '#/terminals')
+  navigate(app, worktreeHashOf(worktreePath))
+  navigate(app, '#/o/r/main/s1')
+  await settle()
 
-    assert.ok(press(app, 'Escape'))
-    assert.equal(app.context.location.hash, '#/', `from ${from}`)
-    assert.equal(app.run('selectedWorktree'), worktreePath)
-  }
+  assert.ok(press(app, 'Escape'))
+  assert.equal(app.context.location.hash, '#/')
 })
 
 test('files and items of the same page keep the origin', async () => {
@@ -3864,13 +3483,12 @@ test('a page entered again from another page takes the new origin', async () => 
   navigate(app, '#/sessions')
   navigate(app, '#/o/r/main/s1')
   await settle()
-  navigate(app, '#/')
+  navigate(app, '#/terminals')
   navigate(app, '#/o/r/main/s1')
   await settle()
 
   assert.ok(press(app, 'Escape'))
   assert.equal(app.context.location.hash, '#/')
-  assert.equal(app.run('selectedWorktree'), worktreePath)
 })
 
 const prList = [
@@ -4191,7 +3809,7 @@ test('leaving and reopening the PRs page fetches again', async () => {
   press(app, 'ArrowDown')
   typePrFilter(app, 'fix')
 
-  navigate(app, '#/')
+  navigate(app, '#/sessions')
   assert.equal(app.run('prsState'), null)
   assert.equal(app.run('selectedItem'), null)
   assert.equal(app.run('prFilter'), '')
@@ -4204,7 +3822,7 @@ test('leaving and reopening the PRs page fetches again', async () => {
 
   const releases = []
   const late = await prsApp(prPageRepos, () => new Promise((resolve) => releases.push(resolve)))
-  navigate(late, '#/')
+  navigate(late, '#/sessions')
   navigate(late, prsHashOf(sdkMain))
   releases[1](prsJson([prList[1]])())
   await settle()
@@ -4213,11 +3831,11 @@ test('leaving and reopening the PRs page fetches again', async () => {
   assert.deepEqual(prNumbers(late), [7], 'a reply for a page left meanwhile is dropped')
 
   const another = await prsApp(prPageRepos, () => new Promise((resolve) => releases.push(resolve)))
-  navigate(another, '#/')
+  navigate(another, '#/sessions')
   releases[2](prsJson(prList)())
   await settle()
   assert.equal(another.run('prsState'), null)
-  assert.match(another.elements.get('page').innerHTML, /id="repo-list"/)
+  assert.match(another.elements.get('page').innerHTML, /No sessions yet\./)
 })
 
 test('arrow keys select PRs and stop at the ends', async () => {
@@ -4482,17 +4100,17 @@ test('Cmd+click on a worktree without a PR opens its worktree page in a new app 
   assert.deepEqual(posts, [])
 })
 
-test('back keys return to the repos page with the main row selected', async () => {
+test('back keys on the PRs page go to the home page', async () => {
   for (const [key, modifiers] of [['l'], ['Escape'], ['[', { metaKey: true }]]) {
     const app = await prsApp(prPageRepos, prsJson(prList))
 
     assert.ok(press(app, key, modifiers), `${key} is taken`)
     assert.equal(app.context.location.hash, '#/')
-    assert.equal(app.run('selectedWorktree'), sdkMain)
-
-    app.window.dispatch('hashchange')
-    assert.deepEqual(selectedRows(app), [prsHashOf(sdkMain)])
   }
+
+  const app = await prsApp(prPageRepos, prsJson(prList))
+  press(app, '?', { shiftKey: true })
+  assert.match(shortcutsText(app), /PRs page l Esc ⌘\[ Go back ↑ ↓ Move the selection/)
 })
 
 const encodedFixLogin = '%2Fs%2Fakka%2Fsdk%2Ffix-login'
@@ -4880,7 +4498,7 @@ test('back from a page entered from a PRs page restores its selection and filter
   }
 })
 
-test('a worktree page opened another way returns to the repos page', async () => {
+test('a worktree page opened another way returns to the home page', async () => {
   const repos = plain(prPageRepos)
   repos.repos[0].worktrees.push(fixLogin)
   const { app } = await checkoutApp(repos)
@@ -4890,11 +4508,10 @@ test('a worktree page opened another way returns to the repos page', async () =>
   await settle()
   app.window.dispatch('hashchange')
 
-  navigate(app, '#/')
+  navigate(app, '#/terminals')
   navigate(app, worktreeHashOf(fixLogin.path))
   assert.ok(press(app, 'Escape'))
   assert.equal(app.context.location.hash, '#/')
-  assert.equal(app.run('selectedWorktree'), fixLogin.path)
 })
 
 // Returns a standalone dashboard opened on `hash`, before any poll of an api that lists `sessions`, answers `api/repos` with `repos` and accepts every POST.
@@ -5005,7 +4622,7 @@ test('a failure to open the main board shows an error and keeps the standalone p
   assert.equal(app.context.location.hash, hash)
 })
 
-test('the new-window icon opens a main-window worktree page standalone before returning to Repos', async () => {
+test('the new-window icon opens a main-window worktree page standalone before returning to the home page', async () => {
   const { app } = await worktreeApp()
   const hash = app.context.location.hash
   const opened = []
@@ -5013,7 +4630,8 @@ test('the new-window icon opens a main-window worktree page standalone before re
   app.window.__TAURI__ = {
     core: {
       invoke: (command, args) => {
-        assert.equal(command, 'open_window')
+        if (command !== 'open_window') return Promise.resolve()
+
         opened.push(args.hash)
         return new Promise((resolve) => { finish = resolve })
       },
@@ -5031,7 +4649,8 @@ test('the new-window icon opens a main-window worktree page standalone before re
   await settle()
   assert.equal(app.context.location.hash, '#/')
   app.window.dispatch('hashchange')
-  assert.match(app.elements.get('page').innerHTML, /id="repo-list"/)
+  assert.deepEqual(pageIds(app), ['github-toolbar', 'github-view'])
+  assert.deepEqual(opened, [hash])
 })
 
 test('Cmd+N opens a main-window worktree page in its own window', async () => {
@@ -5285,6 +4904,20 @@ test('Cmd+click on a sessions page row opens the session in a new app window', a
 
   assert.deepEqual(opened, ['#/o/r/main/s1'])
   assert.equal(app.context.location.hash, '#/sessions')
+})
+
+test('a plain click on a sessions page row follows its link in the same window', async () => {
+  const app = await reposApp(worktreeRepos, [worktreeSession])
+  const opened = appOpener(app)
+
+  assert.equal(clickRow(app, 'card', '#/o/r/main/s1'), false)
+  assert.deepEqual(opened, [])
+})
+
+test('Cmd+click on a sessions page row in a browser keeps the browser behaviour', async () => {
+  const app = await reposApp(worktreeRepos, [worktreeSession])
+
+  assert.equal(clickRow(app, 'card', '#/o/r/main/s1', { metaKey: true }), false)
 })
 
 // Clicks the bar item link `href` with `modifiers`, and returns true when the page prevented the default.
@@ -5568,11 +5201,9 @@ async function finishCreate({ creates, repos }) {
   await settle()
 }
 
-test('b on a main row asks for a name, creates the worktree and opens its page', async () => {
-  const stubs = await newWorktreeApp('#/')
+test('b on the PRs page asks for a name, creates the worktree and opens its page', async () => {
+  const stubs = await newWorktreeApp(prsHashOf(sdkMain))
   const { app, posts } = stubs
-  press(app, 'ArrowDown')
-  assert.equal(app.run('selectedWorktree'), sdkMain)
 
   assert.ok(press(app, 'b'))
   assert.equal(app.elements.get('modal').open, true)
@@ -5583,7 +5214,7 @@ test('b on a main row asks for a name, creates the worktree and opens its page',
   enterName(app, ' fix it ')
   await settle()
   assert.deepEqual(posts, [newWorktreeUrl('fix it')])
-  assert.equal(app.context.location.hash, '#/')
+  assert.equal(app.context.location.hash, prsHashOf(sdkMain))
 
   await finishCreate(stubs)
   assert.equal(app.context.location.hash, worktreeHashOf(newWorktree.path))
@@ -5630,17 +5261,6 @@ test('a cancelled or blank name creates nothing', async () => {
     assert.equal(app.run('creatingWorktree'), false)
     assert.equal(app.context.location.hash, prsHashOf(sdkMain))
   }
-})
-
-test('b does nothing on a worktree row', async () => {
-  const { app, posts } = await newWorktreeApp('#/')
-  press(app, 'ArrowDown')
-  press(app, 'ArrowDown')
-  assert.equal(app.run('selectedWorktree'), pathA)
-
-  assert.equal(press(app, 'b'), false)
-  assert.notEqual(app.elements.get('modal').open, true)
-  assert.deepEqual(posts, [])
 })
 
 test('a failed creation tells the error and stays on the page', async () => {
@@ -5728,12 +5348,11 @@ async function finishRemoval({ removals, repos }) {
   await settle()
 }
 
-test('d on a worktree row asks, removes the worktree and selects its main row', async () => {
-  const stubs = await removeWorktreeApp('#/')
-  const { app, posts } = stubs
-  press(app, 'ArrowDown')
-  press(app, 'ArrowDown')
-  assert.equal(app.run('selectedWorktree'), pathA)
+test('d on a worktree page removes the worktree, drops its tabs and returns to the home page', async () => {
+  const stubs = await removeWorktreeApp(worktreeHashOf(pathA))
+  const { app, posts, sockets } = stubs
+  clickTab(app, 'add')
+  assert.equal(tabsOf(app, pathA).length, 1)
 
   assert.ok(press(app, 'd'))
   await confirmRemoval(app)
@@ -5742,29 +5361,12 @@ test('d on a worktree row asks, removes the worktree and selects its main row', 
 
   await finishRemoval(stubs)
   assert.equal(app.context.location.hash, '#/')
-  assert.equal(app.run('selectedWorktree'), sdkMain)
   assert.equal(app.run('removingWorktree'), false)
-  assert.doesNotMatch(app.elements.get('repo-list').innerHTML, /alpha/)
-})
-
-test('d on a worktree page removes the worktree, drops its tabs and returns to the repos page', async () => {
-  const stubs = await removeWorktreeApp(worktreeHashOf(pathA))
-  const { app, posts, sockets } = stubs
-  clickTab(app, 'add')
-  assert.equal(tabsOf(app, pathA).length, 1)
-
-  assert.ok(press(app, 'd'))
-  await confirmRemoval(app)
-  await finishRemoval(stubs)
-
-  assert.deepEqual(posts, [removeAlphaUrl])
-  assert.equal(app.context.location.hash, '#/')
-  assert.equal(app.run('selectedWorktree'), sdkMain)
   assert.equal(app.run(`worktreeTerms.has(${JSON.stringify(pathA)})`), false)
   assert.equal(sockets[0].closed, true)
 })
 
-test('d on a session item removes its worktree and returns to the repos page', async () => {
+test('d on a session item removes its worktree and returns to the home page', async () => {
   const stubs = await removeWorktreeApp('#/o/r/main/s1', [sessionAt('s1', pathA)])
   const { app, posts } = stubs
 
@@ -5776,17 +5378,12 @@ test('d on a session item removes its worktree and returns to the repos page', a
   assert.equal(app.context.location.hash, '#/')
 })
 
-test('d does nothing on a main row or a session without a listed worktree', async () => {
-  const main = await removeWorktreeApp('#/')
-  press(main.app, 'ArrowDown')
-  assert.equal(main.app.run('selectedWorktree'), sdkMain)
-  assert.equal(press(main.app, 'd'), false)
-  assert.notEqual(main.app.elements.get('modal').open, true)
+test('d does nothing on a session without a listed worktree', async () => {
+  const { app, posts } = await removeWorktreeApp('#/o/r/main/s1', [sessionAt('s1', '/s/elsewhere')])
 
-  const unlisted = await removeWorktreeApp('#/o/r/main/s1', [sessionAt('s1', '/s/elsewhere')])
-  assert.equal(press(unlisted.app, 'd'), false)
-  assert.notEqual(unlisted.app.elements.get('modal').open, true)
-  assert.deepEqual([...main.posts, ...unlisted.posts], [])
+  assert.equal(press(app, 'd'), false)
+  assert.notEqual(app.elements.get('modal').open, true)
+  assert.deepEqual(posts, [])
 })
 
 test('a cancelled removal posts nothing', async () => {
@@ -6059,7 +5656,7 @@ test('a tab with no match has no selection and Enter does nothing', async () => 
   assert.equal(jumpText(app), 'No match.')
   assert.equal(app.run('jump.selected'), null)
   assert.equal(press(app, 'Enter'), false)
-  assert.equal(app.context.location.hash, '#/')
+  assert.equal(app.context.location.hash, '#/sessions')
 })
 
 test('Shift+Cmd+] with the pop-up closed still shows the next terminal tab', async () => {
@@ -6081,7 +5678,7 @@ test('Esc and a native close clear the pop-up', async () => {
   assert.ok(press(app, 'Escape'))
   assert.equal(app.run('jump'), null)
   assert.equal(jumpDialog(app).open, false)
-  assert.equal(app.context.location.hash, '#/')
+  assert.equal(app.context.location.hash, '#/sessions')
 
   press(app, 'b', shift)
   jumpDialog(app).close()
@@ -6151,6 +5748,10 @@ test('the pop-up row and the bar item color their square', async () => {
   await app.run('poll()')
   assert.match(bar(), /<span class="term-busy" title="busy">▣<\/span> Terminal<\/a>/)
   assert.match(list(), /<span class="jump-term term-busy" title="busy">▣<\/span>/)
+
+  assert.match(html, /\.term-attention \{ color: var\(--critical\); \}/)
+  assert.match(html, /\.term-idle \{ color: var\(--accent\); \}/)
+  assert.match(html, /\.term-busy \{ color: var\(--ink-2\); \}/)
 })
 
 test('the header and pop-up Terminals tabs show ⚠ while a tab needs attention', async () => {
@@ -6162,12 +5763,12 @@ test('the header and pop-up Terminals tabs show ⚠ while a tab needs attention'
 
   assert.ok(app.elements.get('tabs').innerHTML.includes(`>Terminals ${alert}</a>`))
   assert.ok(app.elements.get('jump-tabs').innerHTML.includes(`>Terminals ${alert}</button>`))
-  assert.equal(headerText(), 'Repos Sessions Terminals ⚠')
+  assert.equal(headerText(), 'Sessions Terminals ⚠')
   assert.equal(jumpTabsText(app), 'Branches Worktrees Terminals ⚠')
 
   running = [shellOnServer, { ...claudeOnServer, state: 'idle' }]
   await app.run('poll()')
-  assert.equal(headerText(), 'Repos Sessions Terminals')
+  assert.equal(headerText(), 'Sessions Terminals')
   assert.equal(jumpTabsText(app), 'Branches Worktrees Terminals')
 })
 
@@ -6184,9 +5785,6 @@ test('closing a tab in attention drops the red marks', async () => {
   assert.deepEqual(marked(), [])
 
   press(app, 'Escape')
-  navigate(app, '#/')
-  assert.doesNotMatch(app.elements.get('repo-list').innerHTML, /term-attention/)
-
   navigate(app, '#/terminals')
   assert.doesNotMatch(app.elements.get('page').innerHTML, /term-attention/)
 })
@@ -6214,10 +5812,7 @@ test('the pop-up shortcuts open the pop-up from a terminal tab and from the edit
 })
 
 test('keys in the pop-up do not reach the page', async () => {
-  const app = await reposApp(selectRepos)
-  press(app, 'ArrowDown')
-  press(app, 'ArrowDown')
-  assert.equal(app.run('selectedWorktree'), pathA)
+  const app = await reposApp(selectRepos, [], worktreeHashOf(pathA))
 
   press(app, 'w', shift)
   assert.equal(press(app, 'd'), false)
@@ -6227,7 +5822,7 @@ test('keys in the pop-up do not reach the page', async () => {
   assert.ok(press(app, 'ArrowDown'))
   assert.ok(press(app, 'ArrowDown'))
   assert.equal(app.run('jump.selected'), pathC)
-  assert.equal(app.run('selectedWorktree'), pathA)
+  assert.equal(app.context.location.hash, worktreeHashOf(pathA))
 
   assert.equal(press(app, '?', { shiftKey: true }), false)
   assert.notEqual(shortcutsDialog(app).open, true)
@@ -6264,7 +5859,7 @@ test('the modal above the pop-up keeps its keys', async () => {
   assert.equal(press(app, 'Enter'), false)
   assert.equal(press(app, 'Enter', cmd), false)
   await settle()
-  assert.equal(app.context.location.hash, '#/')
+  assert.equal(app.context.location.hash, '#/sessions')
   assert.deepEqual(opened, [])
 
   assert.equal(press(app, 'Escape'), false)
@@ -6404,7 +5999,7 @@ test('Cmd+Enter in the main window opens the row in its own window', async () =>
   await settle()
 
   assert.deepEqual(opened, [worktreeHashOf(pathA)])
-  assert.equal(app.context.location.hash, '#/')
+  assert.equal(app.context.location.hash, '#/sessions')
   assert.equal(app.run('jump'), null)
   assert.equal(jumpDialog(app).open, false)
 })
@@ -6448,7 +6043,7 @@ test('the shortcuts dialog lists the pop-up tab keys', () => {
   app.context.location.hash = '#/'
   press(app, '?', { shiftKey: true })
 
-  assert.match(shortcutsText(app), /Pop-up ↑ ↓ Move the selection ⇧⌘\[ ⇧⌘\] Show the previous or next tab Enter Open the selected row ⌘Enter Open the selected row in its own window Esc Close the pop-up Repos /)
+  assert.match(shortcutsText(app), /Pop-up ↑ ↓ Move the selection ⇧⌘\[ ⇧⌘\] Show the previous or next tab Enter Open the selected row ⌘Enter Open the selected row in its own window Esc Close the pop-up Filter field /)
 })
 
 const githubMain = '/a/main'
@@ -6617,13 +6212,13 @@ const githubBounds = { x: 0, y: 96, width: 1200, height: 640 }
 const githubReply = (url, error = null) => response(JSON.stringify({ url, error }))
 
 // Returns the `github_view_show` call of `url` for `githubWorktree` at `bounds` and `zoom`, in a viewport that ends at the bottom of `bounds`.
-const githubShow = (url, bounds = githubBounds, zoom = 1) => ['github_view_show', { path: githubWorktree, url, ...bounds, viewportHeight: bounds.y + bounds.height, zoom }]
+const githubShow = (url, bounds = githubBounds, zoom = 1) => ['github_view_show', { view: 'worktree', path: githubWorktree, url, ...bounds, viewportHeight: bounds.y + bounds.height, zoom }]
 
 const githubPlaceholder = (app) => app.elements.get('github-view').textContent
 
-// Returns a dashboard in the app on the repos page after one poll, the `[command, args]` of each invoke, and the pending `api/github` fetches as `{ url, answer }`.
+// Returns a dashboard in the app on `hash` after one poll, the `[command, args]` of each invoke, and the pending `api/github` fetches as `{ url, answer }`.
 // Each invoke settles as `invokeReply(command)` does, and `api/repos` lists `repos`.
-async function githubViewApp(invokeReply = async () => {}, repos = githubRepos) {
+async function githubViewApp(invokeReply = async () => {}, repos = githubRepos, hash = '#/sessions') {
   const invoked = []
   const fetches = []
   const invoke = (command, args) => {
@@ -6642,7 +6237,7 @@ async function githubViewApp(invokeReply = async () => {}, repos = githubRepos) 
       return response('', false, { status: 404 })
     },
   })
-  app.context.location.hash = '#/'
+  app.context.location.hash = hash
   await app.run('poll()')
   return { app, invoked, fetches }
 }
@@ -6684,13 +6279,13 @@ test('a failed fetch shows the error', async () => {
 test('leaving the route hides the view', async () => {
   const { app, invoked } = await shownGithubApp()
 
-  navigate(app, '#/')
+  navigate(app, '#/sessions')
   await settle()
-  assert.deepEqual(invoked, [githubShow(githubPr), ['github_view_hide']])
+  assert.deepEqual(invoked, [githubShow(githubPr), ['github_view_hide', { view: 'worktree' }]])
 
   await app.run('poll()')
   await settle()
-  assert.deepEqual(invoked, [githubShow(githubPr), ['github_view_hide']])
+  assert.deepEqual(invoked, [githubShow(githubPr), ['github_view_hide', { view: 'worktree' }]])
 })
 
 test('leaving the route hides the view only once the pending show settles', async () => {
@@ -6700,13 +6295,13 @@ test('leaving the route hides the view only once the pending show settles', asyn
   }
   const { app, invoked } = await shownGithubApp(githubPr, invokeReply)
 
-  navigate(app, '#/')
+  navigate(app, '#/sessions')
   await settle()
   assert.deepEqual(invoked, [githubShow(githubPr)])
 
   finishShow()
   await settle()
-  assert.deepEqual(invoked, [githubShow(githubPr), ['github_view_hide']])
+  assert.deepEqual(invoked, [githubShow(githubPr), ['github_view_hide', { view: 'worktree' }]])
 })
 
 test('a worktree gone from the repos hides the view', async () => {
@@ -6717,7 +6312,7 @@ test('a worktree gone from the repos hides the view', async () => {
   await app.run('poll()')
   await settle()
   assert.equal(app.context.location.hash, githubHashOf(githubWorktree))
-  assert.deepEqual(invoked, [githubShow(githubPr), ['github_view_hide']])
+  assert.deepEqual(invoked, [githubShow(githubPr), ['github_view_hide', { view: 'worktree' }]])
 })
 
 test('pop-ups hide and restore the view', async () => {
@@ -6732,11 +6327,11 @@ test('pop-ups hide and restore the view', async () => {
     invoked.length = 0
     open()
     await settle()
-    assert.deepEqual(invoked, [['github_view_hide']])
+    assert.deepEqual(invoked, [['github_view_hide', { view: 'worktree' }]])
 
     close()
     await settle()
-    assert.deepEqual(invoked, [['github_view_hide'], githubShow(githubPr)])
+    assert.deepEqual(invoked, [['github_view_hide', { view: 'worktree' }], githubShow(githubPr)])
   }
 })
 
@@ -6763,12 +6358,12 @@ test('the GitHub item of another worktree hides the view while it loads or fails
   await settle()
   assert.deepEqual(fetches.map(({ url }) => url), ['api/github?path=%2Fa%2Ffeature%20x%2By', 'api/github?path=%2Fa%2Fother'])
   assert.equal(githubPlaceholder(app), 'loading…')
-  assert.deepEqual(invoked, [githubShow(githubPr), ['github_view_hide']])
+  assert.deepEqual(invoked, [githubShow(githubPr), ['github_view_hide', { view: 'worktree' }]])
 
   fetches[1].answer(githubReply(null, 'gh: not logged in'))
   await settle()
   assert.equal(githubPlaceholder(app), 'gh: not logged in')
-  assert.deepEqual(invoked, [githubShow(githubPr), ['github_view_hide']])
+  assert.deepEqual(invoked, [githubShow(githubPr), ['github_view_hide', { view: 'worktree' }]])
 })
 
 test('a show error shows in the placeholder', async () => {
@@ -6779,7 +6374,7 @@ test('a show error shows in the placeholder', async () => {
   const { app, invoked } = await shownGithubApp(githubPr, invokeReply)
 
   assert.equal(githubPlaceholder(app), error)
-  assert.deepEqual(invoked, [githubShow(githubPr), ['github_view_hide']])
+  assert.deepEqual(invoked, [githubShow(githubPr), ['github_view_hide', { view: 'worktree' }]])
 
   await app.run('poll()')
   await settle()
@@ -6794,7 +6389,7 @@ test('the URL is fetched once per path', async () => {
   await settle()
 
   assert.equal(fetches.length, 1)
-  assert.deepEqual(invoked, [githubShow(githubPr), ['github_view_hide'], githubShow(githubPr)])
+  assert.deepEqual(invoked, [githubShow(githubPr), ['github_view_hide', { view: 'worktree' }], githubShow(githubPr)])
 })
 
 test('the view follows its placeholder on resize and font-size change', async () => {
@@ -6825,4 +6420,144 @@ test('a text size step on the GitHub item zooms the view and stores the zoom', a
   assert.deepEqual(invoked, [githubShow(githubPr), githubShow(githubPr, githubBounds, 1.1)])
   assert.equal(app.run('fontSize'), 18)
   assert.equal(app.run("localStorage.getItem('jam-board-github-zoom')"), '1.1')
+})
+
+// Returns the dashboard of `githubViewApp(invokeReply)` on the home page.
+async function homeApp(invokeReply = undefined) {
+  return githubViewApp(invokeReply, undefined, '#/')
+}
+
+// The bounds of the home view placeholder in the dashboards of `homeApp`.
+const homeBounds = githubBounds
+
+// Returns the `github_view_show` call of the home view at `bounds` and `zoom`, in a viewport that ends at the bottom of `bounds`.
+const homeShow = (bounds = homeBounds, zoom = 1) => ['github_view_show', { view: 'home', path: 'github:pulls', url: 'https://github.com/pulls', ...bounds, viewportHeight: bounds.y + bounds.height, zoom }]
+
+const homeHide = ['github_view_hide', { view: 'home' }]
+
+test('the home page holds the toolbar above the view', async () => {
+  const { app, invoked } = await homeApp()
+  await settle()
+
+  assert.deepEqual(pageIds(app), ['github-toolbar', 'github-view'])
+  assert.equal(app.elements.get('github-toolbar').innerHTML, '')
+  assert.match(app.elements.get('page').innerHTML, /^<div class="home-page"><nav class="github-toolbar" id="github-toolbar"><\/nav>/)
+  assert.deepEqual(invoked, [homeShow()])
+})
+
+test('leaving the home page hides the home view', async () => {
+  const { app, invoked } = await homeApp()
+
+  navigate(app, '#/sessions')
+  await settle()
+  assert.deepEqual(invoked, [homeShow(), homeHide])
+})
+
+test('a return to the home page sends the same key', async () => {
+  const { app, invoked, fetches } = await homeApp()
+
+  navigate(app, githubHashOf(githubWorktree))
+  fetches[0].answer(githubReply(githubPr))
+  await settle()
+  navigate(app, '#/')
+  await settle()
+
+  assert.deepEqual(invoked, [homeShow(), homeHide, githubShow(githubPr), homeShow()])
+})
+
+test('polls do not resend the home view', async () => {
+  const { app, invoked } = await homeApp()
+
+  await app.run('poll()')
+  await app.run('poll()')
+  await settle()
+  assert.deepEqual(invoked, [homeShow()])
+})
+
+test('a pop-up hides the home view and its close shows it again', async () => {
+  const { app, invoked } = await homeApp()
+  const popUps = [
+    [() => press(app, 'w', { metaKey: true, shiftKey: true }), () => press(app, 'Escape')],
+    [() => press(app, '?', { shiftKey: true }), () => press(app, '?', { shiftKey: true })],
+    [() => app.run('tell("Done.")'), () => closeModal(app, 'ok')],
+  ]
+
+  for (const [open, close] of popUps) {
+    open()
+    await settle()
+    assert.deepEqual(invoked.at(-1), homeHide)
+
+    close()
+    await settle()
+    assert.deepEqual(invoked.at(-1), homeShow())
+  }
+  assert.equal(invoked.length, 7)
+})
+
+test('a resize moves the home view', async () => {
+  const { app, invoked } = await homeApp()
+
+  app.geometry.pageHeight = 500
+  app.window.dispatch('resize')
+  await settle()
+  assert.deepEqual(invoked, [homeShow(), homeShow({ ...homeBounds, height: 500 })])
+
+  app.window.dispatch('resize')
+  await settle()
+  assert.equal(invoked.length, 2)
+})
+
+test('the zoom keys step the home view zoom in the app', async () => {
+  const { app, invoked } = await homeApp()
+
+  app.run('stepTextSize(1)')
+  await settle()
+  assert.deepEqual(invoked, [homeShow(), homeShow(homeBounds, 1.1)])
+  assert.equal(app.run('fontSize'), 18)
+  assert.equal(app.run("localStorage.getItem('jam-board-github-zoom')"), '1.1')
+})
+
+test('the zoom keys step the board font on the browser home page', () => {
+  const app = dashboard({ hash: '#/' })
+
+  assert.ok(press(app, '=', { metaKey: true }))
+  assert.equal(app.run('fontSize'), 19)
+})
+
+test('session keys work on the browser home page', async () => {
+  const app = await reposApp({ error: null, repos: [] }, [session], '#/')
+
+  assert.ok(press(app, 'ArrowDown'))
+  assert.ok(press(app, 'Enter'))
+  assert.equal(app.context.location.hash, app.run('sessionHref(state.sessions[0])'))
+})
+
+test('a failed show of the home view shows its error until the home page is left', async () => {
+  const error = 'Cannot read githubSignInHosts from /home/me/.jam-factory/config.json: bad entry *okta.com'
+  let fail = true
+  const invokeReply = async (command) => {
+    if (command === 'github_view_show' && fail) throw error
+  }
+  const { app, invoked } = await homeApp(invokeReply)
+  await settle()
+
+  assert.equal(githubPlaceholder(app), error)
+  assert.deepEqual(invoked, [homeShow(), homeHide])
+
+  await app.run('poll()')
+  await settle()
+  assert.equal(invoked.length, 2)
+
+  fail = false
+  navigate(app, '#/sessions')
+  navigate(app, '#/')
+  await settle()
+  assert.equal(githubPlaceholder(app), '')
+  assert.deepEqual(invoked, [homeShow(), homeHide, homeShow()])
+})
+
+test('the shortcuts dialog has no Repos section', () => {
+  const app = dashboard()
+
+  assert.deepEqual(plain(app.run('SHORTCUTS.filter((section) => section.title === "Repos")')), [])
 })

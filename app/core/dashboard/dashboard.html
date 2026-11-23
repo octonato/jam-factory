@@ -137,18 +137,8 @@
   }
 
   .rows { display: grid; gap: 8px; }
-  .rows.nested { margin-top: 8px; margin-left: 24px; }
-  .rows.nested .empty { margin: 0; }
   .empty { color: var(--muted); }
   .config-error { color: var(--critical); }
-
-  .config-example {
-    padding: 10px 12px;
-    font: 0.857rem/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    background: var(--surface);
-    border: 1px solid var(--line);
-    border-radius: 6px;
-  }
 
   .org-filter {
     display: flex;
@@ -206,7 +196,6 @@
   .row.waiting { --tone: var(--warning); }
   .row.blocked { --tone: var(--critical); }
   .row.done { --tone: var(--good); }
-  .row.main.error { --tone: var(--muted); color: var(--muted); }
 
   .row:has(> a.body:hover),
   .row.pr:hover,
@@ -216,7 +205,6 @@
   }
 
   .row.card.selected,
-  .row.main.selected,
   .row.worktree.selected,
   .row.pr.selected,
   .row.wip.selected {
@@ -234,7 +222,6 @@
     text-decoration: none;
   }
 
-  .row.main .body,
   .row.worktree .body,
   .row.pr .body,
   .row.wip .body {
@@ -318,7 +305,6 @@
   .row .id { font-weight: 600; }
   .row .path { color: var(--muted); }
   .row .label { color: var(--ink-2); font-size: 0.857rem; }
-  .row .reason { font-size: 0.857rem; }
   .row .warn { color: var(--warning); }
   .row .marker { color: var(--accent); }
   .row .added { color: var(--good); }
@@ -379,6 +365,14 @@
   .session-page.github-item {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: auto auto minmax(0, 1fr);
+  }
+
+  #page:has(> .home-page) { overflow: hidden; }
+
+  .home-page {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
   }
 
   #metro-pane {
@@ -673,6 +667,15 @@
     grid-column: 1 / -1;
     align-items: center;
     gap: 4px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .github-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-height: calc(1.2rem + 23px);
     padding: 8px 12px;
     border-bottom: 1px solid var(--line);
   }
@@ -1111,7 +1114,7 @@
 <body>
 <header id="board-header">
   <h1>Jam Board</h1>
-  <nav class="tabs" id="tabs"><a class="tab" href="#/" aria-current="page">Repos</a><a class="tab" href="#/sessions">Sessions</a><a class="tab" href="#/terminals">Terminals</a></nav>
+  <nav class="tabs" id="tabs"><a class="tab" href="#/sessions">Sessions</a><a class="tab" href="#/terminals">Terminals</a></nav>
   <span id="status">loading…</span>
   <div class="font-size">
     <button type="button" id="font-down" title="Smaller text">A−</button>
@@ -1312,6 +1315,10 @@ const REMOVE_WORKTREE_KEY = 'd'
 const PR_CHECKOUT_TITLE = 'Check out and open worktree page (c)'
 // The `item` of the worktree page while the GitHub item shows.
 const GITHUB_ITEM = 'github'
+// The page the home view loads.
+const HOME_URL = 'https://github.com/pulls'
+// The fixed `path` key of the home view.
+const HOME_KEY = 'github:pulls'
 // The ids of the pop-ups that hide the GitHub view while they show: the jump pop-up, the modal and the shortcuts help.
 const GITHUB_OVERLAYS = ['jump', 'modal', 'shortcuts']
 const CI_LABELS = { none: 'no CI', pending: 'CI running', passing: 'CI passing', failing: 'CI failing' }
@@ -1357,21 +1364,6 @@ const SHORTCUTS = [
       { keys: ['Enter'], text: 'Open the selected row' },
       { keys: ['⌘Enter'], text: 'Open the selected row in its own window' },
       { keys: ['Esc'], text: 'Close the pop-up' },
-    ],
-  },
-  {
-    title: 'Repos',
-    rows: [
-      { keys: ['↑', '↓'], text: 'Move the selection' },
-      { keys: ['/'], text: 'Filter the checkouts' },
-      { keys: ['Enter'], text: 'Open the selected row' },
-      { keys: ['b'], text: 'Create a worktree of the selected main checkout' },
-      { keys: ['d'], text: 'Remove the selected worktree' },
-      { keys: ['e'], text: 'Open the selected worktree in Zed' },
-      { keys: ['i'], text: 'Open the selected worktree in IntelliJ' },
-      { keys: ['o'], text: 'Open the selected worktree on GitHub' },
-      { keys: ['g'], text: 'Open lazygit in a tab of the selected worktree' },
-      { keys: ['t'], text: 'Open a shell in a tab of the selected worktree' },
     ],
   },
   {
@@ -1454,7 +1446,7 @@ const SHORTCUTS = [
   {
     title: 'PRs page',
     rows: [
-      { keys: ['l', 'Esc', '⌘['], text: 'Go back to the repos' },
+      { keys: ['l', 'Esc', '⌘['], text: 'Go back' },
       { keys: ['↑', '↓'], text: 'Move the selection' },
       { keys: ['/'], text: 'Filter the worktrees and PRs' },
       { keys: ['b'], text: 'Create a worktree' },
@@ -1468,8 +1460,9 @@ const SHORTCUTS = [
     ],
   },
 ]
+// The header tabs, where the GitHub tab shows only in the app.
 const TABS = [
-  { kind: 'repos', label: 'Repos', href: '#/' },
+  { kind: 'home', label: 'GitHub', href: '#/' },
   { kind: 'sessions', label: 'Sessions', href: '#/sessions' },
   { kind: 'terminals', label: 'Terminals', href: '#/terminals' },
 ]
@@ -1479,14 +1472,6 @@ const TERM_STATES = { attention: 'needs you', busy: 'busy', idle: 'idle' }
 const TAKEN_CODE = 4001
 // The bytes a terminal tab sends for Shift+Enter: Escape then Return.
 const SHIFT_ENTER = '\x1b\r'
-const REPOS_HELP = `
-  <p class="empty">Add <code>repos</code>, a list of paths to main checkouts, to <code>~/.jam-factory/config.json</code>:</p>
-  <pre class="config-example">{
-  "repos": [
-    "~/Sources/akka/sdk/main",
-    "~/Sources/octonato/jam-factory/main"
-  ]
-}</pre>`
 
 const $ = (id) => document.getElementById(id)
 const state = { sessions: [], problems: [], failedChecks: [] }
@@ -1502,14 +1487,16 @@ let worktreeStats = null
 let worktreePrs = null
 let tabsHtml = ''
 let listView = { html: '', el: null }
-let reposView = { el: null, list: '' }
+let homeView = { el: null }
 let sessionView = { dir: null, card: '', metro: '', head: '', stops: [], selected: -1 }
 // The shown worktree page, where `item` is the dir of the selected session, `GITHUB_ITEM` for the GitHub item, or null for the Terminal item.
 let worktreeView = { path: null, el: null, item: null, card: '', bar: '', tabs: '' }
 // The GitHub item last entered: its worktree path, its URL or the error that replaced it, whether its fetch runs, and the number of its last fetch.
 let githubTab = { path: null, url: null, error: null, loading: false, seq: 0 }
-// The GitHub view of this window: `shown` while the page asked it to show, and the `bounds` and zoom last sent.
-let githubView = { shown: false, bounds: null }
+// The error of the last failed show of the home view, or null.
+let homeError = null
+// The GitHub view the page last sent: its `view`, `home` or `worktree`, `shown` while the page asked it to show, and the `bounds` and zoom last sent.
+let githubView = { view: null, shown: false, bounds: null }
 // The GitHub view commands sent so far, each run after the one before.
 let githubQueue = Promise.resolve()
 let prsView = { path: null, el: null, card: '', list: '' }
@@ -1539,11 +1526,9 @@ let githubZoom = 1
 let leftWidth = null
 let selectedDir = null
 // The page the shown worktree page was entered from: `{ hash, selectedItem, prFilter, dir }`, or null.
-// `hash` is `#/sessions`, a PRs hash, or null for the repos page. `dir` is the dir of the session last shown on the page.
+// `hash` is `#/sessions`, a PRs hash, or null to go back to the home page. `dir` is the dir of the session last shown on the page.
 let pageOrigin = null
-let selectedWorktree = null
 let orgFilter = null
-let repoFilter = ''
 // The selected row of the PRs page: the number of a PR, the path of a worktree without a PR, or null.
 let selectedItem = null
 let prFilter = ''
@@ -1731,6 +1716,17 @@ async function loadRepos() {
   }
 }
 
+// Returns the problem lines of `reposState`: its error, the help for an empty `repos` list, or one line per checkout that fails to load.
+function reposProblems() {
+  if (reposState === null) return []
+  if (reposState.error !== null) return [reposState.error]
+  if (reposState.repos.length === 0) return ['Add repos, a list of paths to main checkouts, to ~/.jam-factory/config.json']
+
+  return reposState.repos
+    .filter((repo) => repo.error !== null)
+    .map(({ org, repo, path, error }) => `${org}/${repo} (${shortPath(path)}): ${error}`)
+}
+
 // Shows the `api/version` reply in the footer as `v{version}`, or nothing when the reply holds no version.
 async function loadVersion() {
   let version = null
@@ -1842,10 +1838,10 @@ async function loadTerminals() {
   }
 }
 
-// Returns the page of `hash`: the repos, the sessions, the terminals, a worktree with its path, the GitHub item of a worktree with its path, the PRs of a main checkout with its path, or a session with its file path.
+// Returns the page of `hash`: the home page in the app or the sessions in a browser, the sessions, the terminals, a worktree with its path, the GitHub item of a worktree with its path, the PRs of a main checkout with its path, or a session with its file path.
 function parseRoute(hash) {
   const segments = hash.replace(/^#\/?/, '').split('/').filter((s) => s !== '').map(decode)
-  if (segments.length === 0) return { kind: 'repos' }
+  if (segments.length === 0) return { kind: window.__TAURI__ === undefined ? 'sessions' : 'home' }
   if (segments.length === 1 && segments[0] === 'sessions') return { kind: 'sessions' }
   if (segments.length === 1 && segments[0] === 'terminals') return { kind: 'terminals' }
   if (segments.length === 2 && segments[0] === 'worktree') return { kind: 'worktree', path: segments[1] }
@@ -2117,56 +2113,6 @@ function onCardAction(event) {
   runAction(session, button.dataset.action)
 }
 
-// Returns the row of `worktree`, outlined when `selected`: a link to its page with its branch or short sha, its short path, its session count and its open terminal count in the color of its state.
-function worktreeRowHtml(worktree, selected) {
-  const count = sessionsOf(worktree.path).length
-  const terms = worktreeTerms.get(worktree.path)?.tabs.length ?? 0
-  const termCount = terms > 0 ? ` · ${termMarkHtml(worktreeState(worktree.path), `▣ ${terms}`)}` : ''
-  return `
-    <div class="row worktree${selected ? ' selected' : ''}">
-      <a class="body" href="${escape(worktreeHash(worktree.path))}">
-        <span class="name"><span class="id">${escape(worktree.branch ?? worktree.head ?? '')}</span> <span class="path">${escape(shortPath(worktree.path))}</span></span>
-        <span class="label">${count} ${count === 1 ? 'session' : 'sessions'}${termCount}</span>
-      </a>
-    </div>`
-}
-
-// Returns the main row of `repo`, outlined when `selected`: a link to its PRs page with its name and branch.
-function mainRowHtml(repo, selected) {
-  return `
-    <div class="row main${selected ? ' selected' : ''}">
-      <a class="body" href="${escape(prsHash(repo.path))}">
-        <span class="name"><span class="id">${escape(`${repo.org}/${repo.repo}`)}</span> <span class="path">${escape(repo.branch ?? '')}</span></span>
-        <span class="label">PRs ›</span>
-      </a>
-    </div>`
-}
-
-// Returns the greyed main row of `repo`, which has an error: its name, its short path and the error.
-function mainErrorRowHtml(repo) {
-  return `
-    <div class="row main error">
-      <div class="body">
-        <span class="name"><span class="id">${escape(`${repo.org}/${repo.repo}`)}</span> <span class="path">${escape(shortPath(repo.path))}</span></span>
-        <span class="reason">${escape(repo.error)}</span>
-      </div>
-    </div>`
-}
-
-// Returns the checkout `repo` as its main row, then the indented rows of `worktrees` or `No worktrees.`. A checkout with an error has a greyed main row and no worktree rows.
-function repoGroupHtml(repo, worktrees) {
-  if (repo.error !== null) return `<section class="org-group">${mainErrorRowHtml(repo)}</section>`
-
-  const rows = worktrees.length > 0
-    ? worktrees.map((worktree) => worktreeRowHtml(worktree, worktree.path === selectedWorktree)).join('')
-    : '<p class="empty">No worktrees.</p>'
-  return `
-    <section class="org-group">
-      ${mainRowHtml(repo, repo.path === selectedWorktree)}
-      <div class="rows nested">${rows}</div>
-    </section>`
-}
-
 // Returns the lowercased words of `query`.
 function filterWords(query) {
   return query.toLowerCase().split(/\s+/).filter((word) => word !== '')
@@ -2178,88 +2124,11 @@ function holdsWords(text, words) {
   return words.every((word) => lower.includes(word))
 }
 
-// Returns the checkouts the filter shows, in config order, each with its shown worktrees.
-function shownRepos() {
-  const words = filterWords(repoFilter)
-  return (reposState?.repos ?? []).flatMap((repo) => {
-    const worktrees = repo.worktrees.filter((worktree) =>
-      holdsWords(`${shortPath(worktree.path)} ${worktree.branch ?? worktree.head ?? ''}`, words))
-    const shown = worktrees.length > 0 || holdsWords(`${repo.org}/${repo.repo}`, words)
-    return shown ? [{ repo, worktrees }] : []
-  })
-}
-
-// Returns the selectable rows of the repos page in display order as `{ repo, worktree, path }`, where a main row has a null `worktree`. A checkout with an error has no rows.
-function shownRows() {
-  return shownRepos().flatMap(({ repo, worktrees }) => {
-    if (repo.error !== null) return []
-
-    const main = { repo, worktree: null, path: repo.path }
-    return [main, ...worktrees.map((worktree) => ({ repo, worktree, path: worktree.path }))]
-  })
-}
-
-// Returns the shown row whose path is `selectedWorktree`, or undefined.
-function selectedRow() {
-  return shownRows().find((row) => row.path === selectedWorktree)
-}
-
-// Returns the row Enter in the repos filter opens with no selection: the first shown worktree row, else the first shown main row.
-function firstFilterRow() {
-  const rows = shownRows()
-  return rows.find((row) => row.worktree !== null) ?? rows[0]
-}
-
-// Returns the page a repos page row opens: the PRs page for a main row, the worktree page for a worktree row.
-function rowHash(row) {
-  return row.worktree === null ? prsHash(row.path) : worktreeHash(row.path)
-}
-
-// Returns the checkouts of the repos page: the config error, the help for an empty config, or one group per shown checkout.
-function reposHtml() {
-  if (reposState === null) return '<p class="empty">loading…</p>'
-  if (reposState.error !== null) return `<p class="config-error">${escape(reposState.error)}</p>`
-  if (reposState.repos.length === 0) return REPOS_HELP
-
-  const repos = shownRepos()
-  if (repos.length === 0) return '<p class="empty">No worktree matches.</p>'
-  return repos.map(({ repo, worktrees }) => repoGroupHtml(repo, worktrees)).join('')
-}
-
-// Renders the repos page: the filter field above the shown checkouts. A page already shown keeps its field. A row no longer shown loses the selection.
-function renderRepos() {
-  if (reposView.el === null || reposView.el !== $('page').firstElementChild) {
-    $('page').innerHTML = `
-      <div class="column">
-        <input type="search" class="repo-filter" id="repo-filter" placeholder="Filter by repo or branch" autocomplete="off" spellcheck="false">
-        <div id="repo-list"></div>
-      </div>`
-    $('repo-filter').value = repoFilter
-    $('repo-filter').addEventListener('input', onRepoFilter)
-    $('repo-list').addEventListener('click', onRowClick)
-    reposView = { el: $('page').firstElementChild, list: '' }
-  }
-
-  if (selectedRow() === undefined) selectedWorktree = null
-
-  const list = reposHtml()
-  if (reposView.list === list) return
-
-  $('repo-list').innerHTML = list
-  reposView.list = list
-}
-
-// Shows the checkouts that match the typed filter.
-function onRepoFilter(event) {
-  repoFilter = event.currentTarget.value
-  renderRepos()
-}
-
-// Opens a clicked main, worktree or session row, or a bar item, in a new app window on Cmd+click. Does nothing in a browser.
+// Opens a clicked session row or bar item in a new app window on Cmd+click. Does nothing in a browser.
 function onRowClick(event) {
   if (!event.metaKey || window.__TAURI__ === undefined) return
 
-  const link = event.target.closest('.row.main > a.body, .row.worktree > a.body, .row.card > a.body, a.bar-item')
+  const link = event.target.closest('.row.card > a.body, a.bar-item')
   if (!link) return
 
   event.preventDefault()
@@ -2285,7 +2154,7 @@ function canDetach(hash) {
   return standaloneRoot === null && parseRoute(hash).kind === 'worktree' && window.__TAURI__ !== undefined
 }
 
-// Opens the shown worktree in its own window, then returns this window to Repos if it still shows that page.
+// Opens the shown worktree in its own window, then returns this window to the home page if it still shows that page.
 async function detachWorktree() {
   const hash = location.hash
   if (!canDetach(hash)) return
@@ -2296,21 +2165,6 @@ async function detachWorktree() {
   } catch (err) {
     tell(`Could not open a window: ${err}`)
   }
-}
-
-// Moves the selection by `step` rows of the repos page in display order and stops at the first and last rows.
-function moveWorktreeSelection(step) {
-  const paths = shownRows().map((row) => row.path)
-  if (paths.length === 0) return
-
-  const last = paths.length - 1
-  const first = step > 0 ? 0 : last
-  const current = paths.indexOf(selectedWorktree)
-  const next = current < 0 ? first : Math.min(last, Math.max(0, current + step))
-
-  selectedWorktree = paths[next]
-  renderRepos()
-  $('repo-list').querySelector('.row.selected')?.scrollIntoView({ block: 'nearest' })
 }
 
 // Returns the tabs of every worktree in page order, each as `{ path, tab }`.
@@ -2705,6 +2559,25 @@ function worktreePageHtml(item) {
       </div>`
 }
 
+// Returns the markup of the home page: the empty toolbar above the placeholder of the home view.
+function homePageHtml() {
+  return '<div class="home-page"><nav class="github-toolbar" id="github-toolbar"></nav><div class="github-view" id="github-view"></div></div>'
+}
+
+// Renders the home page, writes the error of the home view in its placeholder, and shows the home view unless it failed. A page already shown keeps its markup.
+function renderHome() {
+  if (homeView.el === null || homeView.el !== $('page').firstElementChild) {
+    $('page').innerHTML = homePageHtml()
+    homeView = { el: $('page').firstElementChild }
+  }
+
+  const text = homeError ?? ''
+  if ($('github-view').textContent !== text) $('github-view').textContent = text
+
+  if (homeError === null) showGithubView()
+  else hideGithubView()
+}
+
 // Fetches the GitHub URL of the worktree at `path` when the page has none for it, writes the fetch state in the placeholder, and shows the GitHub view once the URL is known.
 function renderGithubTab(path) {
   if (!hasGithubItem(path)) return
@@ -2748,6 +2621,27 @@ function githubItemShows() {
   return worktreeView.el === $('page').firstElementChild && worktreeView.item === GITHUB_ITEM && worktreeView.path === route.path
 }
 
+// Returns true when the route and the page show the home page.
+function homeShows() {
+  if (parseRoute(location.hash).kind !== 'home') return false
+  return homeView.el !== null && homeView.el === $('page').firstElementChild
+}
+
+// Returns true when `route` shows a GitHub view: the home page, or the GitHub item of a worktree that has one.
+function routeShowsGithub(route) {
+  return route.kind === 'home' || (route.kind === 'github' && hasGithubItem(route.path))
+}
+
+// Returns the GitHub view the page shows as `{ view, path, url, fail }`, where `fail` takes the error of a failed show.
+// Returns the home view on the home page while it has no error, the worktree view on the GitHub item of `githubTab` with its URL, or else null.
+function githubTarget() {
+  if (homeShows() && homeError === null) return { view: 'home', path: HOME_KEY, url: HOME_URL, fail: failHomeView }
+  if (githubTab.url === null || !githubItemShows()) return null
+
+  const { path, url, seq } = githubTab
+  return { view: 'worktree', path, url, fail: (err) => failGithubView(seq, err) }
+}
+
 // Runs `step` once the GitHub view commands queued before it settle, and returns its promise.
 function queueGithub(step) {
   const run = githubQueue.then(step)
@@ -2755,28 +2649,29 @@ function queueGithub(step) {
   return run
 }
 
-// Shows the GitHub view over its placeholder, or moves it there when the placeholder or the viewport moved, or zooms it when its zoom changed.
+// Shows the GitHub view of `githubTarget()` over its placeholder, or moves it there when the placeholder or the viewport moved, or zooms it when its zoom changed.
 // Sends the placeholder bounds in viewport coordinates, the viewport height and the zoom.
-// Does nothing unless the page shows the GitHub item of `githubTab` with its URL and no pop-up shows.
+// Does nothing when the page shows no GitHub view or a pop-up shows.
 function showGithubView() {
-  if (githubTab.url === null || !githubItemShows() || githubOverlayOpen()) return
+  const target = githubTarget()
+  if (target === null || githubOverlayOpen()) return
 
   const rect = $('github-view').getBoundingClientRect()
   const bounds = { x: rect.left, y: rect.top, width: rect.width, height: rect.height, viewportHeight: window.innerHeight, zoom: githubZoom }
-  if (githubView.shown && JSON.stringify(bounds) === JSON.stringify(githubView.bounds)) return
+  if (githubView.shown && githubView.view === target.view && JSON.stringify(bounds) === JSON.stringify(githubView.bounds)) return
 
-  const { path, url, seq } = githubTab
-  githubView.shown = true
-  githubView.bounds = bounds
-  queueGithub(() => window.__TAURI__.core.invoke('github_view_show', { path, url, ...bounds })).catch((err) => failGithubView(seq, err))
+  const { view, path, url, fail } = target
+  githubView = { view, shown: true, bounds }
+  queueGithub(() => window.__TAURI__.core.invoke('github_view_show', { view, path, url, ...bounds })).catch(fail)
 }
 
-// Hides the GitHub view when the page asked it to show.
+// Hides the GitHub view that the page asked to show.
 function hideGithubView() {
   if (!githubView.shown) return
 
+  const { view } = githubView
   githubView.shown = false
-  queueGithub(() => window.__TAURI__.core.invoke('github_view_hide')).catch((err) => tell(String(err)))
+  queueGithub(() => window.__TAURI__.core.invoke('github_view_hide', { view })).catch((err) => tell(String(err)))
 }
 
 // Writes `err` in the placeholder of the GitHub item and hides the view, unless a later fetch started.
@@ -2785,6 +2680,12 @@ function failGithubView(seq, err) {
 
   githubTab.url = null
   githubTab.error = String(err)
+  render()
+}
+
+// Writes `err` in the placeholder of the home page and hides the home view.
+function failHomeView(err) {
+  homeError = String(err)
   render()
 }
 
@@ -4807,10 +4708,10 @@ function removeWorktreeQuestion(worktree) {
   return `${question} Git deletes the branch ${worktree.branch} when it is merged.`
 }
 
-// Removes the linked worktree at `path` once the user confirms, reloads the repos and selects the worktree's main row.
-// With `leave`, then goes to the repos page, or closes a standalone window, unless the page changed meanwhile.
+// Removes the linked worktree at `path` once the user confirms and reloads the repos.
+// Then goes to the home page, or closes a standalone window, unless the page changed meanwhile.
 // Does nothing while a removal runs. Tells the user the error.
-async function removeWorktree(path, leave) {
+async function removeWorktree(path) {
   const found = findWorktree(path)
   if (found === null || removingWorktree) return
 
@@ -4833,9 +4734,8 @@ async function removeWorktree(path, leave) {
 
   await loadRepos()
   dropWorktreeTerminals(path)
-  selectedWorktree = found.repo.path
 
-  if (!leave || location.hash !== hash) return render()
+  if (location.hash !== hash) return render()
   if (standaloneRoot !== null) return closeWindow()
   confirmDiscard(() => { location.hash = '#/' })
 }
@@ -5064,9 +4964,10 @@ function renderNotFound() {
   $('page').innerHTML = '<div class="column"><p class="empty">session not found</p></div>'
 }
 
-// Draws the tab strip and marks the tab of `kind` as the current page. The Terminals tab shows a red `⚠` while a tab needs attention.
+// Draws the tab strip, without the GitHub tab in a browser, and marks the tab of `kind` as the current page. The Terminals tab shows a red `⚠` while a tab needs attention.
 function renderTabs(kind) {
-  const html = TABS.map((tab) => {
+  const tabs = TABS.filter((tab) => tab.kind !== 'home' || window.__TAURI__ !== undefined)
+  const html = tabs.map((tab) => {
     const current = tab.kind === kind ? ' aria-current="page"' : ''
     const alert = tab.kind === 'terminals' ? terminalsAlertHtml() : ''
     return `<a class="tab" href="${tab.href}"${current}>${tab.label}${alert}</a>`
@@ -5080,7 +4981,7 @@ function renderTabs(kind) {
 // Shows the page of the route and syncs the window title. While the editor is open, shows only the edited file.
 // A route that opens a worktree on its Terminal item goes to its GitHub item instead when `opensOnGithub` says so.
 // A route off the Terminal item parks the shown worktree terminal. A route off the Terminal item of the edited tab name drops the edit.
-// A route off a GitHub item hides the GitHub view.
+// A route off the home page and off a GitHub item hides the GitHub view. A route off the home page drops the error of the home view.
 // A route into a worktree page records its origin. A route off the PRs page drops its PRs, selection and filter.
 // A route off the worktree pages drops their PRs. Redraws the open pop-up. Marks the shown tab in attention seen, then renders again.
 function render() {
@@ -5093,7 +4994,8 @@ function render() {
     route = parseRoute(location.hash)
   }
   if (route.kind !== 'worktree') parkWorktreeTerminal()
-  if (route.kind !== 'github' || !hasGithubItem(route.path)) hideGithubView()
+  if (!routeShowsGithub(route)) hideGithubView()
+  if (route.kind !== 'home') homeError = null
   if (renaming !== null && (route.kind !== 'worktree' || route.path !== renaming.path)) renaming = null
   recordPageOrigin(route)
   if (routePage(route) === null) worktreePrs = null
@@ -5115,7 +5017,7 @@ function render() {
 
 // Shows the page of `route`.
 function renderPage(route) {
-  if (route.kind === 'repos') return renderRepos()
+  if (route.kind === 'home') return renderHome()
   if (route.kind === 'sessions') return renderList()
   if (route.kind === 'terminals') return renderTerminals()
   if (route.kind === 'worktree') return renderWorktreePage(route.path, null, null)
@@ -5276,65 +5178,18 @@ function listKey(key) {
   return sessionAction(session, key)
 }
 
-// Runs the repos page shortcut for `key` and returns true when it acted.
-function reposKey(key) {
+// Runs the shortcut for `key` in the focused filter field `field` of the PRs page and returns true when it acted.
+function filterKey(key, field) {
   if (key === 'ArrowDown' || key === 'ArrowUp') {
-    moveWorktreeSelection(key === 'ArrowDown' ? 1 : -1)
+    field.blur()
+    movePrSelection(key === 'ArrowDown' ? 1 : -1)
     return true
   }
-
-  if (key === '/') {
-    $('repo-filter')?.focus()
-    return true
-  }
-
-  const row = selectedRow()
-  if (row === undefined) return false
 
   if (key === 'Enter') {
-    location.hash = rowHash(row)
-    return true
-  }
-
-  if (row.worktree === null && key === NEW_WORKTREE_KEY) {
-    createWorktree(row.path)
-    return true
-  }
-
-  if (row.worktree === null) return false
-
-  if (key === REMOVE_WORKTREE_KEY) {
-    removeWorktree(row.path, false)
-    return true
-  }
-  return worktreeAction(row.path, key)
-}
-
-// Runs the shortcut for `key` in the focused filter field `field`, the repos page's or the PRs page's, and returns true when it acted.
-function filterKey(key, field) {
-  const prs = field.id === 'pr-filter'
-
-  if (key === 'ArrowDown' || key === 'ArrowUp') {
-    const step = key === 'ArrowDown' ? 1 : -1
-    field.blur()
-    if (prs) movePrSelection(step)
-    else moveWorktreeSelection(step)
-    return true
-  }
-
-  if (key === 'Enter' && prs) {
     field.blur()
     if (selectedItem === null) movePrSelection(1)
     prsKey('Enter', prsView.path)
-    return true
-  }
-
-  if (key === 'Enter') {
-    field.blur()
-    if (selectedWorktree === null) selectedWorktree = firstFilterRow()?.path ?? null
-
-    const row = selectedRow()
-    if (row !== undefined) location.hash = rowHash(row)
     return true
   }
 
@@ -5349,7 +5204,7 @@ function filterKey(key, field) {
 // The tool keys open the listed worktree of `session`, else the worktree that `session` records.
 function sessionKey(key, session) {
   if (BACK_KEYS.includes(key)) {
-    leavePage(sessionWorktree(session))
+    leavePage()
     return true
   }
 
@@ -5369,7 +5224,7 @@ function sessionKey(key, session) {
     const path = sessionWorktree(session)
     if (findWorktree(path) === null) return false
 
-    removeWorktree(path, true)
+    removeWorktree(path)
     return true
   }
 
@@ -5394,30 +5249,29 @@ function missingSessionKey(key, route) {
 // Runs the worktree page shortcut for `key` on the worktree at `path` and returns true when it acted.
 function worktreeKey(key, path) {
   if (BACK_KEYS.includes(key)) {
-    leavePage(path)
+    leavePage()
     return true
   }
 
   if (findWorktree(path) === null) return false
 
   if (key === REMOVE_WORKTREE_KEY) {
-    removeWorktree(path, true)
+    removeWorktree(path)
     return true
   }
   return worktreeAction(path, key)
 }
 
-// Leaves the worktree page of `path` for `pageOrigin` once the editor holds no unsaved changes.
-// Selects there the session last shown on the page, or restores the PRs selection and filter, or selects `path` on the repos page.
-function leavePage(path) {
+// Leaves the shown worktree page for `pageOrigin` once the editor holds no unsaved changes.
+// Selects there the session last shown on the page, or restores the PRs selection and filter, or goes to the home page.
+function leavePage() {
   const origin = pageOrigin ?? { hash: null, selectedItem: null, prFilter: '', dir: null }
   const target = backTarget(origin.hash ?? '#/')
   if (target === null) return
 
   confirmDiscard(() => {
-    if (origin.hash === null) selectedWorktree = path
-    else if (origin.hash === '#/sessions') selectedDir = origin.dir ?? selectedDir
-    else {
+    if (origin.hash === '#/sessions') selectedDir = origin.dir ?? selectedDir
+    else if (origin.hash !== null) {
       selectedItem = origin.selectedItem
       prFilter = origin.prFilter
     }
@@ -5429,10 +5283,7 @@ function leavePage(path) {
 function prsKey(key, path) {
   if (BACK_KEYS.includes(key)) {
     const target = backTarget('#/')
-    if (target === null) return true
-
-    selectedWorktree = path
-    location.hash = target
+    if (target !== null) location.hash = target
     return true
   }
 
@@ -5667,7 +5518,7 @@ function onKey(event) {
   if (key === null) return
   if ($('modal').open) return
 
-  const filter = event.target.closest('#repo-filter, #pr-filter')
+  const filter = event.target.closest('#pr-filter')
   if (filter) {
     if (filterKey(key, filter)) event.preventDefault()
     return
@@ -5683,10 +5534,7 @@ function onKey(event) {
   }
 
   const route = parseRoute(location.hash)
-  if (route.kind === 'repos') {
-    if (reposKey(key)) event.preventDefault()
-    return
-  }
+  if (route.kind === 'home') return
 
   if (route.kind === 'sessions') {
     if (listKey(key)) event.preventDefault()
@@ -5807,7 +5655,7 @@ function stepGithubZoom(step) {
 // Steps the text size of the shown tab by `step`: the GitHub view, the worktree terminals, the session viewer, or else the board.
 function stepTextSize(step) {
   const { kind } = parseRoute(location.hash)
-  if (kind === 'github') stepGithubZoom(step)
+  if (kind === 'home' || kind === 'github') stepGithubZoom(step)
   else if (kind === 'worktree') stepTerminalSize(step)
   else if (kind === 'session') stepViewerZoom(step)
   else stepFontSize(step)
@@ -5837,6 +5685,7 @@ async function poll() {
       const problem = sessionProblem(session)
       if (problem !== null) problems.push(`${sessionName(session)}: ${problem}`)
     }
+    problems.push(...reposProblems())
     problems.push(...missingScripts())
     if (state.failedChecks.length > 0) problems.push(`metro self-check failed: ${state.failedChecks.join(', ')}`)
 
