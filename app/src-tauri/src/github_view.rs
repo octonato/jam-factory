@@ -164,24 +164,50 @@ pub async fn github_view_hide(webview: Webview, view: View) -> Result<(), String
     hide(&webview.window(), view)
 }
 
+/// Loads `url`, a page of `https://github.com/`, in the GitHub view `view` of the calling window.
+#[tauri::command]
+pub async fn github_view_navigate(webview: Webview, view: View, url: String) -> Result<(), String> {
+    let url = parse(&url)?;
+    if !is_github_page(&url) {
+        return Err(format!(
+            "Cannot load {url} in the GitHub view: it is not a page of https://github.com/"
+        ));
+    }
+
+    let Some(github) = github_view(&webview.window(), view) else {
+        return Err("Cannot load the GitHub page: the GitHub view is not open".to_string());
+    };
+
+    navigate(&github, url)
+}
+
 /// Reloads the GitHub view that shows in the focused board window.
 pub fn reload_focused(app: &AppHandle) {
-    let Some(window) = windows::focused_board_window(app) else {
-        return;
-    };
-    let Some(label) = VIEWS
-        .map(|view| view_label(window.label(), view))
-        .into_iter()
-        .find(|label| shown().contains(label))
+    let Some(view) = windows::focused_board_window(app).and_then(|window| shown_view(&window))
     else {
         return;
     };
 
-    if let Some(view) = window.get_webview(&label)
-        && let Err(e) = reload(&view)
-    {
+    if let Err(e) = reload(&view) {
         eprintln!("jam-board: {e}");
     }
+}
+
+/// Returns the URL of the GitHub view that shows in `window`: its pending page, or else its current page.
+pub fn shown_url(window: &Window) -> Option<Url> {
+    let view = shown_view(window)?;
+
+    pending_url(view.label()).or_else(|| view.url().ok())
+}
+
+/// Returns the GitHub view that shows in `window`.
+fn shown_view(window: &Window) -> Option<Webview> {
+    let label = VIEWS
+        .map(|view| view_label(window.label(), view))
+        .into_iter()
+        .find(|label| shown().contains(label))?;
+
+    window.get_webview(&label)
 }
 
 /// Hides the GitHub view `view` of `window`, if it has one.
@@ -336,6 +362,11 @@ fn parse(url: &str) -> Result<Url, String> {
     Url::parse(url).map_err(|e| format!("Cannot load {url} in the GitHub view: {e}"))
 }
 
+/// Returns true when `url` is an `https` page of the host `github.com` on its default port.
+fn is_github_page(url: &Url) -> bool {
+    url.scheme() == "https" && url.host_str() == Some("github.com") && url.port().is_none()
+}
+
 fn navigate(view: &Webview, url: Url) -> Result<(), String> {
     view.navigate(url)
         .map_err(|e| format!("Cannot load the GitHub page: {e}"))
@@ -395,6 +426,31 @@ mod tests {
             View::Worktree
         );
         assert!(serde_json::from_str::<View>("\"other\"").is_err());
+    }
+
+    #[test]
+    fn only_github_pages_are_navigated() {
+        let is_github = |url: &str| is_github_page(&Url::parse(url).unwrap());
+
+        for url in [
+            "https://github.com/",
+            "https://github.com/lightbend/akka-runtime",
+            "https://github.com:443/o/r",
+            "https://GitHub.com/o/r",
+        ] {
+            assert!(is_github(url), "{url}");
+        }
+
+        for url in [
+            "http://github.com/o/r",
+            "https://gist.github.com/o/r",
+            "https://github.com.example.org/o/r",
+            "https://github.com:8443/o/r",
+            "file:///github.com/o/r",
+            "javascript:alert(1)",
+        ] {
+            assert!(!is_github(url), "{url}");
+        }
     }
 
     #[test]

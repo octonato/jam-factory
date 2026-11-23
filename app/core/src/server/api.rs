@@ -22,6 +22,7 @@ use serde_json::{Value, json};
 
 use super::github;
 use super::http::{Request, Response};
+use super::issues;
 use super::open;
 use super::prs;
 use super::repos::{RepoList, is_worktree, repos_json};
@@ -50,6 +51,7 @@ pub fn get(
         ["", "api", "version"] => Ok(json_response(&json!({ "version": BUILD_VERSION }))),
         ["", "api", "prs", ..] => return prs::get(repos, target),
         ["", "api", "github"] => return github::get(repos, target),
+        ["", "api", "issues", "view"] => return issues::get(repos, target),
         ["", "api", "worktrees", "stats"] => return worktrees::get(repos, target),
         ["", "api", "files", org, repo, branch, id] => files(store, [org, repo, branch, id]),
         ["", "api", "file", org, repo, branch, id, path @ ..] if !path.is_empty() => {

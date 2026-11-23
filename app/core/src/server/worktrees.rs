@@ -13,7 +13,7 @@
 // limitations under the License.
 
 //! Lists the titles and line counts of, creates and removes the linked worktrees of the configured main checkouts.
-//! Routes: `GET /api/worktrees/stats?path=<main checkout>`, `POST /api/worktrees?path=<main checkout>&name=<name>`
+//! Routes: `GET /api/worktrees/stats?path=<main checkout>`, `POST /api/worktrees?path=<main checkout>&name=<name>[&issue=<N>]`
 //! and `POST /api/worktrees/remove?path=<worktree>`.
 
 use std::fs;
@@ -24,11 +24,18 @@ use serde_json::json;
 
 use super::api::{json_response, query_field, same_origin, segments};
 use super::http::{Request, Response};
+use super::issues::view_issue;
 use super::prs::{Runner, SystemRunner, configured_main, worktree_folder};
 use super::repos::{Repo, RepoList, list};
 use super::terminals::Terminals;
 
 const TEXT: &str = "text/plain; charset=utf-8";
+
+/// The folder of a worktree that holds its untracked notes.
+const NOTES_FOLDER: &str = ".nogit";
+
+/// The note of a worktree that holds the title and the link of its issue.
+const ISSUE_NOTE: &str = "issue.md";
 
 /// The title and the line counts of a linked worktree since it forked from the branch of its main checkout.
 #[derive(Serialize)]
@@ -154,6 +161,7 @@ pub fn post_with(
 }
 
 /// Creates the worktree named by the `name` query field of `request` for the main checkout of its `path` field.
+/// With an `issue` field, it writes the note of that issue in the new worktree.
 fn add(repos: &dyn RepoList, request: &Request, runner: &dyn Runner) -> Response {
     let Some(main) = configured_main(repos, &request.target) else {
         return Response::error(404);
@@ -170,14 +178,66 @@ fn add(repos: &dyn RepoList, request: &Request, runner: &dyn Runner) -> Response
         return text_response(400, &format!("The worktree name {name} holds a /"));
     }
 
+    let issue = match issue_number(&request.target) {
+        Ok(issue) => issue,
+        Err(response) => return response,
+    };
+
     let user = match repos.github_user() {
         Ok(user) => user,
         Err(error) => return text_response(500, &error),
     };
 
     let branch = branch_name(user.as_deref(), name);
+    let main = Path::new(&main.path);
 
-    create(Path::new(&main.path), &branch, runner)
+    let folder = match create(main, &branch, runner) {
+        Ok(folder) => folder,
+        Err(response) => return response,
+    };
+
+    if let Some(number) = issue
+        && let Err(error) = write_issue_note(main, &folder, number, runner)
+    {
+        let message = format!(
+            "Created {} but could not write its issue note: {error}",
+            folder.display()
+        );
+
+        return text_response(500, &message);
+    }
+
+    json_response(&json!({ "path": folder.to_string_lossy() }))
+}
+
+/// The issue in the `issue` query field of `target`, `None` without the field, or a 400 reply unless it is a positive integer.
+fn issue_number(target: &str) -> Result<Option<u64>, Response> {
+    let Some(issue) = query_field(target, "issue") else {
+        return Ok(None);
+    };
+
+    match issue.parse::<u64>() {
+        Ok(number) if number > 0 => Ok(Some(number)),
+        _ => Err(text_response(
+            400,
+            &format!("{issue} is not an issue number"),
+        )),
+    }
+}
+
+/// Writes the title and the link of the issue `number` of the main checkout `main` to the issue note of `folder`.
+fn write_issue_note(
+    main: &Path,
+    folder: &Path,
+    number: u64,
+    runner: &dyn Runner,
+) -> Result<(), String> {
+    let issue = view_issue(main, number, runner)?;
+    let notes = folder.join(NOTES_FOLDER);
+    let note = format!("# {}\n\n{}\n", issue.title, issue.url);
+
+    fs::create_dir_all(&notes).map_err(|error| error.to_string())?;
+    fs::write(notes.join(ISSUE_NOTE), note).map_err(|error| error.to_string())
 }
 
 /// The branch of the worktree `name`: `{user}/{name}` with a user, else `name`.
@@ -189,43 +249,51 @@ pub fn branch_name(user: Option<&str>, name: &str) -> String {
 }
 
 /// Updates the main checkout `main`, then creates the branch `branch` at its HEAD, in a new sibling worktree.
-fn create(main: &Path, branch: &str, runner: &dyn Runner) -> Response {
+/// It gives the canonical folder of the new worktree.
+fn create(main: &Path, branch: &str, runner: &dyn Runner) -> Result<PathBuf, Response> {
     let check = ["check-ref-format", "--branch", branch];
 
     if runner.run(main, "git", &check).is_err() {
-        return text_response(400, &format!("{branch} is not a valid branch name"));
+        return Err(text_response(
+            400,
+            &format!("{branch} is not a valid branch name"),
+        ));
     }
 
     let reference = format!("refs/heads/{branch}");
     let verify = ["rev-parse", "--verify", "--quiet", &reference];
 
     if runner.run(main, "git", &verify).is_ok() {
-        return text_response(409, &format!("Branch {branch} already exists"));
+        return Err(text_response(
+            409,
+            &format!("Branch {branch} already exists"),
+        ));
     }
 
     let folder = worktree_folder(main, branch);
 
     if folder.exists() {
-        return text_response(409, &format!("{} already exists", folder.display()));
+        return Err(text_response(
+            409,
+            &format!("{} already exists", folder.display()),
+        ));
     }
 
     if let Err(error) = refresh(main, runner) {
-        return text_response(
+        return Err(text_response(
             409,
             &format!("Could not update {}: {error}", main.display()),
-        );
+        ));
     }
 
     let folder_arg = folder.to_string_lossy();
     let add = ["worktree", "add", "-b", branch, &folder_arg, "HEAD"];
 
     if let Err(error) = runner.run(main, "git", &add) {
-        return text_response(500, &error);
+        return Err(text_response(500, &error));
     }
 
-    let listed = fs::canonicalize(&folder).unwrap_or_else(|_| folder.clone());
-
-    json_response(&json!({ "path": listed.to_string_lossy() }))
+    Ok(fs::canonicalize(&folder).unwrap_or_else(|_| folder.clone()))
 }
 
 /// Fast-forwards the checked-out branch of the main checkout `main` to its upstream, when it has one.
@@ -297,6 +365,7 @@ fn text_response(status: u16, text: &str) -> Response {
 mod tests {
     use std::path::PathBuf;
     use std::process::{Command, Stdio};
+    use std::sync::Mutex;
 
     use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
     use serde_json::Value;
@@ -626,6 +695,154 @@ mod tests {
         let response = post(&broken, &Terminals::default(), &request(&main, "x"));
         assert_eq!(response.status, 500);
         assert_eq!(text(&response), "bad config");
+    }
+
+    /// The `gh issue view` output of the issue `45` of `o/r`.
+    const ISSUE: &str = r#"{"number":45,"title":"Add X","url":"https://github.com/o/r/issues/45"}"#;
+
+    /// A gh call: the folder and the arguments.
+    type GhCall = (PathBuf, Vec<String>);
+
+    /// A runner that runs `git` for real and answers each `gh` call with `gh`.
+    struct GhStub {
+        gh: Result<String, String>,
+        calls: Mutex<Vec<GhCall>>,
+    }
+
+    impl GhStub {
+        fn new(gh: Result<&str, &str>) -> GhStub {
+            GhStub {
+                gh: gh.map(str::to_string).map_err(str::to_string),
+                calls: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn gh_calls(&self) -> Vec<GhCall> {
+            self.calls.lock().unwrap().clone()
+        }
+    }
+
+    impl Runner for GhStub {
+        fn run(&self, dir: &Path, program: &str, args: &[&str]) -> Result<String, String> {
+            if program != "gh" {
+                return SystemRunner { bin: None }.run(dir, program, args);
+            }
+
+            let args = args.iter().map(|arg| arg.to_string()).collect();
+            self.calls.lock().unwrap().push((dir.to_path_buf(), args));
+
+            self.gh.clone()
+        }
+    }
+
+    /// A `POST` on `/api/worktrees` for the main checkout `main`, the worktree `name` and the `issue` field `issue`.
+    fn issue_request(main: &Path, name: &str, issue: &str) -> Request {
+        let mut request = request(main, name);
+        request.target = format!("{}&issue={issue}", request.target);
+
+        request
+    }
+
+    #[test]
+    fn an_issue_worktree_holds_the_issue_note() {
+        let dir = tempfile::tempdir().unwrap();
+        let Some(main) = main_checkout(dir.path()) else {
+            eprintln!("skipped: git is missing");
+            return;
+        };
+        let runner = GhStub::new(Ok(ISSUE));
+
+        let response = post_with(
+            &repos(&main, None),
+            &Terminals::default(),
+            &issue_request(&main, "add_x_45", "45"),
+            &runner,
+        );
+
+        assert_eq!(response.status, 200, "{}", text(&response));
+
+        let reply: Value = serde_json::from_slice(&response.body).unwrap();
+        let folder = main.parent().unwrap().join("add_x_45");
+
+        assert_eq!(reply["path"], folder.to_string_lossy().as_ref());
+        assert_eq!(
+            fs::read_to_string(folder.join(".nogit/issue.md")).unwrap(),
+            "# Add X\n\nhttps://github.com/o/r/issues/45\n"
+        );
+
+        let view = ["issue", "view", "45", "--json", "number,title,url"].map(String::from);
+        assert_eq!(runner.gh_calls(), [(main, view.to_vec())]);
+    }
+
+    #[test]
+    fn a_worktree_without_issue_writes_no_note() {
+        let dir = tempfile::tempdir().unwrap();
+        let Some(main) = main_checkout(dir.path()) else {
+            eprintln!("skipped: git is missing");
+            return;
+        };
+        let runner = GhStub::new(Ok(ISSUE));
+
+        let response = post_with(
+            &repos(&main, None),
+            &Terminals::default(),
+            &request(&main, "fix"),
+            &runner,
+        );
+
+        assert_eq!(response.status, 200, "{}", text(&response));
+        assert!(!main.parent().unwrap().join("fix/.nogit").exists());
+        assert!(runner.gh_calls().is_empty());
+    }
+
+    #[test]
+    fn a_bad_issue_number_is_400_before_any_worktree() {
+        let dir = tempfile::tempdir().unwrap();
+        let Some(main) = main_checkout(dir.path()) else {
+            eprintln!("skipped: git is missing");
+            return;
+        };
+        let runner = GhStub::new(Ok(ISSUE));
+
+        for issue in ["0", "abc"] {
+            let response = post_with(
+                &repos(&main, None),
+                &Terminals::default(),
+                &issue_request(&main, "fix", issue),
+                &runner,
+            );
+
+            assert_eq!(response.status, 400, "{issue}: {}", text(&response));
+        }
+
+        assert!(!main.parent().unwrap().join("fix").exists());
+        assert!(!has_branch(&main, "fix"));
+        assert!(runner.gh_calls().is_empty());
+    }
+
+    #[test]
+    fn a_failed_issue_view_keeps_the_worktree() {
+        let dir = tempfile::tempdir().unwrap();
+        let Some(main) = main_checkout(dir.path()) else {
+            eprintln!("skipped: git is missing");
+            return;
+        };
+        let runner = GhStub::new(Err("boom"));
+
+        let response = post_with(
+            &repos(&main, None),
+            &Terminals::default(),
+            &issue_request(&main, "fix", "45"),
+            &runner,
+        );
+
+        let folder = main.parent().unwrap().join("fix");
+        let body = text(&response);
+
+        assert_eq!(response.status, 500, "{body}");
+        assert!(body.contains(folder.to_string_lossy().as_ref()), "{body}");
+        assert!(body.contains("boom"), "{body}");
+        assert!(is_worktree(&repos(&main, None), &folder));
     }
 
     /// A `POST` on `/api/worktrees/remove` for the worktree at `path`, from the board's host.

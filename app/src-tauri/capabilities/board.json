@@ -12,6 +12,7 @@
     "allow-open-window",
     "allow-open-main-window",
     "allow-github-view-show",
-    "allow-github-view-hide"
+    "allow-github-view-hide",
+    "allow-github-view-navigate"
   ]
 }

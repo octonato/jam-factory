@@ -151,8 +151,8 @@ function dashboard({ script = source, pageWidth = 1200, pageLeft = 0, pageTop = 
     return el
   }
 
-  for (const id of ['board-header', 'tabs', 'page', 'board-footer', 'version', 'term-store', 'status', 'problems', 'font-down', 'font-up', 'font-value', 'modal', 'modal-text', 'modal-input', 'modal-cancel', 'shortcuts', 'shortcuts-list', 'jump', 'jump-tabs', 'jump-input', 'jump-list']) element(id)
-  for (const dialog of [elements.get('modal'), elements.get('shortcuts'), elements.get('jump')]) {
+  for (const id of ['board-header', 'tabs', 'page', 'board-footer', 'version', 'term-store', 'status', 'problems', 'font-down', 'font-up', 'font-value', 'modal', 'modal-text', 'modal-input', 'modal-cancel', 'shortcuts', 'shortcuts-list', 'jump', 'jump-tabs', 'jump-input', 'jump-list', 'github-popup', 'github-popup-input', 'github-popup-list']) element(id)
+  for (const dialog of [elements.get('modal'), elements.get('shortcuts'), elements.get('jump'), elements.get('github-popup')]) {
     dialog.showModal = () => { dialog.open = true }
     dialog.close = (value = '') => {
       dialog.returnValue = value
@@ -899,6 +899,11 @@ function press(app, key, modifiers = {}, target = { closest: () => null }) {
     preventDefault: () => { prevented = true },
   })
   return prevented
+}
+
+// Runs the Go menu item `id` of the app, with `url` as the URL of the shown GitHub view, and returns the answer of the page.
+function menu(app, id, url = null) {
+  return app.run(`onMenuShortcut(${JSON.stringify(id)}, ${JSON.stringify(url)})`)
 }
 
 test('l, Escape and Cmd+[ return from a worktree page to the home page', () => {
@@ -4594,7 +4599,8 @@ test('Cmd+0 in a standalone app window opens the main board without navigating a
       tauri: { core: { invoke: async (command) => { commands.push(command) } } },
     })
 
-    assert.equal(press(app, '0', cmd), true, hash)
+    assert.equal(press(app, '0', cmd), false, hash)
+    menu(app, 'go-board')
     await settle()
     assert.deepEqual(commands, ['open_main_window'])
     assert.equal(app.context.location.hash, hash)
@@ -4605,6 +4611,8 @@ test('Cmd+0 does nothing in the main app window or a browser page', () => {
   for (const options of [{ tauri: {} }, {}, { search: '?standalone', hash: '#/o/r/main/s1' }]) {
     const app = dashboard(options)
     assert.equal(press(app, '0', cmd), false)
+    menu(app, 'go-board')
+    assert.notEqual(app.elements.get('modal').open, true)
   }
 })
 
@@ -4616,7 +4624,7 @@ test('a failure to open the main board shows an error and keeps the standalone p
     tauri: { core: { invoke: async () => { throw new Error('denied') } } },
   })
 
-  press(app, '0', cmd)
+  menu(app, 'go-board')
   await settle()
   assert.equal(app.elements.get('modal-text').textContent, 'Could not open Jam Board: Error: denied')
   assert.equal(app.context.location.hash, hash)
@@ -4659,7 +4667,8 @@ test('Cmd+N opens a main-window worktree page in its own window', async () => {
   const opened = []
   app.window.__TAURI__ = { core: { invoke: async (command, args) => { opened.push(`${command} ${args.hash}`) } } }
 
-  assert.equal(press(app, 'n', cmd), true)
+  assert.equal(press(app, 'n', cmd), false)
+  menu(app, 'go-detach')
   await settle()
   assert.deepEqual(opened, [`open_window ${hash}`])
   assert.equal(app.context.location.hash, '#/')
@@ -4670,17 +4679,23 @@ test('the new-window icon and Cmd+N apply only to worktree pages of the main app
   assert.ok(!cardActions(app).includes('detach'), 'no icon in a browser')
   assert.equal(press(app, 'n', cmd), false, 'no shortcut in a browser')
 
-  app.window.__TAURI__ = { core: { invoke: async () => {} } }
+  const opened = []
+  const tauri = { core: { invoke: async (command) => { opened.push(command) } } }
+  app.window.__TAURI__ = tauri
   for (const hash of ['#/', '#/sessions', '#/terminals', prsHashOf(mainPath)]) {
     navigate(app, hash)
     assert.equal(press(app, 'n', cmd), false, hash)
+    menu(app, 'go-detach')
   }
 
   const standalone = await standaloneApp(worktreeHashOf(worktreePath))
-  standalone.window.__TAURI__ = { core: { invoke: async () => {} } }
+  standalone.window.__TAURI__ = tauri
   standalone.run('render()')
   assert.ok(!cardActions(standalone).includes('detach'))
   assert.equal(press(standalone, 'n', cmd), false)
+  menu(standalone, 'go-detach')
+  await settle()
+  assert.deepEqual(opened.filter((command) => command === 'open_window'), [])
 })
 
 test('a failed detach keeps the main window on the worktree and reports the error', async () => {
@@ -5852,7 +5867,7 @@ test('the modal above the pop-up keeps its keys', async () => {
   const app = await reposApp(selectRepos)
   const opened = appOpener(app)
 
-  press(app, 'b', shift)
+  menu(app, 'go-branches')
   app.run('tell("Could not refresh.")')
   assert.equal(app.elements.get('modal').open, true)
 
@@ -5864,6 +5879,7 @@ test('the modal above the pop-up keeps its keys', async () => {
 
   assert.equal(press(app, 'Escape'), false)
   assert.equal(press(app, 'b', shift), false)
+  menu(app, 'go-branches')
   assert.equal(app.run('jump.tab'), 'branches')
   assert.equal(jumpDialog(app).open, true)
 
@@ -5882,7 +5898,7 @@ test('Enter on the discard prompt above the pop-up opens no row', async () => {
 
   press(app, 'w')
   editor(app).value = '# Typed\n'
-  press(app, 'b', shift, editor(app))
+  menu(app, 'go-branches')
   assert.equal(app.run('onCloseRequested()'), false)
   assert.equal(app.elements.get('modal-text').textContent, 'Discard your changes?')
 
@@ -5994,7 +6010,7 @@ test('Cmd+Enter in the main window opens the row in its own window', async () =>
   const app = await reposApp(selectRepos)
   const opened = appOpener(app)
 
-  press(app, 'w', shift)
+  menu(app, 'go-worktrees')
   assert.ok(press(app, 'Enter', cmd))
   await settle()
 
@@ -6009,7 +6025,7 @@ test('Enter in a standalone window opens the row in its own window and keeps the
   const app = await standaloneApp(root, [], selectRepos)
   const opened = appOpener(app)
 
-  press(app, 'b', shift)
+  menu(app, 'go-branches')
   assert.ok(press(app, 'Enter'))
   await settle()
 
@@ -6030,12 +6046,12 @@ test('Cmd+Enter in a browser behaves like Enter', async () => {
   assert.equal(jumpDialog(app).open, false)
 })
 
-test('the shortcuts dialog lists the three pop-up shortcuts', () => {
+test('the shortcuts dialog lists the pop-up shortcuts', () => {
   const app = dashboard()
   app.context.location.hash = '#/'
   press(app, '?', { shiftKey: true })
 
-  assert.match(shortcutsText(app), /^Everywhere \? Show or hide the shortcuts ⌘ click Open a row or bar item in a new window ⇧⌘B Open the pop-up on Branches ⇧⌘W Open the pop-up on Worktrees ⇧⌘T Open the pop-up on Terminals ⌘= ⌘- Make the text of the shown tab bigger or smaller Pop-up /)
+  assert.match(shortcutsText(app), /^Everywhere \? Show or hide the shortcuts ⌘ click Open a row or bar item in a new window ⇧⌘B Open the pop-up on Branches ⇧⌘W Open the pop-up on Worktrees ⇧⌘T Open the pop-up on Terminals ⇧⌘G Open the GitHub pop-up ⌘= ⌘- Make the text of the shown tab bigger or smaller Pop-up /)
 })
 
 test('the shortcuts dialog lists the pop-up tab keys', () => {
@@ -6153,9 +6169,9 @@ test('a GitHub root allows its worktree page and names its repo and branch', asy
 test('the bar steps onto the GitHub item', async () => {
   const { app } = await githubApp(githubWorktree, [sessionAt('s1', githubWorktree)])
 
-  // Presses the bar key of `direction`, follows the new hash, and returns it.
+  // Runs the Go menu bar item of `direction`, follows the new hash, and returns it.
   const step = async (direction) => {
-    assert.ok(pressBar(app, direction), `${direction} is taken`)
+    menu(app, `go-${direction}-bar`)
     app.window.dispatch('hashchange')
     await settle()
     return app.context.location.hash
@@ -6318,7 +6334,7 @@ test('a worktree gone from the repos hides the view', async () => {
 test('pop-ups hide and restore the view', async () => {
   const { app, invoked } = await shownGithubApp()
   const popUps = [
-    [() => press(app, 'b', { metaKey: true, shiftKey: true }), () => press(app, 'Escape')],
+    [() => menu(app, 'go-branches'), () => press(app, 'Escape')],
     [() => press(app, '?', { shiftKey: true }), () => press(app, '?', { shiftKey: true })],
     [() => app.run('tell("Done.")'), () => closeModal(app, 'ok')],
   ]
@@ -6339,7 +6355,8 @@ test('a late fetch does not show the view under a pop-up', async () => {
   const { app, invoked, fetches } = await githubViewApp()
 
   navigate(app, githubHashOf(githubWorktree))
-  assert.ok(press(app, 'b', { metaKey: true, shiftKey: true }))
+  menu(app, 'go-branches')
+  assert.equal(jumpDialog(app).open, true)
   fetches[0].answer(githubReply(githubPr))
   await settle()
   assert.deepEqual(invoked, [])
@@ -6477,7 +6494,7 @@ test('polls do not resend the home view', async () => {
 test('a pop-up hides the home view and its close shows it again', async () => {
   const { app, invoked } = await homeApp()
   const popUps = [
-    [() => press(app, 'w', { metaKey: true, shiftKey: true }), () => press(app, 'Escape')],
+    [() => menu(app, 'go-worktrees'), () => press(app, 'Escape')],
     [() => press(app, '?', { shiftKey: true }), () => press(app, '?', { shiftKey: true })],
     [() => app.run('tell("Done.")'), () => closeModal(app, 'ok')],
   ]
@@ -6560,4 +6577,423 @@ test('the shortcuts dialog has no Repos section', () => {
   const app = dashboard()
 
   assert.deepEqual(plain(app.run('SHORTCUTS.filter((section) => section.title === "Repos")')), [])
+})
+
+const runtimeMain = '/s/akka/runtime/main'
+
+// The repos of the GitHub pop-up: `akka/runtime` on GitHub as `lightbend/akka-runtime`, `o/r` under its local name, and a checkout with an error.
+const popupRepos = {
+  error: null,
+  repos: [
+    { org: 'akka', repo: 'runtime', path: runtimeMain, branch: 'main', github: 'lightbend/akka-runtime', error: null, worktrees: [] },
+    { org: 'o', repo: 'r', path: orMain, branch: 'main', github: 'o/r', error: null, worktrees: [] },
+    { org: 'x', repo: 'broken', path: '/s/x/broken', branch: null, github: 'other/repo', error: 'not a git checkout', worktrees: [] },
+  ],
+}
+
+const runtimePr = 'https://github.com/lightbend/akka-runtime/pull/12'
+const runtimeIssue = 'https://github.com/lightbend/akka-runtime/issues/45'
+
+const githubPopupDialog = (app) => app.elements.get('github-popup')
+const githubPopupText = (app) => textOf(app.elements.get('github-popup-list').innerHTML)
+
+// Types `text` into the field of the GitHub pop-up.
+function typeGithub(app, text) {
+  const field = app.elements.get('github-popup-input')
+  field.value = text
+  field.dispatch('input')
+}
+
+// Returns a dashboard in the app on `hash` after one poll of `popupRepos`, the `[command, args]` of each invoke, and the URL of each post.
+// `reply(url)` answers each fetch but `api/repos` and `api/sessions`.
+async function githubPopupApp(reply = () => response('', false, { status: 404 }), hash = '#/') {
+  const invoked = []
+  const posts = []
+  const invoke = async (command, args) => {
+    invoked.push(args === undefined ? [command] : [command, plain(args)])
+  }
+
+  const app = dashboard({
+    pageTop: homeBounds.y,
+    pageHeight: homeBounds.height,
+    tauri: { core: { invoke } },
+    fetcher: (url, options = {}) => {
+      if (options.method === 'POST') posts.push(url)
+      if (url === 'api/repos') return response(JSON.stringify(popupRepos))
+      if (url === 'api/sessions') return sessionsReply([])
+      return reply(url)
+    },
+  })
+  app.context.location.hash = hash
+  await app.run('poll()')
+  await settle()
+  return { app, invoked, posts }
+}
+
+test('github page actions parse PR and issue URLs', async () => {
+  const app = await reposApp(popupRepos)
+  const action = (url) => plain(app.run(`githubPageAction(${JSON.stringify(url)})`))
+
+  assert.deepEqual(action('https://github.com/lightbend/akka-runtime/pull/12/files'), { kind: 'pr', number: 12, path: runtimeMain })
+  assert.deepEqual(action('https://github.com/Lightbend/Akka-Runtime/issues/45#issuecomment-1'), { kind: 'issue', number: 45, path: runtimeMain })
+  assert.deepEqual(action('https://github.com/lightbend/akka-runtime/pull/7?w=1'), { kind: 'pr', number: 7, path: runtimeMain })
+
+  // `other/repo` names only the checkout with an error.
+  const none = [
+    'https://github.com/other/repo/pull/1',
+    'https://github.com/lightbend/akka-runtime',
+    'https://github.com/lightbend/akka-runtime/pulls',
+    'https://github.com/lightbend/akka-runtime/pull/12x',
+    'https://github.com/pulls',
+    'https://gist.github.com/lightbend/akka-runtime/pull/1',
+    'http://github.com/lightbend/akka-runtime/pull/1',
+    null,
+  ]
+  for (const url of none) assert.equal(action(url), null, url)
+})
+
+test('github rows list the action then the repos', async () => {
+  const app = await reposApp(popupRepos)
+  const rows = (url) => plain(app.run(`githubRows(${JSON.stringify(url)})`))
+
+  assert.deepEqual(rows(runtimePr), [
+    { id: 'action', kind: 'action', label: 'Check out PR #12', detail: '', path: runtimeMain, github: 'lightbend/akka-runtime' },
+    { id: runtimeMain, kind: 'repo', label: 'akka/runtime', detail: 'lightbend/akka-runtime', path: runtimeMain, github: 'lightbend/akka-runtime' },
+    { id: orMain, kind: 'repo', label: 'o/r', detail: '', path: orMain, github: 'o/r' },
+  ])
+  assert.deepEqual(rows(runtimeIssue).map((row) => row.label), ['Start work on issue #45', 'akka/runtime', 'o/r'])
+  assert.deepEqual(rows(null).map((row) => row.label), ['akka/runtime', 'o/r'])
+})
+
+test('the github popup filters on local and github names', async () => {
+  const { app } = await githubPopupApp()
+
+  menu(app, 'go-github')
+  assert.equal(githubPopupDialog(app).open, true)
+  assert.equal(app.elements.get('github-popup-input').focused, true)
+  assert.equal(githubPopupText(app), 'akka/runtime lightbend/akka-runtime o/r')
+
+  for (const filter of ['akka-run', 'AKKA/run', 'lightbend runtime']) {
+    typeGithub(app, filter)
+    assert.equal(githubPopupText(app), 'akka/runtime lightbend/akka-runtime', filter)
+  }
+
+  typeGithub(app, 'nothing')
+  assert.equal(githubPopupText(app), 'No match.')
+  assert.equal(press(app, 'Enter'), false)
+  assert.equal(githubPopupDialog(app).open, true)
+
+  press(app, 'Escape')
+  app.run(`openGithubPopup(${JSON.stringify(runtimePr)})`)
+  typeGithub(app, 'check')
+  assert.equal(githubPopupText(app), 'Check out PR #12')
+  typeGithub(app, 'akka/runtime')
+  assert.equal(githubPopupText(app), 'Check out PR #12 akka/runtime lightbend/akka-runtime')
+})
+
+test('the github popup opens only over a github view and above no other pop-up', async () => {
+  const { app, invoked } = await githubPopupApp()
+
+  menu(app, 'go-github')
+  assert.equal(githubPopupDialog(app).open, true)
+  await settle()
+  assert.deepEqual(invoked.at(-1), homeHide)
+  menu(app, 'go-branches')
+  assert.equal(app.run('jump'), null)
+
+  menu(app, 'go-github')
+  assert.equal(githubPopupDialog(app).open, false)
+  assert.equal(app.run('githubPopup'), null)
+  await settle()
+  assert.deepEqual(invoked.at(-1), homeShow())
+
+  menu(app, 'go-github')
+  assert.ok(press(app, 'g', shift), 'Shift+Cmd+G still closes the pop-up')
+  assert.equal(app.run('githubPopup'), null)
+
+  menu(app, 'go-github')
+  githubPopupDialog(app).close()
+  assert.equal(app.run('githubPopup'), null, 'a native Esc clears the pop-up')
+
+  menu(app, 'go-branches')
+  menu(app, 'go-github')
+  assert.notEqual(githubPopupDialog(app).open, true)
+  press(app, 'Escape')
+
+  app.elements.get('modal').open = true
+  menu(app, 'go-github')
+  assert.notEqual(githubPopupDialog(app).open, true)
+  app.elements.get('modal').open = false
+
+  press(app, '?', { shiftKey: true })
+  menu(app, 'go-github')
+  assert.notEqual(githubPopupDialog(app).open, true)
+  press(app, '?', { shiftKey: true })
+
+  navigate(app, '#/sessions')
+  menu(app, 'go-github')
+  assert.notEqual(githubPopupDialog(app).open, true)
+
+  const browser = await reposApp(popupRepos, [], '#/')
+  assert.equal(press(browser, 'g', shift), false)
+  assert.notEqual(githubPopupDialog(browser).open, true)
+})
+
+test('enter on a repo row navigates the github view', async () => {
+  const { app, invoked } = await githubPopupApp()
+
+  menu(app, 'go-github')
+  typeGithub(app, 'akka/run')
+  assert.ok(press(app, 'Enter'))
+  await settle()
+
+  assert.equal(githubPopupDialog(app).open, false)
+  assert.equal(app.run('githubPopup'), null)
+  assert.deepEqual(invoked.slice(-2), [homeShow(), ['github_view_navigate', { view: 'home', url: 'https://github.com/lightbend/akka-runtime' }]])
+
+  menu(app, 'go-github')
+  assert.ok(press(app, 'ArrowDown'))
+  assert.ok(press(app, 'Enter'))
+  await settle()
+  assert.deepEqual(invoked.at(-1), ['github_view_navigate', { view: 'home', url: 'https://github.com/o/r' }])
+
+  const { app: worktree, invoked: shown } = await shownGithubApp()
+  worktree.run('openGithubPopup(null)')
+  assert.equal(githubPopupText(worktree), 'a/r')
+  assert.ok(press(worktree, 'Enter'))
+  await settle()
+  assert.deepEqual(shown.at(-1), ['github_view_navigate', { view: 'worktree', url: 'https://github.com/a/r' }])
+})
+
+test('start work on an issue suggests the slug and opens the worktree', async () => {
+  const folder = '/s/akka/runtime/add_x_45'
+  const reply = (url) => {
+    if (url.startsWith('api/issues/view?')) return response(JSON.stringify({ number: 45, title: 'Add X', url: runtimeIssue, slug: 'add_x_45' }))
+    if (url.startsWith('api/worktrees?')) return response(JSON.stringify({ path: folder }))
+    return response('', false, { status: 404 })
+  }
+  const { app, invoked, posts } = await githubPopupApp(reply)
+
+  app.run(`openGithubPopup(${JSON.stringify(`${runtimeIssue}#issuecomment-1`)})`)
+  assert.equal(githubPopupText(app), 'Start work on issue #45 akka/runtime lightbend/akka-runtime o/r')
+  assert.ok(press(app, 'Enter'))
+  await settle()
+
+  assert.ok(app.calls.includes('api/issues/view?path=%2Fs%2Fakka%2Fruntime%2Fmain&number=45'))
+  assert.equal(app.elements.get('modal').open, true)
+  assert.equal(app.elements.get('modal-text').textContent, 'Name of the worktree for issue #45')
+  assert.equal(app.elements.get('modal-input').value, 'add_x_45')
+  assert.equal(app.elements.get('modal-input').focused, true)
+  assert.equal(app.elements.get('modal-input').selected, true)
+  assert.deepEqual(posts, [])
+
+  const loads = app.calls.filter((url) => url === 'api/repos').length
+  closeModal(app, 'ok')
+  await settle()
+
+  assert.deepEqual(posts, ['api/worktrees?path=%2Fs%2Fakka%2Fruntime%2Fmain&name=add_x_45&issue=45'])
+  assert.equal(app.calls.filter((url) => url === 'api/repos').length, loads + 1)
+  assert.deepEqual(invoked.at(-1), ['open_window', { hash: worktreeHashOf(folder) }])
+  assert.equal(app.run('creatingWorktree'), false)
+})
+
+test('a cancelled or failed issue start creates no worktree window', async () => {
+  let view = response(JSON.stringify({ number: 45, title: 'Add X', url: runtimeIssue, slug: 'add_x_45' }))
+  const reply = (url) => {
+    if (url.startsWith('api/issues/view?')) return view
+    if (url.startsWith('api/worktrees?')) return response('add_x_45 already exists', false, { status: 409 })
+    return response('', false, { status: 404 })
+  }
+  const { app, invoked, posts } = await githubPopupApp(reply)
+  const opened = () => invoked.filter(([command]) => command === 'open_window')
+
+  app.run(`openGithubPopup(${JSON.stringify(runtimeIssue)})`)
+  press(app, 'Enter')
+  await settle()
+  closeModal(app, 'cancel')
+  await settle()
+  assert.deepEqual(posts, [])
+  assert.equal(app.run('creatingWorktree'), false)
+
+  app.run(`openGithubPopup(${JSON.stringify(runtimeIssue)})`)
+  press(app, 'Enter')
+  await settle()
+  closeModal(app, 'ok')
+  await settle()
+  assert.equal(posts.length, 1)
+  assert.equal(app.elements.get('modal-text').textContent, 'Could not create the worktree add_x_45: add_x_45 already exists')
+  closeModal(app, 'ok')
+
+  view = response('gh: issue not found', false)
+  app.run(`openGithubPopup(${JSON.stringify(runtimeIssue)})`)
+  press(app, 'Enter')
+  await settle()
+  assert.equal(app.elements.get('modal-text').textContent, 'Could not read issue #45: gh: issue not found')
+  assert.equal(posts.length, 1)
+  assert.deepEqual(opened(), [])
+  assert.equal(app.run('creatingWorktree'), false)
+})
+
+test('check out a PR opens its window', async () => {
+  const folder = '/s/akka/runtime/pr-12'
+  const reply = (url) => (url.startsWith('api/prs/checkout?') ? response(JSON.stringify({ path: folder })) : response('', false, { status: 404 }))
+  const { app, invoked, posts } = await githubPopupApp(reply)
+
+  app.run(`openGithubPopup(${JSON.stringify(`${runtimePr}/files`)})`)
+  assert.ok(press(app, 'Enter'))
+  await settle()
+
+  assert.deepEqual(posts, ['api/prs/checkout?path=%2Fs%2Fakka%2Fruntime%2Fmain&number=12'])
+  assert.deepEqual(invoked.at(-1), ['open_window', { hash: worktreeHashOf(folder) }])
+})
+
+test('menu shortcuts open the jump pop-up and the github pop-up', async () => {
+  const { app } = await githubPopupApp()
+
+  menu(app, 'go-branches')
+  assert.equal(jumpDialog(app).open, true)
+  assert.equal(app.run('jump.tab'), 'branches')
+  assert.equal(app.elements.get('jump-input').focused, true)
+  assert.equal(jumpText(app), 'akka/runtime/main o/r/main')
+
+  menu(app, 'go-branches')
+  assert.equal(app.run('jump'), null)
+  assert.equal(jumpDialog(app).open, false)
+
+  menu(app, 'go-terminals')
+  menu(app, 'go-worktrees')
+  assert.equal(app.run('jump.tab'), 'worktrees')
+  menu(app, 'go-github', runtimePr)
+  assert.equal(app.run('githubPopup'), null)
+  assert.equal(jumpDialog(app).open, true)
+  press(app, 'Escape')
+
+  menu(app, 'go-github', `${runtimePr}/files`)
+  assert.equal(githubPopupDialog(app).open, true)
+  assert.equal(app.elements.get('github-popup-input').focused, true)
+  assert.equal(githubPopupText(app), 'Check out PR #12 akka/runtime lightbend/akka-runtime o/r')
+
+  menu(app, 'go-branches')
+  assert.equal(app.run('jump'), null)
+  assert.equal(githubPopupDialog(app).open, true)
+
+  menu(app, 'go-github', null)
+  assert.equal(githubPopupDialog(app).open, false)
+  assert.equal(app.run('githubPopup'), null)
+})
+
+test('menu shortcuts respect open overlays', async () => {
+  const { app } = await githubPopupApp()
+
+  // Runs the pop-up items of the Go menu and checks that neither pop-up opened under `overlay`.
+  const opensNothing = (overlay) => {
+    for (const id of ['go-branches', 'go-github']) menu(app, id, runtimePr)
+    assert.equal(app.run('jump'), null, overlay)
+    assert.equal(app.run('githubPopup'), null, overlay)
+    assert.notEqual(jumpDialog(app).open, true, overlay)
+    assert.notEqual(githubPopupDialog(app).open, true, overlay)
+  }
+
+  app.run('tell("Done.")')
+  opensNothing('the modal')
+  closeModal(app, 'ok')
+
+  press(app, '?', { shiftKey: true })
+  opensNothing('the shortcuts dialog')
+  press(app, '?', { shiftKey: true })
+
+  menu(app, 'go-branches')
+  app.run('tell("Done.")')
+  menu(app, 'go-branches')
+  menu(app, 'go-worktrees')
+  assert.equal(app.run('jump.tab'), 'branches')
+  assert.equal(jumpDialog(app).open, true)
+  closeModal(app, 'ok')
+  menu(app, 'go-branches')
+
+  menu(app, 'go-github', runtimePr)
+  app.run('tell("Done.")')
+  menu(app, 'go-github', runtimePr)
+  assert.equal(githubPopupDialog(app).open, true)
+})
+
+test('menu bar steps do nothing under an overlay or in the editor', async () => {
+  const { app } = await githubApp(githubWorktree, [sessionAt('s1', githubWorktree)])
+  const start = app.context.location.hash
+
+  app.run('tell("Done.")')
+  menu(app, 'go-next-bar')
+  closeModal(app, 'ok')
+
+  press(app, '?', { shiftKey: true })
+  menu(app, 'go-next-bar')
+  press(app, '?', { shiftKey: true })
+
+  menu(app, 'go-branches')
+  menu(app, 'go-previous-bar')
+  press(app, 'Escape')
+  assert.equal(app.context.location.hash, start)
+
+  app.run('editing = {}')
+  app.context.document.activeElement = { closest: (selector) => (selector === '#view' ? {} : null) }
+  menu(app, 'go-next-bar')
+  assert.equal(app.context.location.hash, start)
+
+  app.run('editing = null')
+  menu(app, 'go-next-bar')
+  assert.notEqual(app.context.location.hash, start)
+})
+
+test('menu shortcuts answer whether the page acted', async () => {
+  const { app } = await githubPopupApp()
+
+  assert.equal(menu(app, 'go-next-bar'), false)
+  assert.equal(menu(app, 'go-previous-bar'), false)
+  assert.equal(menu(app, 'go-unknown'), false)
+
+  assert.equal(menu(app, 'go-branches'), true)
+  assert.equal(menu(app, 'go-github', runtimePr), false)
+  assert.equal(menu(app, 'go-branches'), true)
+  assert.equal(jumpDialog(app).open, false)
+
+  assert.equal(menu(app, 'go-github', runtimePr), true)
+  assert.equal(menu(app, 'go-branches'), false)
+  assert.equal(menu(app, 'go-github', runtimePr), true)
+  assert.equal(githubPopupDialog(app).open, false)
+
+  app.run('tell("Done.")')
+  assert.equal(menu(app, 'go-branches'), false)
+  closeModal(app, 'ok')
+
+  const { app: page, invoked } = await shownGithubApp()
+  const hash = page.context.location.hash
+  const calls = invoked.length
+
+  assert.equal(menu(page, 'go-detach'), false)
+  assert.equal(menu(page, 'go-board'), false)
+  assert.equal(page.context.location.hash, hash)
+  assert.equal(invoked.length, calls)
+
+  assert.equal(menu(page, 'go-next-bar'), true)
+  assert.notEqual(page.context.location.hash, hash)
+})
+
+test('inside tauri the keys are left to the menu', async () => {
+  const { app } = await githubPopupApp()
+
+  for (const key of ['b', 'w', 't', 'g']) assert.equal(press(app, key, shift), false, key)
+  assert.equal(app.run('jump'), null)
+  assert.equal(app.run('githubPopup'), null)
+  assert.notEqual(jumpDialog(app).open, true)
+  assert.notEqual(githubPopupDialog(app).open, true)
+
+  const { app: page } = await githubApp(githubWorktree, [sessionAt('s1', githubWorktree)])
+  const hash = page.context.location.hash
+  assert.equal(pressBar(page, 'next'), false)
+  assert.equal(press(page, 'n', cmd), false)
+  assert.equal(page.context.location.hash, hash)
+
+  const browser = await reposApp(popupRepos, [], '#/')
+  assert.ok(press(browser, 'b', shift))
+  assert.equal(jumpDialog(browser).open, true)
 })

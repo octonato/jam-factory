@@ -14,10 +14,11 @@
 
 //! Lists the worktrees of the configured main checkouts with `git worktree list --porcelain`.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use jam_factory_store::root::{resolve_github_user, resolve_repos};
+use jam_factory_store::root::{resolve_github_repos, resolve_github_user, resolve_repos};
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -33,9 +34,14 @@ pub trait RepoList: Send + Sync {
     fn github_user(&self) -> Result<Option<String>, String> {
         Ok(None)
     }
+
+    /// The GitHub `owner/name` of each local `org/repo` in the config, or the reason they cannot be read.
+    fn github_repos(&self) -> Result<BTreeMap<String, String>, String> {
+        Ok(BTreeMap::new())
+    }
 }
 
-/// The repos and the GitHub user of `~/.jam-factory/config.json` under `home`, read again on every call.
+/// The repos, the GitHub user and the GitHub names of `~/.jam-factory/config.json` under `home`, read again on every call.
 pub struct ConfigRepos {
     pub home: PathBuf,
 }
@@ -47,6 +53,10 @@ impl RepoList for ConfigRepos {
 
     fn github_user(&self) -> Result<Option<String>, String> {
         resolve_github_user(&self.home).map_err(|error| error.to_string())
+    }
+
+    fn github_repos(&self) -> Result<BTreeMap<String, String>, String> {
+        resolve_github_repos(&self.home).map_err(|error| error.to_string())
     }
 }
 
@@ -72,6 +82,7 @@ pub struct Worktree {
 pub struct Repo {
     pub org: String,
     pub repo: String,
+    pub github: String,
     pub path: String,
     pub branch: Option<String>,
     pub error: Option<String>,
@@ -135,6 +146,7 @@ fn repo(path: &Path) -> Repo {
     };
 
     Repo {
+        github: format!("{org}/{repo}"),
         org,
         repo,
         path: path.display().to_string(),
@@ -209,12 +221,29 @@ pub fn find_main(repos: &dyn RepoList, path: &Path) -> Option<Repo> {
         .map(|main| repo(main))
 }
 
-/// The main checkouts of `repos`, as `{"error": null | "<config error>", "repos": [...]}`.
+/// The main checkouts of `repos` with their GitHub names, as `{"error": null | "<config error>", "repos": [...]}`.
 pub fn repos_json(repos: &dyn RepoList) -> Value {
-    match repos.paths() {
-        Ok(paths) => json!({ "error": null, "repos": list(&paths) }),
+    let listed = repos.paths().and_then(|paths| {
+        let github = repos.github_repos()?;
+
+        Ok(with_github(list(&paths), &github))
+    });
+
+    match listed {
+        Ok(listed) => json!({ "error": null, "repos": listed }),
         Err(error) => json!({ "error": error, "repos": [] }),
     }
+}
+
+/// The repos `listed`, each with the GitHub name that `github` gives its local `org/repo`, if any.
+fn with_github(mut listed: Vec<Repo>, github: &BTreeMap<String, String>) -> Vec<Repo> {
+    for repo in &mut listed {
+        if let Some(name) = github.get(&format!("{}/{}", repo.org, repo.repo)) {
+            repo.github = name.clone();
+        }
+    }
+
+    listed
 }
 
 #[cfg(test)]
@@ -230,6 +259,22 @@ mod tests {
     impl RepoList for BrokenRepos {
         fn paths(&self) -> Result<Vec<PathBuf>, String> {
             Err("x".to_string())
+        }
+    }
+
+    /// A repo list with fixed paths and a fixed GitHub map.
+    struct MappedRepos {
+        paths: Vec<PathBuf>,
+        github: Result<BTreeMap<String, String>, String>,
+    }
+
+    impl RepoList for MappedRepos {
+        fn paths(&self) -> Result<Vec<PathBuf>, String> {
+            Ok(self.paths.clone())
+        }
+
+        fn github_repos(&self) -> Result<BTreeMap<String, String>, String> {
+            self.github.clone()
         }
     }
 
@@ -342,7 +387,7 @@ mod tests {
     }
 
     #[test]
-    fn lists_a_repo_with_a_linked_worktree() {
+    fn lists_a_repo_with_its_local_github_name() {
         let dir = tempfile::tempdir().unwrap();
         let Some((main, linked)) = repo_with_worktree(dir.path()) else {
             eprintln!("skipped: git is missing");
@@ -356,6 +401,7 @@ mod tests {
             vec![Repo {
                 org: "o".to_string(),
                 repo: "r".to_string(),
+                github: "o/r".to_string(),
                 path: main.display().to_string(),
                 branch: Some("main".to_string()),
                 error: None,
@@ -451,5 +497,34 @@ mod tests {
             repos_json(&BrokenRepos),
             json!({ "error": "x", "repos": [] })
         );
+    }
+
+    #[test]
+    fn repos_json_maps_github_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let Some((main, _)) = repo_with_worktree(dir.path()) else {
+            eprintln!("skipped: git is missing");
+            return;
+        };
+
+        let repos = MappedRepos {
+            paths: vec![main],
+            github: Ok(BTreeMap::from([
+                ("o/r".to_string(), "gh-o/gh-r".to_string()),
+                ("x/y".to_string(), "a/b".to_string()),
+            ])),
+        };
+
+        assert_eq!(repos_json(&repos)["repos"][0]["github"], "gh-o/gh-r");
+    }
+
+    #[test]
+    fn a_bad_github_map_is_a_top_level_error() {
+        let repos = MappedRepos {
+            paths: vec![PathBuf::from("/x/y/main")],
+            github: Err("bad".to_string()),
+        };
+
+        assert_eq!(repos_json(&repos), json!({ "error": "bad", "repos": [] }));
     }
 }

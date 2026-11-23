@@ -151,7 +151,7 @@ just app::uninstall-server
 
 The environment variable `JAM_FACTORY_PORT` overrides `port` for `jam-factory-server` and Jam Board. It must be a number from 1 to 65535. `./try-branch` uses it to run a second server and board, as [Try a branch's board](#try-a-branchs-board) shows.
 
-To list main checkouts in the Jam Board pop-up (⇧⌘B and ⇧⌘W) and on its PRs pages, set `repos` to a list of their paths. A leading `~` expands to your home folder. Each path must be absolute after expansion:
+To list main checkouts in the Jam Board pop-ups (⇧⌘B, ⇧⌘W and ⇧⌘G) and on its PRs pages, set `repos` to a list of their paths. A leading `~` expands to your home folder. Each path must be absolute after expansion:
 
 ```json
 {
@@ -162,7 +162,7 @@ To list main checkouts in the Jam Board pop-up (⇧⌘B and ⇧⌘W) and on its 
 }
 ```
 
-The pop-up lists each checkout with its linked worktrees. A worktree's page lists its live sessions and runs a shell or lazygit in each tab. When the worktree's branch has an open PR, the page's card is the PR's row as the PRs page shows it, with the reviewed and draft chips and the worktree's actions. `jam-factory-server` reads `repos` on each request, so a change to `repos` needs no restart.
+The ⇧⌘B and ⇧⌘W pop-up lists each checkout with its linked worktrees. A worktree's page lists its live sessions and runs a shell or lazygit in each tab. When the worktree's branch has an open PR, the page's card is the PR's row as the PRs page shows it, with the reviewed and draft chips and the worktree's actions. `jam-factory-server` reads `repos` on each request, so a change to `repos` needs no restart.
 
 To create a worktree, press `b` on the PRs page of a main checkout. Enter the worktree name. Jam Board creates a new branch at the main checkout's HEAD in a sibling folder named after the worktree, then opens the worktree page. To prefix the branch with your GitHub user, set `githubUser`. With `"githubUser": "octonato"`, the name `rate-limit` gives the branch `octonato/rate-limit` in the folder `rate-limit`:
 
@@ -179,6 +179,23 @@ A worktree's GitHub tab shows the worktree's GitHub page inside Jam Board: the b
 ```
 
 Jam Board reads `githubSignInHosts` when a window first shows its GitHub tab. Reopen the window after a change. The tab shows an error when an entry is not a valid host.
+
+Press ⇧⌘G while a GitHub tab shows to open the GitHub pop-up over it. Type to filter the rows. Press ↑ and ↓ to move, `Enter` to run the selected row and `Esc` to close. When the tab shows a PR or an issue of a repo in `repos`, the pop-up lists an action row first:
+
+- **Check out PR #N** checks out the PR into a new sibling worktree, or finds the worktree that holds it. Then it opens the worktree in its own window.
+- **Start work on issue #N** asks for the worktree name, with a suggested name in the field. The suggestion joins the first 4 words of the issue title with `_`, in lowercase, and appends `_N`. Every character that is not a letter or a digit splits words. The issue `[SDK] Add rate-limit: per tenant` #45 gives `sdk_add_rate_limit_45`, and a title with no words gives `issue_45`. Edit the name, or press `Enter` to keep it. Jam Board creates the worktree as `b` does on the PRs page. It writes the issue title and link to `.nogit/issue.md` in the worktree, then opens the worktree in its own window.
+
+Then the pop-up lists each repo in `repos` by its local `org/repo`, with its GitHub `owner/name` when the two differ. `Enter` on a repo loads its GitHub page in the tab.
+
+The pop-up finds the repo of a PR or an issue by the repo's GitHub name. The local `org/repo` of a checkout comes from its path: `~/Sources/akka/runtime/main` gives `akka/runtime`. When the repo has another name on GitHub, set `github` to map each local `org/repo` to its GitHub `owner/name`. If `akka/runtime` lives on GitHub as `lightbend/akka-runtime`, its PR and issue pages show no action row until you add this entry:
+
+```json
+{ "github": { "akka/runtime": "lightbend/akka-runtime" } }
+```
+
+A repo missing from `github` uses its local `org/repo` as its GitHub name. Jam Board ignores a key that names no repo in `repos`. Each key and each value must be two non-empty parts split by one `/`. A bad entry is a config error: Jam Board lists no repos and shows the error. `jam-factory-server` reads `github` on each request, as it reads `repos`.
+
+The Go menu of Jam Board holds the board-wide keys: ⇧⌘B, ⇧⌘W, ⇧⌘T, ⇧⌘G, ⌥⌘[, ⌥⌘], ⌘N and ⌘0. The menu gets these keys before the focused view does, so they work while the GitHub tab has focus. Every other key goes to the focused view.
 
 To open a worktree from a terminal, run `jb` in it, or pass its path or a folder inside it. `jb` opens the worktree in its own Jam Board window, or focuses the window when it is open. It starts Jam Board when it is not running. The worktree must be a linked worktree of a checkout in `repos`:
 
@@ -361,7 +378,7 @@ A step in changes mode holds git diffs. A step in code-path mode holds lines of 
 
 ```
 ~/.jam-factory/
-  config.json                    optional: { "root": "<root>", "port": <port>, "repos": ["<path>", ...], "githubUser": "<login>", "githubSignInHosts": ["<host>", ...] }
+  config.json                    optional: { "root": "<root>", "port": <port>, "repos": ["<path>", ...], "githubUser": "<login>", "githubSignInHosts": ["<host>", ...], "github": { "<org/repo>": "<owner/name>", ... } }
 <root>/                          ~/.jam-factory/factory by default
   <org>/<repo>/sessions/<branch>/<session id>/
     session.json                 the session's mode, stage, round and counts

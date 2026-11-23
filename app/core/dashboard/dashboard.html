@@ -490,7 +490,7 @@
     border-radius: 4px;
   }
 
-  #jump {
+  #jump, #github-popup {
     width: min(640px, calc(100vw - 32px));
     margin-top: 15vh;
     padding: 16px 20px;
@@ -500,7 +500,7 @@
     border-radius: 6px;
   }
 
-  #jump::backdrop { background: rgb(0 0 0 / 40%); }
+  #jump::backdrop, #github-popup::backdrop { background: rgb(0 0 0 / 40%); }
 
   #jump-tabs {
     display: flex;
@@ -521,7 +521,7 @@
   .jump-tab:hover { color: var(--accent); }
   .jump-tab[aria-selected="true"] { color: var(--accent); border-bottom-color: var(--accent); }
 
-  #jump-input {
+  #jump-input, #github-popup-input {
     display: block;
     width: 100%;
     margin-bottom: 12px;
@@ -533,9 +533,9 @@
     border-radius: 6px;
   }
 
-  #jump-input:focus { border-color: var(--accent); outline: none; }
+  #jump-input:focus, #github-popup-input:focus { border-color: var(--accent); outline: none; }
 
-  #jump-list {
+  #jump-list, #github-popup-list {
     display: block;
     max-height: 60vh;
     margin: 0 -5px;
@@ -543,7 +543,7 @@
     overflow-y: auto;
   }
 
-  #jump-list .empty { margin: 0; }
+  #jump-list .empty, #github-popup-list .empty { margin: 0; }
 
   .jump-row {
     display: flex;
@@ -554,7 +554,7 @@
 
   .jump-row.selected { background: color-mix(in srgb, var(--accent) 12%, transparent); }
   .jump-path { color: var(--ink); }
-  .jump-term { color: var(--ink-2); }
+  .jump-term, .jump-detail { color: var(--ink-2); }
 
   #view {
     flex: 1;
@@ -1145,6 +1145,10 @@
   <input id="jump-input" autocomplete="off" spellcheck="false">
   <div id="jump-list"></div>
 </dialog>
+<dialog id="github-popup" aria-label="GitHub">
+  <input id="github-popup-input" autocomplete="off" spellcheck="false">
+  <div id="github-popup-list"></div>
+</dialog>
 
 <script src="marked.min.js"></script>
 <script src="purify.min.js"></script>
@@ -1319,8 +1323,10 @@ const GITHUB_ITEM = 'github'
 const HOME_URL = 'https://github.com/pulls'
 // The fixed `path` key of the home view.
 const HOME_KEY = 'github:pulls'
-// The ids of the pop-ups that hide the GitHub view while they show: the jump pop-up, the modal and the shortcuts help.
-const GITHUB_OVERLAYS = ['jump', 'modal', 'shortcuts']
+// The ids of the pop-ups that hide the GitHub view while they show: the jump pop-up, the GitHub pop-up, the modal and the shortcuts help.
+const GITHUB_OVERLAYS = ['jump', 'github-popup', 'modal', 'shortcuts']
+// The page of a PR or an issue on GitHub: its owner, its repo name, `pull` or `issues`, and its number, before any further path, query or fragment.
+const GITHUB_PAGE = /^https:\/\/github\.com\/([^/?#]+)\/([^/?#]+)\/(pull|issues)\/([1-9]\d*)(?:[/?#]|$)/
 const CI_LABELS = { none: 'no CI', pending: 'CI running', passing: 'CI passing', failing: 'CI failing' }
 const REVIEW_LABELS = {
   none: 'no reviews',
@@ -1343,6 +1349,12 @@ const JUMP_TABS = [
 ]
 // The pop-up tab each Shift+Cmd key opens.
 const JUMP_SHIFT_KEYS = { b: 'branches', w: 'worktrees', t: 'terminals' }
+// The pop-up tab each item of the app's Go menu opens.
+const GO_TABS = { 'go-branches': 'branches', 'go-worktrees': 'worktrees', 'go-terminals': 'terminals' }
+// The bar step of each item of the app's Go menu.
+const GO_BAR_STEPS = { 'go-previous-bar': -1, 'go-next-bar': 1 }
+// The window action of each item of the app's Go menu.
+const GO_WINDOW_ACTIONS = { 'go-detach': 'detach', 'go-board': 'board' }
 // The sections of the shortcuts dialog, each with its rows of keys and what they do.
 const SHORTCUTS = [
   {
@@ -1353,6 +1365,7 @@ const SHORTCUTS = [
       { keys: ['⇧⌘B'], text: 'Open the pop-up on Branches' },
       { keys: ['⇧⌘W'], text: 'Open the pop-up on Worktrees' },
       { keys: ['⇧⌘T'], text: 'Open the pop-up on Terminals' },
+      { keys: ['⇧⌘G'], text: 'Open the GitHub pop-up' },
       { keys: ['⌘=', '⌘-'], text: 'Make the text of the shown tab bigger or smaller' },
     ],
   },
@@ -1536,6 +1549,8 @@ let prFilter = ''
 let jump = null
 // The tab strip HTML last drawn in the pop-up.
 let jumpTabsHtml = ''
+// The open GitHub pop-up: `{ url, filter, selected }`, where `url` is the shown GitHub page or null and `selected` is the id of the selected row or null. Null while the pop-up is closed.
+let githubPopup = null
 // The `${path}#${number}` keys of the PRs whose checkout runs.
 const prBusy = new Set()
 // True while the board asks for a worktree name or creates the worktree.
@@ -2608,7 +2623,7 @@ async function fetchGithubUrl(path) {
   render()
 }
 
-// Returns true while the jump pop-up, the modal or the shortcuts help shows.
+// Returns true while the jump pop-up, the GitHub pop-up, the modal or the shortcuts help shows.
 function githubOverlayOpen() {
   return GITHUB_OVERLAYS.some((id) => $(id).open)
 }
@@ -3846,11 +3861,14 @@ async function tell(message) {
   await openModal(message, false)
 }
 
-// Shows the modal with `message` above an empty text field, and resolves with the trimmed text on OK, or null.
-async function askText(message) {
-  $('modal-input').value = ''
+// Shows the modal with `message` above a text field that holds `value` selected, and resolves with the trimmed text on OK, or null.
+async function askText(message, value = '') {
+  $('modal-input').value = value
 
-  const answer = await openModal(message, true, true)
+  const closed = openModal(message, true, true)
+  $('modal-input').select()
+
+  const answer = await closed
   return answer === 'ok' ? $('modal-input').value.trim() : null
 }
 
@@ -3958,6 +3976,12 @@ function switchJumpTab(tab) {
   renderJump()
 }
 
+// Closes the pop-up when `tab` is its active tab, or else makes `tab` active.
+function toggleJumpTab(tab) {
+  if (tab === jump.tab) closeJump()
+  else switchJumpTab(tab)
+}
+
 // Makes the pop-up tab `step` places after the active tab active, and wraps at both ends.
 function stepJumpTab(step) {
   const tabs = JUMP_TABS.map((entry) => entry.tab)
@@ -4018,6 +4042,190 @@ function onJumpInput(event) {
   jump.filter = event.currentTarget.value
   jump.selected = shownJumpRows()[0]?.path ?? null
   renderJump()
+}
+
+// Returns the GitHub `owner/name` of `repo`, or its local `org/repo` when the reply has none.
+function repoGithub(repo) {
+  return stringOrNull(repo.github) ?? `${repo.org}/${repo.repo}`
+}
+
+// Returns the action of the GitHub page at `url` as `{ kind, number, path }`: `pr` or `issue`, its number, and the main checkout of the repo whose GitHub name matches, in any case.
+// Returns null when `url` is no PR or issue page, or when no repo without an error matches.
+function githubPageAction(url) {
+  const match = typeof url === 'string' ? GITHUB_PAGE.exec(url) : null
+  if (match === null) return null
+
+  const [, owner, name, page, number] = match
+  const github = `${owner}/${name}`.toLowerCase()
+  const repo = (reposState?.repos ?? []).find((entry) => entry.error === null && repoGithub(entry).toLowerCase() === github)
+  if (repo === undefined) return null
+
+  return { kind: page === 'pull' ? 'pr' : 'issue', number: Number(number), path: repo.path }
+}
+
+// Returns the GitHub pop-up rows for the page at `url` as `{ id, kind, label, detail, path, github }`: the `action` row of `githubPageAction(url)` when it has one, then a `repo` row for each repo without an error.
+// `label` is the action text or the local `org/repo`. `detail` is the GitHub name of a repo row when it differs from the local one, or ''.
+function githubRows(url) {
+  const repos = (reposState?.repos ?? []).filter((repo) => repo.error === null)
+  const rows = repos.map((repo) => {
+    const local = `${repo.org}/${repo.repo}`
+    const github = repoGithub(repo)
+    return { id: repo.path, kind: 'repo', label: local, detail: github === local ? '' : github, path: repo.path, github }
+  })
+
+  const action = githubPageAction(url)
+  if (action === null) return rows
+
+  const label = action.kind === 'pr' ? `Check out PR #${action.number}` : `Start work on issue #${action.number}`
+  return [{ id: 'action', kind: 'action', label, detail: '', path: action.path, github: repoGithub(findRepo(action.path)) }, ...rows]
+}
+
+// Returns the rows of the open GitHub pop-up whose label, local name and GitHub name hold every word of the filter.
+function shownGithubRows() {
+  const words = filterWords(githubPopup.filter)
+
+  return githubRows(githubPopup.url).filter((row) => {
+    const repo = findRepo(row.path)
+    return holdsWords(`${row.label} ${repo.org}/${repo.repo} ${row.github}`, words)
+  })
+}
+
+// Returns the GitHub pop-up line of `row`, tinted when `selected`: its label, then its detail when it has one.
+function githubRowHtml(row, selected) {
+  const detail = row.detail === '' ? '' : `<span class="jump-detail">${escape(row.detail)}</span>`
+  return `
+    <div class="jump-row${selected ? ' selected' : ''}" data-id="${escape(row.id)}">
+      <span class="jump-path">${escape(row.label)}</span>${detail}
+    </div>`
+}
+
+// Opens the GitHub pop-up for the GitHub page at `url` with an empty filter and its first row selected, above a hidden GitHub view, and returns true.
+// Opens nothing and returns false while no GitHub view shows.
+function openGithubPopup(url) {
+  if (githubTarget() === null) return false
+
+  githubPopup = { url, filter: '', selected: null }
+  $('github-popup-input').value = ''
+
+  hideGithubView()
+  $('github-popup').showModal()
+  $('github-popup-input').focus()
+  renderGithubPopup()
+  return true
+}
+
+function closeGithubPopup() {
+  githubPopup = null
+  $('github-popup').close()
+}
+
+// Draws the shown rows of the open GitHub pop-up, or `No match.`. Selects the first row when the selected row is not shown.
+function renderGithubPopup() {
+  const rows = shownGithubRows()
+  if (!rows.some((row) => row.id === githubPopup.selected)) githubPopup.selected = rows[0]?.id ?? null
+
+  $('github-popup-list').innerHTML = rows.length > 0
+    ? rows.map((row) => githubRowHtml(row, row.id === githubPopup.selected)).join('')
+    : '<p class="empty">No match.</p>'
+  $('github-popup-list').querySelector('.jump-row.selected')?.scrollIntoView({ block: 'nearest' })
+}
+
+// Moves the GitHub pop-up selection by `step` rows and stops at the first and last rows.
+function moveGithubSelection(step) {
+  const ids = shownGithubRows().map((row) => row.id)
+  if (ids.length === 0) return
+
+  const current = ids.indexOf(githubPopup.selected)
+  githubPopup.selected = ids[Math.min(ids.length - 1, Math.max(0, current + step))]
+  renderGithubPopup()
+}
+
+// Shows the GitHub pop-up rows that match the typed filter and selects the first one.
+function onGithubPopupInput(event) {
+  githubPopup.filter = event.currentTarget.value
+  githubPopup.selected = shownGithubRows()[0]?.id ?? null
+  renderGithubPopup()
+}
+
+// Closes the GitHub pop-up and runs `row`: a repo row loads its GitHub page in the shown GitHub view, and the action row checks out its PR or starts work on its issue.
+function runGithubRow(row) {
+  const action = githubPageAction(githubPopup.url)
+  closeGithubPopup()
+
+  if (row.kind === 'repo') return navigateGithubView(githubRepoUrl(row.github))
+  if (action.kind === 'pr') return checkOutPagePr(action.path, action.number)
+  return startIssueWork(action.path, action.number)
+}
+
+// Returns the URL of the GitHub page of the repo `github`, an `owner/name`.
+function githubRepoUrl(github) {
+  return `https://github.com/${github.split('/').map(encodeURIComponent).join('/')}`
+}
+
+// Loads `url` in the shown GitHub view. Tells the user the error.
+function navigateGithubView(url) {
+  const target = githubTarget()
+  if (target === null) return
+
+  const { view } = target
+  queueGithub(() => window.__TAURI__.core.invoke('github_view_navigate', { view, url })).catch((err) => tell(String(err)))
+}
+
+// Checks out PR `number` of the main checkout at `path` and opens its worktree in its own window. Does nothing while its checkout runs.
+async function checkOutPagePr(path, number) {
+  const pr = { number }
+  if (prBusy.has(prBusyKey(path, pr))) return
+
+  const folder = await prCheckout(path, pr)
+  if (folder !== null) openWindow(worktreeHash(folder))
+}
+
+// Returns the worktree slug of issue `number` of the main checkout at `path`.
+async function fetchIssueSlug(path, number) {
+  const res = await fetch(`api/issues/view?path=${encodeURIComponent(path)}&number=${number}`, { cache: 'no-store' })
+  const text = await res.text()
+  if (!res.ok) throw new Error(text.trim() || `${res.status} ${res.statusText}`)
+
+  const slug = stringOrNull(JSON.parse(text)?.slug)
+  if (slug === null) throw new Error('the reply has no slug')
+  return slug
+}
+
+// Asks for the name of a worktree for issue `number` of the main checkout at `path`, with the issue's slug filled in.
+// Then creates the worktree with its issue note, reloads the repos and opens the worktree in its own window.
+// Does nothing while a creation runs. Tells the user the error.
+async function startIssueWork(path, number) {
+  if (creatingWorktree) return
+  creatingWorktree = true
+
+  let slug = null
+  try {
+    slug = await fetchIssueSlug(path, number)
+  } catch (err) {
+    creatingWorktree = false
+    return tell(`Could not read issue #${number}: ${err.message}`)
+  }
+
+  const name = await askText(`Name of the worktree for issue #${number}`, slug)
+  if (!name) {
+    creatingWorktree = false
+    return
+  }
+
+  let folder = null
+  let problem = null
+  try {
+    folder = await postWorktree(path, name, number)
+    await loadRepos()
+  } catch (err) {
+    problem = err.message
+  }
+
+  creatingWorktree = false
+  if (problem !== null) return tell(`Could not create the worktree ${name}: ${problem}`)
+
+  render()
+  openWindow(worktreeHash(folder))
 }
 
 // Returns an editor over `text` in `container`.
@@ -4650,9 +4858,10 @@ async function postCheckout(path, pr) {
   return folder
 }
 
-// Posts a new worktree `name` of the main checkout at `path` and returns the worktree path of the reply.
-async function postWorktree(path, name) {
-  const res = await fetch(`api/worktrees?path=${encodeURIComponent(path)}&name=${encodeURIComponent(name)}`, { method: 'POST' })
+// Posts a new worktree `name` of the main checkout at `path`, with the note of issue `issue` unless it is null, and returns the worktree path of the reply.
+async function postWorktree(path, name, issue = null) {
+  const note = issue === null ? '' : `&issue=${issue}`
+  const res = await fetch(`api/worktrees?path=${encodeURIComponent(path)}&name=${encodeURIComponent(name)}${note}`, { method: 'POST' })
   const text = await res.text()
   if (!res.ok) throw new Error(text.trim() || `${res.status} ${res.statusText}`)
 
@@ -4983,9 +5192,10 @@ function renderTabs(kind) {
 // A route off the Terminal item parks the shown worktree terminal. A route off the Terminal item of the edited tab name drops the edit.
 // A route off the home page and off a GitHub item hides the GitHub view. A route off the home page drops the error of the home view.
 // A route into a worktree page records its origin. A route off the PRs page drops its PRs, selection and filter.
-// A route off the worktree pages drops their PRs. Redraws the open pop-up. Marks the shown tab in attention seen, then renders again.
+// A route off the worktree pages drops their PRs. Redraws the open pop-ups. Marks the shown tab in attention seen, then renders again.
 function render() {
   if (jump !== null) renderJump()
+  if (githubPopup !== null) renderGithubPopup()
 
   let route = parseRoute(location.hash)
   if (editing !== null && !routeShows(route, editing)) return
@@ -5387,6 +5597,11 @@ function jumpShortcut(event) {
   return Object.hasOwn(JUMP_SHIFT_KEYS, key) ? JUMP_SHIFT_KEYS[key] : null
 }
 
+// Returns true for Shift+Cmd+G, the key of the GitHub pop-up.
+function githubShortcut(event) {
+  return event.metaKey && event.shiftKey && !event.ctrlKey && !event.altKey && event.key.toLowerCase() === 'g'
+}
+
 // Returns the text size step of `event`: 1 for Cmd+= and Cmd++, -1 for Cmd+-, and null for any other key.
 function textSizeKey(event) {
   if (!event.metaKey || event.ctrlKey || event.altKey) return null
@@ -5422,8 +5637,7 @@ function runWindowAction(action) {
 function jumpKey(event) {
   const tab = jumpShortcut(event)
   if (tab !== null) {
-    if (tab === jump.tab) closeJump()
-    else switchJumpTab(tab)
+    toggleJumpTab(tab)
     return true
   }
 
@@ -5452,22 +5666,54 @@ function jumpKey(event) {
   return true
 }
 
+// Handles `event` in the open GitHub pop-up and returns true when it acted. Shift+Cmd+G and Escape close the pop-up.
+function githubPopupKey(event) {
+  if (githubShortcut(event) || event.key === 'Escape') {
+    closeGithubPopup()
+    return true
+  }
+
+  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    moveGithubSelection(event.key === 'ArrowDown' ? 1 : -1)
+    return true
+  }
+
+  if (event.key !== 'Enter') return false
+
+  const row = shownGithubRows().find((shown) => shown.id === githubPopup.selected)
+  if (row === undefined) return false
+
+  runGithubRow(row)
+  return true
+}
+
 // Dispatches a shortcut key to the open pop-up, or else to the shown page. Leaves every key to the modal above the pop-up.
+// In the app, leaves the keys of the Go menu items to the menu.
 function onKey(event) {
   if (jump !== null) {
     if (!$('modal').open && jumpKey(event)) event.preventDefault()
     return
   }
 
+  if (githubPopup !== null) {
+    if (!$('modal').open && githubPopupKey(event)) event.preventDefault()
+    return
+  }
+
   const jumpTab = jumpShortcut(event)
-  if (jumpTab !== null && !$('modal').open && !$('shortcuts').open) {
+  if (jumpTab !== null && window.__TAURI__ === undefined && !$('modal').open && !$('shortcuts').open) {
     event.preventDefault()
     openJump(jumpTab)
     return
   }
 
+  if (githubShortcut(event) && window.__TAURI__ === undefined && !$('modal').open && !$('shortcuts').open && openGithubPopup(null)) {
+    event.preventDefault()
+    return
+  }
+
   const windowAction = windowKey(event)
-  if (windowAction !== null && !$('modal').open && !$('shortcuts').open && runWindowAction(windowAction)) {
+  if (windowAction !== null && window.__TAURI__ === undefined && !$('modal').open && !$('shortcuts').open && runWindowAction(windowAction)) {
     event.preventDefault()
     return
   }
@@ -5507,7 +5753,7 @@ function onKey(event) {
   }
 
   const barStep = barKey(event)
-  if (barStep !== null && !$('modal').open && stepBarItem(barStep === 'next' ? 1 : -1)) {
+  if (barStep !== null && window.__TAURI__ === undefined && !$('modal').open && stepBarItem(barStep === 'next' ? 1 : -1)) {
     event.preventDefault()
     return
   }
@@ -5558,6 +5804,40 @@ function onKey(event) {
 
   const session = state.sessions.find((s) => sessionHref(s) === sessionHref(route))
   if (session ? sessionKey(key, session) : missingSessionKey(key, route)) event.preventDefault()
+}
+
+// Runs the item `id` of the app's Go menu as `onKey` runs its key, and returns true when it acted. `githubUrl` is the URL of the shown GitHub view, or null.
+function onMenuShortcut(id, githubUrl) {
+  const tab = Object.hasOwn(GO_TABS, id) ? GO_TABS[id] : null
+  if (jump !== null) {
+    if (tab === null || $('modal').open) return false
+    toggleJumpTab(tab)
+    return true
+  }
+
+  if (githubPopup !== null) {
+    if (id !== 'go-github' || $('modal').open) return false
+    closeGithubPopup()
+    return true
+  }
+
+  if ($('modal').open || $('shortcuts').open) return false
+
+  if (tab !== null) {
+    openJump(tab)
+    return true
+  }
+
+  if (id === 'go-github') return openGithubPopup(githubUrl)
+  if (Object.hasOwn(GO_WINDOW_ACTIONS, id)) return runWindowAction(GO_WINDOW_ACTIONS[id])
+  if (Object.hasOwn(GO_BAR_STEPS, id)) return !editorFocused() && stepBarItem(GO_BAR_STEPS[id])
+  return false
+}
+
+// Returns true while the editor holds the focus.
+function editorFocused() {
+  const focused = document.activeElement ?? null
+  return editing !== null && focused !== null && focused.closest('#view') !== null
 }
 
 // Returns the number stored at `key` when `valid` accepts it, or null.
@@ -5711,6 +5991,8 @@ $('modal-input').addEventListener('keydown', onModalInputKey)
 $('jump-input').addEventListener('input', onJumpInput)
 $('jump-tabs').addEventListener('click', onJumpTabsClick)
 $('jump').addEventListener('close', () => { jump = null })
+$('github-popup-input').addEventListener('input', onGithubPopupInput)
+$('github-popup').addEventListener('close', () => { githubPopup = null })
 for (const id of GITHUB_OVERLAYS) $(id).addEventListener('close', showGithubView)
 
 window.addEventListener('hashchange', onHashChange)

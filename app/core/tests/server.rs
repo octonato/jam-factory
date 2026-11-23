@@ -489,6 +489,7 @@ fn get_repos_lists_worktrees() {
             "repos": [{
                 "org": "o",
                 "repo": "r",
+                "github": "o/r",
                 "path": main,
                 "branch": "main",
                 "error": null,

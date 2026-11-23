@@ -28,6 +28,7 @@ use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 use jam_factory_store::root::resolve_port;
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 
+use crate::github_view;
 use crate::navigation::{self, Navigation};
 use crate::probe;
 
@@ -47,6 +48,8 @@ const SERVER_DEADLINE: Duration = Duration::from_secs(3);
 const ASK_PAGE_TO_CLOSE: &str = "onCloseRequested()";
 
 const STEP_TEXT_SIZE: &str = "stepTextSize";
+
+const ON_MENU_SHORTCUT: &str = "onMenuShortcut";
 
 const LINK_SCHEME: &str = "jam-board";
 
@@ -321,6 +324,42 @@ fn step_text_size_script(step: i32) -> String {
     format!("{STEP_TEXT_SIZE}({step})")
 }
 
+/// Asks the page of the focused board window to run the Go menu item `id` with the URL of its shown GitHub view, and focuses the board web view when the page acted.
+pub fn run_menu_shortcut(app: &AppHandle, id: &str) {
+    let Some(window) = focused_board_window(app) else {
+        return;
+    };
+    let Some(page) = board_webview(&window) else {
+        return;
+    };
+
+    let url = github_view::shown_url(&window);
+    let focusing = page.clone();
+    let asked = page.eval_with_callback(menu_shortcut_script(id, url.as_ref()), move |answer| {
+        if acted(&answer)
+            && let Err(e) = focusing.set_focus()
+        {
+            eprintln!("jam-board: cannot focus the board page: {e}");
+        }
+    });
+    if let Err(e) = asked {
+        eprintln!("jam-board: Cannot run the menu shortcut {id}: {e}");
+    }
+}
+
+/// Returns true when the page answered `true`.
+fn acted(answer: &str) -> bool {
+    answer == "true"
+}
+
+/// Returns the call of the page function that runs the Go menu item `id`, with `url` or `null`, both as JSON.
+fn menu_shortcut_script(id: &str, url: Option<&Url>) -> String {
+    let id = serde_json::Value::from(id);
+    let url = serde_json::Value::from(url.map(Url::as_str));
+
+    format!("{ON_MENU_SHORTCUT}({id},{url})")
+}
+
 /// Returns true when the web view labelled `webview_label` is the board web view of the window labelled `window_label`.
 fn is_board_webview(window_label: &str, webview_label: &str) -> bool {
     webview_label == window_label
@@ -506,6 +545,39 @@ mod tests {
     }
 
     #[test]
+    fn the_menu_shortcut_script_passes_the_id_and_url() {
+        let url = Url::parse("https://github.com/o/r/pull/1").unwrap();
+
+        assert_eq!(
+            menu_shortcut_script("go-github", Some(&url)),
+            r#"onMenuShortcut("go-github","https://github.com/o/r/pull/1")"#
+        );
+        assert_eq!(
+            menu_shortcut_script("go-branches", None),
+            r#"onMenuShortcut("go-branches",null)"#
+        );
+        assert_eq!(
+            menu_shortcut_script(r#"go-"x"#, None),
+            r#"onMenuShortcut("go-\"x",null)"#
+        );
+    }
+
+    #[test]
+    fn the_page_acted_only_when_it_answers_true() {
+        assert!(acted("true"));
+        assert!(!acted("false"));
+        assert!(!acted(""));
+        assert!(!acted("null"));
+    }
+
+    #[test]
+    fn the_dashboard_answers_menu_shortcuts() {
+        let dashboard = include_str!("../../core/dashboard/dashboard.html");
+
+        assert!(dashboard.contains(&format!("function {ON_MENU_SHORTCUT}(id, githubUrl)")));
+    }
+
+    #[test]
     fn the_board_capability_covers_the_dashboard_on_any_port() {
         let file: CapabilityFile = include_str!("../capabilities/board.json").parse().unwrap();
         let CapabilityFile::Capability(capability) = file else {
@@ -533,7 +605,11 @@ mod tests {
                 .iter()
                 .any(|p| p.identifier().get() == "core:window:allow-set-title")
         );
-        for github_view in ["allow-github-view-show", "allow-github-view-hide"] {
+        for github_view in [
+            "allow-github-view-show",
+            "allow-github-view-hide",
+            "allow-github-view-navigate",
+        ] {
             assert!(
                 capability
                     .permissions

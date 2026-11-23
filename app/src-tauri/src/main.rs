@@ -29,7 +29,8 @@ fn main() {
             windows::open_window,
             windows::open_main_window,
             github_view::github_view_show,
-            github_view::github_view_hide
+            github_view::github_view_hide,
+            github_view::github_view_navigate
         ])
         .setup(|app| {
             windows::open_board_window(app.handle());

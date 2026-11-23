@@ -521,7 +521,7 @@ pub fn worktree_folder(main: &Path, branch: &str) -> PathBuf {
 }
 
 /// The positive integer in the `number` query field of `target`.
-fn pr_number(target: &str) -> Option<u64> {
+pub(super) fn pr_number(target: &str) -> Option<u64> {
     query_field(target, "number")?
         .parse::<u64>()
         .ok()

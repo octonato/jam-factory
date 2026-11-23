@@ -12,8 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Finds the factory root, the server port, the repos, the GitHub user and the GitHub sign-in hosts from `~/.jam-factory/config.json`.
+//! Finds the factory root, the server port, the repos, the GitHub user, the GitHub sign-in hosts and the GitHub names of the repos from `~/.jam-factory/config.json`.
 
+use std::collections::BTreeMap;
 use std::env;
 use std::ffi::OsString;
 use std::fs;
@@ -82,6 +83,14 @@ pub struct SignInHostsError {
     pub reason: String,
 }
 
+/// A config file whose GitHub names of the repos cannot be read, with its path and the reason.
+#[derive(Debug, Error)]
+#[error("Cannot read github from {}: {reason}", path.display())]
+pub struct GithubReposError {
+    pub path: PathBuf,
+    pub reason: String,
+}
+
 #[derive(Default, Deserialize)]
 struct ReposConfig {
     repos: Option<Vec<String>>,
@@ -97,6 +106,11 @@ struct GithubUserConfig {
 struct SignInHostsConfig {
     #[serde(rename = "githubSignInHosts")]
     hosts: Option<Vec<String>>,
+}
+
+#[derive(Default, Deserialize)]
+struct GithubReposConfig {
+    github: Option<BTreeMap<String, String>>,
 }
 
 /// Returns the factory root for the home folder `home`.
@@ -232,6 +246,41 @@ fn is_host_pattern(pattern: &str) -> bool {
     domain.split('.').all(|label| {
         !label.is_empty() && label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
     })
+}
+
+/// Returns the `github` map of the config for the home folder `home`, from each local `org/repo` to its GitHub `owner/name`.
+pub fn resolve_github_repos(home: &Path) -> Result<BTreeMap<String, String>, GithubReposError> {
+    let path = home.join(CONFIG_DIR).join(CONFIG_FILE);
+
+    let error = |reason: String| GithubReposError {
+        path: path.clone(),
+        reason,
+    };
+
+    let config: GithubReposConfig = read_config(&path).map_err(error)?;
+
+    let github = config.github.unwrap_or_default();
+    for (local, remote) in &github {
+        if !is_repo_name(local) {
+            return Err(error(format!("repo {local:?} is not org/repo")));
+        }
+
+        if !is_repo_name(remote) {
+            return Err(error(format!(
+                "GitHub name {remote:?} of {local:?} is not owner/name"
+            )));
+        }
+    }
+
+    Ok(github)
+}
+
+/// Tells whether `text` is two non-empty parts split by one `/`.
+fn is_repo_name(text: &str) -> bool {
+    match text.split_once('/') {
+        Some((owner, name)) => !owner.is_empty() && !name.is_empty() && !name.contains('/'),
+        None => false,
+    }
 }
 
 /// Reads and parses the config file at `path`, or returns an empty config when it is missing.
@@ -604,6 +653,73 @@ mod tests {
     fn bad_sign_in_hosts_do_not_break_port() {
         let home = tempfile::tempdir().unwrap();
         write_config(home.path(), r#"{ "port": 9000, "githubSignInHosts": 3 }"#);
+
+        let port = resolve_port_with(home.path(), None).unwrap();
+
+        assert_eq!(port, 9000);
+    }
+
+    #[test]
+    fn github_repos_default_to_empty() {
+        let home = tempfile::tempdir().unwrap();
+
+        let github = resolve_github_repos(home.path()).unwrap();
+        assert_eq!(github, BTreeMap::new());
+
+        write_config(home.path(), r#"{ "root": "/x" }"#);
+        let github = resolve_github_repos(home.path()).unwrap();
+        assert_eq!(github, BTreeMap::new());
+    }
+
+    #[test]
+    fn github_repos_are_read() {
+        let home = tempfile::tempdir().unwrap();
+        write_config(
+            home.path(),
+            r#"{ "github": { "akka/runtime": "lightbend/akka-runtime" } }"#,
+        );
+
+        let github = resolve_github_repos(home.path()).unwrap();
+
+        assert_eq!(
+            github,
+            BTreeMap::from([(
+                "akka/runtime".to_string(),
+                "lightbend/akka-runtime".to_string()
+            )])
+        );
+    }
+
+    #[test]
+    fn bad_github_repos_are_errors() {
+        let home = tempfile::tempdir().unwrap();
+
+        for (value, entry) in [
+            (r#""x""#, r#""x""#),
+            (r#"{ "a": 3 }"#, "`3`"),
+            (r#"{ "a": "b/c" }"#, r#""a""#),
+            (r#"{ "a/b": "c" }"#, r#""c""#),
+            (r#"{ "a/b/c": "d/e" }"#, r#""a/b/c""#),
+            (r#"{ "a/b": "/c" }"#, r#""/c""#),
+            (r#"{ "a/b": "c/" }"#, r#""c/""#),
+        ] {
+            let text = format!(r#"{{ "github": {value} }}"#);
+            let config = write_config(home.path(), &text);
+
+            let err = resolve_github_repos(home.path()).unwrap_err();
+
+            assert!(
+                err.to_string().contains(&config.display().to_string()),
+                "{text}: {err}"
+            );
+            assert!(err.reason.contains(entry), "{text}: {err}");
+        }
+    }
+
+    #[test]
+    fn bad_github_repos_do_not_break_port() {
+        let home = tempfile::tempdir().unwrap();
+        write_config(home.path(), r#"{ "port": 9000, "github": 3 }"#);
 
         let port = resolve_port_with(home.path(), None).unwrap();
 
