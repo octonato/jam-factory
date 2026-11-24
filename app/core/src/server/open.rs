@@ -14,6 +14,7 @@
 
 //! Opens a session's worktree or a configured worktree in a tool, or its pull request or repository on GitHub.
 //! Routes: `POST /api/open/<tool>/<org>/<repo>/<branch>/<id>` and `POST /api/open/<tool>?path=<worktree>`.
+//! The query fields `file=<path>` and `line=<n>` open a file of the worktree at a line in Zed or IntelliJ.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -21,7 +22,8 @@ use std::process::Command;
 use jam_factory_store::sessions::SESSION_FILE;
 
 use super::api::{
-    Segments, configured_worktree, error_response, same_origin, segments, session_ref, worktree,
+    Segments, configured_worktree, error_response, query_field, same_origin, segments, session_ref,
+    worktree,
 };
 use super::http::{Request, Response};
 use super::repos::RepoList;
@@ -38,6 +40,21 @@ if [ -z "$url" ]; then
 fi
 open "$url"
 "#;
+
+/// A `sh` script that runs the CLI of the installed Zed app, or of `/Applications/Zed.app` when none is found, with its arguments.
+const ZED_SCRIPT: &str = r#"app=$(mdfind "kMDItemCFBundleIdentifier == 'dev.zed.Zed'" 2>/dev/null | head -n 1)
+if [ -z "$app" ]; then
+    app=/Applications/Zed.app
+fi
+exec "$app/Contents/MacOS/cli" "$@"
+"#;
+
+/// A file to open, and its line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileTarget {
+    pub file: PathBuf,
+    pub line: Option<u32>,
+}
 
 /// A tool that opens a worktree, or its pull request or repository on GitHub.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -82,6 +99,88 @@ impl Tool {
             ),
         }
     }
+
+    /// The program and arguments that open `worktree` with `target` in this tool, if it opens files.
+    pub fn file_command(
+        &self,
+        worktree: &Path,
+        target: &FileTarget,
+    ) -> Option<(String, Vec<String>)> {
+        let worktree = worktree.to_string_lossy().into_owned();
+        let file = target.file.to_string_lossy().into_owned();
+
+        match self {
+            Tool::IntelliJ => {
+                let mut args = vec![
+                    "-na".to_string(),
+                    "IntelliJ IDEA".to_string(),
+                    "--args".to_string(),
+                    worktree,
+                ];
+                if let Some(line) = target.line {
+                    args.extend(["--line".to_string(), line.to_string()]);
+                }
+                args.push(file);
+
+                Some(("open".to_string(), args))
+            }
+
+            Tool::Zed => {
+                let file = match target.line {
+                    Some(line) => format!("{file}:{line}"),
+                    None => file,
+                };
+                let args = vec![
+                    "-c".to_string(),
+                    ZED_SCRIPT.to_string(),
+                    "sh".to_string(),
+                    worktree,
+                    file,
+                ];
+
+                Some(("sh".to_string(), args))
+            }
+
+            Tool::ITerm | Tool::GitHub => None,
+        }
+    }
+}
+
+/// Lists the files of a worktree.
+pub trait Lister {
+    /// The files of `worktree`, relative to it, or an empty list when git fails.
+    fn files(&self, worktree: &Path) -> Vec<String>;
+}
+
+/// Lists a worktree's files with `git ls-files`: tracked and untracked, minus ignored. Sorted by path.
+pub struct GitLister;
+
+impl Lister for GitLister {
+    fn files(&self, worktree: &Path) -> Vec<String> {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(worktree)
+            .args([
+                "ls-files",
+                "-z",
+                "--cached",
+                "--others",
+                "--exclude-standard",
+            ])
+            .output();
+
+        let mut files: Vec<String> = match output {
+            Ok(output) if output.status.success() => String::from_utf8_lossy(&output.stdout)
+                .split('\0')
+                .filter(|file| !file.is_empty())
+                .map(str::to_string)
+                .collect(),
+            _ => Vec::new(),
+        };
+
+        files.sort();
+        files
+    }
 }
 
 /// Runs a program and waits for it to exit.
@@ -115,15 +214,16 @@ impl Runner for SystemRunner {
 
 /// Answers `POST` with `store` and `repos`.
 pub fn post(store: &dyn Store, repos: &dyn RepoList, request: &Request) -> Response {
-    post_with(store, repos, request, &SystemRunner)
+    post_with(store, repos, request, &SystemRunner, &GitLister)
 }
 
-/// Answers `POST` with `store` and `repos`, running the tool with `runner`.
+/// Answers `POST` with `store` and `repos`. Finds bare file names with `lister` and runs the tool with `runner`.
 pub fn post_with(
     store: &dyn Store,
     repos: &dyn RepoList,
     request: &Request,
     runner: &dyn Runner,
+    lister: &dyn Lister,
 ) -> Response {
     if !same_origin(request) {
         return Response::error(403);
@@ -153,12 +253,52 @@ pub fn post_with(
         Err(response) => return response,
     };
 
-    let (program, args) = tool.command(&worktree);
+    let command = match query_field(&request.target, "file").filter(|file| !file.is_empty()) {
+        Some(file) => {
+            let line = query_line(&request.target);
+            let target = file_target(&worktree, &file, line, lister);
+            tool.file_command(&worktree, &target)
+        }
+        None => Some(tool.command(&worktree)),
+    };
+
+    let Some((program, args)) = command else {
+        return Response::error(404);
+    };
 
     match runner.run(&program, &args) {
         Ok(()) => Response::new(204, TEXT, Vec::new()),
         Err(error) => Response::new(500, TEXT, error.into_bytes()),
     }
+}
+
+/// The positive number in the `line` field of the query in `target`, if any.
+fn query_line(target: &str) -> Option<u32> {
+    query_field(target, "line")
+        .and_then(|line| line.parse().ok())
+        .filter(|line| *line > 0)
+}
+
+/// The file `file` of `worktree` at `line`. A bare name resolves to the first listed file with that name.
+fn file_target(worktree: &Path, file: &str, line: Option<u32>, lister: &dyn Lister) -> FileTarget {
+    let file = if file.contains('/') {
+        worktree.join(file)
+    } else {
+        let listed = listed_file(worktree, file, lister);
+        worktree.join(listed.as_deref().unwrap_or(file))
+    };
+
+    FileTarget { file, line }
+}
+
+/// The first file `lister` gives for `worktree` that is named `name`, if any.
+fn listed_file(worktree: &Path, name: &str, lister: &dyn Lister) -> Option<String> {
+    let suffix = format!("/{name}");
+
+    lister
+        .files(worktree)
+        .into_iter()
+        .find(|file| file == name || file.ends_with(&suffix))
 }
 
 /// The worktree of the session named by the percent-encoded segments `session`, or the error response.
@@ -363,7 +503,50 @@ mod tests {
         Some((main, linked))
     }
 
-    /// A folder with stub `gh` and `open` programs in `bin/`, and the worktree `work tree/`.
+    /// Makes `dir` a git repository that tracks the empty files `files`, or returns `false` when git is missing.
+    fn track(dir: &Path, files: &[&str]) -> bool {
+        if Command::new("git").arg("--version").output().is_err() {
+            return false;
+        }
+
+        git(dir, &["init", "-q"]);
+        create(dir, files);
+        git(dir, &["add", "."]);
+        true
+    }
+
+    /// Writes the empty files `files` under `dir`.
+    fn create(dir: &Path, files: &[&str]) {
+        for file in files {
+            let file = dir.join(file);
+            fs::create_dir_all(file.parent().unwrap()).unwrap();
+            fs::write(file, "").unwrap();
+        }
+    }
+
+    /// Posts `target` for the fixture's session, running the tool with `runner`.
+    fn post_file(f: &Fixture, target: &str, runner: &RecordingRunner) -> Response {
+        post_with(
+            &f.store,
+            &FixedRepos(vec![]),
+            &request(target, &[]),
+            runner,
+            &GitLister,
+        )
+    }
+
+    /// The Zed command that opens `worktree` with the file argument `file`.
+    fn zed(worktree: &Path, file: &str) -> (String, Vec<String>) {
+        let worktree = worktree.to_string_lossy();
+        command("sh", &["-c", ZED_SCRIPT, "sh", &worktree, file])
+    }
+
+    /// The file `file` of `worktree`, with the suffix `suffix`.
+    fn file_arg(worktree: &Path, file: &str, suffix: &str) -> String {
+        format!("{}{suffix}", worktree.join(file).display())
+    }
+
+    /// A folder with stub programs in `bin/`, and the worktree `work tree/`.
     struct Stubs {
         dir: tempfile::TempDir,
     }
@@ -407,34 +590,82 @@ printf '%s' "$record" | {jq} -r "$filter"
 
         /// Stubs where `gh` runs the shell script `gh`.
         fn new(gh: &str) -> Stubs {
-            let dir = tempfile::tempdir().unwrap();
-            let bin = dir.path().join("bin");
-            fs::create_dir(&bin).unwrap();
-            fs::create_dir(dir.path().join("work tree")).unwrap();
+            let stubs = Stubs::empty();
+            let bin = stubs.dir.path().join("bin");
 
             write_program(&bin.join("gh"), gh);
 
-            let opened = dir.path().join("opened").to_string_lossy().into_owned();
-            let open = format!("printf '%s' \"$1\" > {}\n", shell_single_quote(&opened));
+            let open = format!("printf '%s' \"$1\" > {}\n", stubs.opened_file());
             write_program(&bin.join("open"), &open);
+
+            stubs
+        }
+
+        /// Stubs where `mdfind` finds `Zed Test.app`. Its `cli` writes its arguments to `opened`, one per line.
+        fn zed() -> Stubs {
+            let stubs = Stubs::empty();
+            let app = stubs.dir.path().join("Zed Test.app");
+            let macos = app.join("Contents/MacOS");
+            fs::create_dir_all(&macos).unwrap();
+
+            let cli = format!("printf '%s\\n' \"$@\" > {}\n", stubs.opened_file());
+            write_program(&macos.join("cli"), &cli);
+
+            let mdfind = format!(
+                r#"if [ "$1" = {query} ]; then
+    printf '%s\n' {app} /other/Zed.app
+else
+    echo /nowhere
+fi
+"#,
+                query = shell_single_quote("kMDItemCFBundleIdentifier == 'dev.zed.Zed'"),
+                app = shell_single_quote(&app.to_string_lossy()),
+            );
+            write_program(&stubs.dir.path().join("bin/mdfind"), &mdfind);
+
+            stubs
+        }
+
+        /// An empty `bin/` and the worktree `work tree/`.
+        fn empty() -> Stubs {
+            let dir = tempfile::tempdir().unwrap();
+            fs::create_dir(dir.path().join("bin")).unwrap();
+            fs::create_dir(dir.path().join("work tree")).unwrap();
 
             Stubs { dir }
         }
 
-        /// Runs `GITHUB_SCRIPT` on the worktree with only the stubs and the system folders on `PATH`.
-        fn run(&self) -> Result<(), String> {
-            let bin = self.dir.path().join("bin");
-            let path = format!("PATH={}:/usr/bin:/bin", bin.display());
-            let worktree = self.dir.path().join("work tree");
-            let worktree = worktree.to_string_lossy();
-
-            let args = strings(&[&path, "sh", "-c", GITHUB_SCRIPT, "sh", &worktree]);
-            SystemRunner.run("env", &args)
+        /// The worktree `work tree/`.
+        fn worktree(&self) -> PathBuf {
+            self.dir.path().join("work tree")
         }
 
-        /// The argument the `open` stub got, if it ran.
+        /// Runs `GITHUB_SCRIPT` on the worktree with only the stubs and the system folders on `PATH`.
+        fn run(&self) -> Result<(), String> {
+            let worktree = self.worktree();
+            let worktree = worktree.to_string_lossy();
+
+            self.run_command("sh", &strings(&["-c", GITHUB_SCRIPT, "sh", &worktree]))
+        }
+
+        /// Runs `program` with `args` with only the stubs and the system folders on `PATH`.
+        fn run_command(&self, program: &str, args: &[String]) -> Result<(), String> {
+            let bin = self.dir.path().join("bin");
+            let path = format!("PATH={}:/usr/bin:/bin", bin.display());
+
+            let mut all = vec![path, program.to_string()];
+            all.extend_from_slice(args);
+            SystemRunner.run("env", &all)
+        }
+
+        /// The arguments the `open` or `cli` stub got, if it ran.
         fn opened(&self) -> Option<String> {
             fs::read_to_string(self.dir.path().join("opened")).ok()
+        }
+
+        /// The file `opened`, quoted for a POSIX shell.
+        fn opened_file(&self) -> String {
+            shell_single_quote(&self.dir.path().join("opened").to_string_lossy())
         }
     }
 
@@ -489,6 +720,82 @@ printf '%s' "$record" | {jq} -r "$filter"
 
         assert_eq!(program, "sh");
         assert_eq!(args, strings(&["-c", GITHUB_SCRIPT, "sh", "/w x"]));
+    }
+
+    #[test]
+    fn editors_build_file_commands() {
+        let worktree = Path::new("/w x");
+        let at = |line| FileTarget {
+            file: PathBuf::from("/w x/a b.rs"),
+            line,
+        };
+
+        assert_eq!(
+            Tool::IntelliJ.file_command(worktree, &at(Some(12))),
+            Some(command(
+                "open",
+                &[
+                    "-na",
+                    "IntelliJ IDEA",
+                    "--args",
+                    "/w x",
+                    "--line",
+                    "12",
+                    "/w x/a b.rs"
+                ]
+            ))
+        );
+        assert_eq!(
+            Tool::Zed.file_command(worktree, &at(Some(12))),
+            Some(command(
+                "sh",
+                &["-c", ZED_SCRIPT, "sh", "/w x", "/w x/a b.rs:12"]
+            ))
+        );
+
+        assert_eq!(
+            Tool::IntelliJ.file_command(worktree, &at(None)),
+            Some(command(
+                "open",
+                &["-na", "IntelliJ IDEA", "--args", "/w x", "/w x/a b.rs"]
+            ))
+        );
+        assert_eq!(
+            Tool::Zed.file_command(worktree, &at(None)),
+            Some(command(
+                "sh",
+                &["-c", ZED_SCRIPT, "sh", "/w x", "/w x/a b.rs"]
+            ))
+        );
+
+        assert_eq!(Tool::ITerm.file_command(worktree, &at(Some(12))), None);
+        assert_eq!(Tool::GitHub.file_command(worktree, &at(Some(12))), None);
+    }
+
+    #[test]
+    fn zed_script_runs_the_bundle_cli() {
+        let stubs = Stubs::zed();
+        let worktree = stubs.worktree();
+        let target = FileTarget {
+            file: worktree.join("a b.rs"),
+            line: Some(12),
+        };
+        let (program, args) = Tool::Zed.file_command(&worktree, &target).unwrap();
+
+        assert_eq!(stubs.run_command(&program, &args), Ok(()));
+        assert_eq!(
+            stubs.opened(),
+            Some(format!(
+                "{}\n{}:12\n",
+                worktree.display(),
+                target.file.display()
+            ))
+        );
+
+        assert!(
+            ZED_SCRIPT.contains("app=/Applications/Zed.app"),
+            "{ZED_SCRIPT}"
+        );
     }
 
     #[test]
@@ -558,6 +865,7 @@ printf '%s' "$record" | {jq} -r "$filter"
             &FixedRepos(vec![]),
             &request(TARGET, &[]),
             &runner,
+            &GitLister,
         );
 
         assert_eq!(response.status, 204);
@@ -582,6 +890,7 @@ printf '%s' "$record" | {jq} -r "$filter"
             &FixedRepos(vec![]),
             &request(TARGET, &[]),
             &runner,
+            &GitLister,
         );
 
         assert_eq!(response.status, 500);
@@ -599,6 +908,7 @@ printf '%s' "$record" | {jq} -r "$filter"
             &FixedRepos(vec![]),
             &request(TARGET, &[]),
             &runner,
+            &GitLister,
         );
 
         assert_eq!(response.status, 500);
@@ -627,6 +937,7 @@ printf '%s' "$record" | {jq} -r "$filter"
                 &FixedRepos(vec![]),
                 &request(TARGET, &[]),
                 &runner,
+                &GitLister,
             );
 
             assert_eq!(response.status, 404, "{session}");
@@ -638,6 +949,7 @@ printf '%s' "$record" | {jq} -r "$filter"
             &FixedRepos(vec![]),
             &request(TARGET, &[]),
             &runner,
+            &GitLister,
         );
 
         assert_eq!(response.status, 404);
@@ -661,6 +973,7 @@ printf '%s' "$record" | {jq} -r "$filter"
                 &FixedRepos(vec![]),
                 &request(target, &[]),
                 &runner,
+                &GitLister,
             );
 
             assert_eq!(response.status, 404, "{target}");
@@ -688,6 +1001,7 @@ printf '%s' "$record" | {jq} -r "$filter"
                 &FixedRepos(vec![]),
                 &request(target, &[]),
                 &runner,
+                &GitLister,
             );
 
             assert_eq!(response.status, 404, "{target}");
@@ -710,6 +1024,7 @@ printf '%s' "$record" | {jq} -r "$filter"
             &FixedRepos(vec![]),
             &request(TARGET, &[]),
             &runner,
+            &GitLister,
         );
 
         assert_eq!(response.status, 404);
@@ -722,11 +1037,145 @@ printf '%s' "$record" | {jq} -r "$filter"
         let runner = RecordingRunner::new(Ok(()));
         let foreign = request(TARGET, &[("Origin", "http://evil")]);
 
-        let response = post_with(&f.store, &FixedRepos(vec![]), &foreign, &runner);
+        let response = post_with(&f.store, &FixedRepos(vec![]), &foreign, &runner, &GitLister);
 
         assert_eq!(response.status, 403);
         assert!(f.store.reads().is_empty());
         assert!(runner.calls.into_inner().is_empty());
+    }
+
+    #[test]
+    fn opens_a_path_with_a_folder_as_given() {
+        let f = fixture();
+        let runner = RecordingRunner::new(Ok(()));
+
+        let target = format!("{TARGET}?file=src%2Fmissing.rs&line=3");
+        let response = post_file(&f, &target, &runner);
+
+        assert_eq!(response.status, 204);
+        assert_eq!(
+            runner.calls.into_inner(),
+            [zed(
+                &f.worktree,
+                &file_arg(&f.worktree, "src/missing.rs", ":3")
+            )]
+        );
+    }
+
+    #[test]
+    fn bare_name_uses_the_first_git_match() {
+        let f = fixture();
+        let files = ["b/Foo.scala", "a/Foo.scala", "a/AFoo.scala"];
+        if !track(&f.worktree, &files) {
+            eprintln!("skipped: git is missing");
+            return;
+        }
+        let runner = RecordingRunner::new(Ok(()));
+
+        let response = post_file(&f, &format!("{TARGET}?file=Foo.scala&line=7"), &runner);
+
+        assert_eq!(response.status, 204);
+        assert_eq!(
+            runner.calls.into_inner(),
+            [zed(
+                &f.worktree,
+                &file_arg(&f.worktree, "a/Foo.scala", ":7")
+            )]
+        );
+    }
+
+    #[test]
+    fn bare_name_finds_untracked_files_and_skips_ignored_ones() {
+        let f = fixture();
+        if !track(&f.worktree, &["a/Foo.scala"]) {
+            eprintln!("skipped: git is missing");
+            return;
+        }
+        create(&f.worktree, &["b/Foo.scala", "b/Bar.scala", "0/Bar.scala"]);
+        fs::write(f.worktree.join(".gitignore"), "0/\n").unwrap();
+
+        for (name, expected) in [("Foo.scala", "a/Foo.scala"), ("Bar.scala", "b/Bar.scala")] {
+            let runner = RecordingRunner::new(Ok(()));
+
+            let response = post_file(&f, &format!("{TARGET}?file={name}"), &runner);
+
+            assert_eq!(response.status, 204, "{name}");
+            assert_eq!(
+                runner.calls.into_inner(),
+                [zed(&f.worktree, &file_arg(&f.worktree, expected, ""))],
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn bare_name_without_a_match_opens_as_given() {
+        let target = format!("{TARGET}?file=Nope.scala");
+
+        let plain = fixture();
+        let runner = RecordingRunner::new(Ok(()));
+
+        let response = post_file(&plain, &target, &runner);
+
+        assert_eq!(response.status, 204);
+        assert_eq!(
+            runner.calls.into_inner(),
+            [zed(
+                &plain.worktree,
+                &file_arg(&plain.worktree, "Nope.scala", "")
+            )]
+        );
+
+        let f = fixture();
+        if !track(&f.worktree, &["a/Foo.scala"]) {
+            eprintln!("skipped: git is missing");
+            return;
+        }
+        let runner = RecordingRunner::new(Ok(()));
+
+        let response = post_file(&f, &target, &runner);
+
+        assert_eq!(response.status, 204);
+        assert_eq!(
+            runner.calls.into_inner(),
+            [zed(&f.worktree, &file_arg(&f.worktree, "Nope.scala", ""))]
+        );
+    }
+
+    #[test]
+    fn file_is_404_for_other_tools() {
+        let f = fixture();
+        let runner = RecordingRunner::new(Ok(()));
+
+        for target in [
+            "/api/open/iterm/o/stack/main/a?file=a.rs",
+            "/api/open/github/o/stack/main/a?file=a.rs",
+        ] {
+            let response = post_file(&f, target, &runner);
+
+            assert_eq!(response.status, 404, "{target}");
+        }
+
+        assert!(runner.calls.into_inner().is_empty());
+    }
+
+    #[test]
+    fn bad_line_is_ignored() {
+        let f = fixture();
+
+        for line in ["x", "0", "-3"] {
+            let runner = RecordingRunner::new(Ok(()));
+            let target = format!("{TARGET}?file=a%2Fb.rs&line={line}");
+
+            let response = post_file(&f, &target, &runner);
+
+            assert_eq!(response.status, 204, "{line}");
+            assert_eq!(
+                runner.calls.into_inner(),
+                [zed(&f.worktree, &file_arg(&f.worktree, "a/b.rs", ""))],
+                "{line}"
+            );
+        }
     }
 
     #[test]
@@ -741,7 +1190,7 @@ printf '%s' "$record" | {jq} -r "$filter"
         let repos = FixedRepos(vec![main]);
 
         let target = open_target("zed", &linked);
-        let response = post_with(&store, &repos, &request(&target, &[]), &runner);
+        let response = post_with(&store, &repos, &request(&target, &[]), &runner, &GitLister);
 
         assert_eq!(response.status, 204);
         assert!(store.reads().is_empty());
@@ -775,6 +1224,7 @@ printf '%s' "$record" | {jq} -r "$filter"
                 &repos,
                 &request(&target, &[]),
                 &runner,
+                &GitLister,
             );
 
             assert_eq!(response.status, 404, "{target}");
@@ -794,7 +1244,7 @@ printf '%s' "$record" | {jq} -r "$filter"
         let repos = FixedRepos(vec![main]);
         let foreign = request(&open_target("zed", &linked), &[("Origin", "http://evil")]);
 
-        let response = post_with(&FakeStore::default(), &repos, &foreign, &runner);
+        let response = post_with(&FakeStore::default(), &repos, &foreign, &runner, &GitLister);
 
         assert_eq!(response.status, 403);
         assert!(runner.calls.into_inner().is_empty());

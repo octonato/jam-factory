@@ -1060,6 +1060,9 @@
   .markdown hr { border: 0; border-top: 1px solid var(--line); }
   .markdown img { max-width: 100%; }
 
+  .markdown a.file-ref { color: var(--accent); text-decoration: none; cursor: pointer; }
+  .markdown a.file-ref:hover { text-decoration: underline; }
+
   .diff, .code { margin: 0 0 12px; }
 
   .diff { position: relative; }
@@ -1327,6 +1330,13 @@ const HOME_KEY = 'github:pulls'
 const GITHUB_OVERLAYS = ['jump', 'github-popup', 'modal', 'shortcuts']
 // The page of a PR or an issue on GitHub: its owner, its repo name, `pull` or `issues`, and its number, before any further path, query or fragment.
 const GITHUB_PAGE = /^https:\/\/github\.com\/([^/?#]+)\/([^/?#]+)\/(pull|issues)\/([1-9]\d*)(?:[/?#]|$)/
+// Lists the extensions that a file citation without a folder can have.
+const CITATION_EXTENSIONS = new Set(
+  'java scala sbt kt kts rs toml js cjs mjs ts tsx jsx html css json yaml yml xml md sh py go proto conf properties gradle sql lock plist txt'.split(' '),
+)
+// A file citation with an optional `:line` suffix.
+const CITATION = /(?<![\w./@~$-]|:\/\/)(\/?(?:[\w.-]+\/)*[\w.-]*\w\.([A-Za-z][A-Za-z0-9]*))(?![\w/(-])(?::(\d+)(?::\d+|-\d+)?(?: \(\d+-\d+\))?)?/g
+const CITATION_TITLE = 'Open in Zed (⌘-click: IntelliJ)'
 const CI_LABELS = { none: 'no CI', pending: 'CI running', passing: 'CI passing', failing: 'CI failing' }
 const REVIEW_LABELS = {
   none: 'no reviews',
@@ -2531,6 +2541,7 @@ function buildWorktreePage(path, item) {
   $('metro').addEventListener('click', onMetroClick)
   $('splitter').addEventListener('pointerdown', onSplitterDown)
   $('view').addEventListener('click', onDiffToggle)
+  $('view').addEventListener('click', onCitationClick)
   sessionView = { dir: item, card: '', metro: '', head: '', stops: [], selected: -1 }
   lastView = { key: null, path: null, text: null, version: null }
 }
@@ -3074,7 +3085,26 @@ function hasDiffHeaders(text) {
   return /^diff --git /m.test(text) || /^--- [^\n]*\n\+\+\+ /m.test(text)
 }
 
-// Returns a diff block with a layout toggle for a `diff` fence with file headers, else the code in highlight.js colours under its `path:lines`.
+// Returns a `file-ref` link around `html` that opens `file` at `line`.
+function fileRefHtml(file, line, html) {
+  const lineAttr = line ? ` data-line="${escape(line)}"` : ''
+  return `<a class="file-ref" href="#" data-file="${escape(file)}"${lineAttr} title="${CITATION_TITLE}">${html}</a>`
+}
+
+// Wraps each file citation in the escaped HTML `escaped` in a `file-ref` link.
+function linkCitations(escaped) {
+  return escaped.replace(CITATION, (token, path, ext, line) => {
+    if (!path.includes('/') && !CITATION_EXTENSIONS.has(ext)) return token
+    return fileRefHtml(path, line, token)
+  })
+}
+
+// Returns `text` escaped, with each file citation wrapped in a `file-ref` link.
+function citationHtml(text) {
+  return linkCitations(escape(text))
+}
+
+// Returns a diff block with a layout toggle for a `diff` fence with file headers. Otherwise returns the code in highlight.js colours, under a `path:lines` link.
 function fenceHtml(text, info) {
   const { lang, path, lines } = parseInfo(info)
   if (lang === 'diff' && hasDiffHeaders(text)) {
@@ -3087,14 +3117,38 @@ function fenceHtml(text, info) {
     )
   }
 
-  const head = path && lines ? `<div class="code-path">${escape(path)}:${escape(lines)}</div>` : ''
+  const firstLine = lines?.match(/\d+/)?.[0]
+  const head = path && lines ? `<div class="code-path">${fileRefHtml(path, firstLine, escape(`${path}:${lines}`))}</div>` : ''
   const code = hljs.getLanguage(lang) ? hljs.highlight(text, { language: lang }).value : escape(text)
   return `<div class="code">${head}<pre><code class="hljs">${code}</code></pre></div>`
 }
 
+// Returns a marked renderer that draws fences with `fenceHtml`.
 function markdownRenderer() {
   const renderer = new marked.Renderer()
+  const base = marked.Renderer.prototype
+  let inLink = false
+
   renderer.code = ({ text, lang }) => fenceHtml(text, lang ?? '')
+
+  renderer.text = function (token) {
+    const html = base.text.call(this, token)
+    return inLink || token.tokens || token.escaped ? html : linkCitations(html)
+  }
+
+  renderer.codespan = function (token) {
+    return inLink ? base.codespan.call(this, token) : `<code>${citationHtml(token.text)}</code>`
+  }
+
+  renderer.link = function (token) {
+    inLink = true
+    try {
+      return base.link.call(this, token)
+    } finally {
+      inLink = false
+    }
+  }
+
   return renderer
 }
 
@@ -3134,6 +3188,18 @@ function onDiffToggle(event) {
     other.setAttribute('aria-pressed', String(other === button))
   }
   drawDiff(block, button.dataset.layout)
+}
+
+// Opens the clicked file citation in Zed, or in IntelliJ on ⌘-click.
+function onCitationClick(event) {
+  const link = event.target.closest('a.file-ref')
+  if (!link) return
+
+  event.preventDefault()
+  const session = state.sessions.find((s) => s.dir === sessionView.dir)
+  if (!session) return
+
+  openCitation(session, link.dataset.file, link.dataset.line, event.metaKey ? 'intellij' : 'zed')
 }
 
 function reviewNames(files, round) {
@@ -4367,6 +4433,12 @@ async function archiveSession(session) {
 
 function openTool(session, tool) {
   return postOpen(`api/open/${tool}/${sessionPath(session)}`, sessionName(session), tool)
+}
+
+// Opens `file` of the worktree of `session` in `tool`, at `line` when given.
+function openCitation(session, file, line, tool) {
+  const lineField = line === undefined ? '' : `&line=${line}`
+  return postOpen(`api/open/${tool}/${sessionPath(session)}?file=${encodeURIComponent(file)}${lineField}`, file, tool)
 }
 
 function openWorktreeTool(path, tool) {

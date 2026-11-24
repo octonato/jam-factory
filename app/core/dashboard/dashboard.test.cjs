@@ -502,6 +502,22 @@ function markdownDashboard(options) {
   return app
 }
 
+// Returns the `file-ref` link around `text` that opens `file` at `line`.
+function fileRef(file, line, text) {
+  const lineAttr = line === undefined ? '' : ` data-line="${line}"`
+  return `<a class="file-ref" href="#" data-file="${file}"${lineAttr} title="Open in Zed (⌘-click: IntelliJ)">${text}</a>`
+}
+
+function citations(app, text) {
+  app.context.text = text
+  return app.run('citationHtml(text)')
+}
+
+function reportHtml(app, text) {
+  app.context.text = text
+  return app.run("fileHtml('report.md', text)")
+}
+
 const diffText = [
   'diff --git a/f.txt b/f.txt',
   'index 1111111..2222222 100644',
@@ -530,7 +546,8 @@ test('a tagged code fence shows its path and lines', () => {
   app.context.text = '```rust path=a/b.rs lines=2-9\nfn main() {}\n```\n'
   const html = app.run("fileHtml('steps/01.md', text)")
 
-  assert.ok(html.includes('<div class="code"><div class="code-path">a/b.rs:2-9</div><pre><code class="hljs"><span class="hljs-keyword">fn</span>'), html)
+  const head = `<div class="code-path">${fileRef('a/b.rs', 2, 'a/b.rs:2-9')}</div>`
+  assert.ok(html.includes(`<div class="code">${head}<pre><code class="hljs"><span class="hljs-keyword">fn</span>`), html)
 })
 
 test('a code fence in a known language shows highlight.js colours', () => {
@@ -548,6 +565,123 @@ test('a code fence in an unknown language shows its text escaped', () => {
   const html = app.run("fileHtml('steps/01.md', text)")
 
   assert.ok(html.includes('<div class="code"><pre><code class="hljs">&#60;b&#62;'), html)
+})
+
+test('citations with a folder link with any extension', () => {
+  const app = markdownDashboard()
+  const path = 'app/core/src/server/open.rs'
+
+  assert.equal(citations(app, `see ${path}:30 here`), `see ${fileRef(path, 30, `${path}:30`)} here`)
+  assert.equal(citations(app, 'a/foo.unknownext'), fileRef('a/foo.unknownext', undefined, 'a/foo.unknownext'))
+  assert.equal(citations(app, '/abs/a.rs'), fileRef('/abs/a.rs', undefined, '/abs/a.rs'))
+
+  const html = reportHtml(app, `see ${path}:30 &amp; more\n`)
+  assert.ok(html.includes(`<p>see ${fileRef(path, 30, `${path}:30`)} &amp; more</p>`), html)
+
+  const list = reportHtml(app, `- see ${path}:30\n`)
+  assert.ok(list.includes(`<li>see ${fileRef(path, 30, `${path}:30`)}</li>`), list)
+})
+
+test('loose list items link each citation once', () => {
+  const app = markdownDashboard()
+  const html = reportHtml(app, '- see a/b.rs:3\n\n- see c/d.rs\n')
+
+  assert.equal(html.split('class="file-ref"').length - 1, 2, html)
+  assert.ok(html.includes(`<p>see ${fileRef('a/b.rs', 3, 'a/b.rs:3')}</p>`), html)
+  assert.ok(html.includes(`<p>see ${fileRef('c/d.rs', undefined, 'c/d.rs')}</p>`), html)
+})
+
+test('bare names link only with a known extension', () => {
+  const app = dashboard()
+
+  assert.equal(citations(app, 'FooBarController.scala'), fileRef('FooBarController.scala', undefined, 'FooBarController.scala'))
+  assert.equal(citations(app, 'dashboard.html:5624'), fileRef('dashboard.html', 5624, 'dashboard.html:5624'))
+
+  for (const text of ['github.com', 'e.g.', 'v0.1.3', '1.5', 'foo.unknownext', 'git@github.com:o/r', 'see github.com, e.g. v0.1.3 or 1.5']) {
+    assert.equal(citations(app, text), text)
+  }
+})
+
+test('line suffixes keep the first line', () => {
+  const app = dashboard()
+
+  assert.equal(citations(app, 'a/b.rs:120:5'), fileRef('a/b.rs', 120, 'a/b.rs:120:5'))
+  assert.equal(citations(app, 'a/b.rs:120-140'), fileRef('a/b.rs', 120, 'a/b.rs:120-140'))
+  assert.equal(citations(app, 'a/b.rs:120 (120-140) next'), `${fileRef('a/b.rs', 120, 'a/b.rs:120 (120-140)')} next`)
+  assert.equal(citations(app, 'a/b.rs: next'), `${fileRef('a/b.rs', undefined, 'a/b.rs')}: next`)
+})
+
+test('surrounding punctuation stays outside the link', () => {
+  const app = dashboard()
+
+  assert.equal(citations(app, '(app/x.rs:3),'), `(${fileRef('app/x.rs', 3, 'app/x.rs:3')}),`)
+  assert.equal(citations(app, '`a/b.rs:3`.'), `\`${fileRef('a/b.rs', 3, 'a/b.rs:3')}\`.`)
+  assert.equal(citations(app, 'see a/b.rs.'), `see ${fileRef('a/b.rs', undefined, 'a/b.rs')}.`)
+  assert.equal(citations(app, '"<a/b.rs>"'), `&#34;&#60;${fileRef('a/b.rs', undefined, 'a/b.rs')}&#62;&#34;`)
+})
+
+test('home paths do not link', () => {
+  const app = dashboard()
+
+  for (const text of ['~/.claude/CLAUDE.md', 'see ~/a/b.rs:3 here', '~/notes.md']) {
+    assert.equal(citations(app, text), text)
+  }
+})
+
+test('variable paths do not link', () => {
+  const app = dashboard()
+
+  for (const text of ['$TMPDIR/out.txt', 'see $HOME/a/b.rs:3 here', '$FILE.md']) {
+    assert.equal(citations(app, text), text)
+  }
+})
+
+test('method calls do not link', () => {
+  const app = markdownDashboard()
+
+  for (const text of ['res.json()', 'self.state.lock()', 'see res.json() here']) {
+    assert.equal(citations(app, text), text)
+  }
+
+  const html = reportHtml(app, 'Call `res.json()` and `self.state.lock()` now.\n')
+  assert.ok(!html.includes('file-ref'), html)
+  assert.ok(html.includes('<code>res.json()</code>'), html)
+  assert.ok(html.includes('<code>self.state.lock()</code>'), html)
+})
+
+test('inline code citations link', () => {
+  const app = markdownDashboard()
+  const html = reportHtml(app, 'Open `FooBar.java:12` now.\n')
+
+  assert.ok(html.includes(`<p>Open <code>${fileRef('FooBar.java', 12, 'FooBar.java:12')}</code> now.</p>`), html)
+})
+
+test('urls and link text do not link', () => {
+  const app = markdownDashboard()
+  const url = 'https://github.com/o/r/blob/main/a/b.rs'
+
+  assert.equal(citations(app, url), url)
+
+  const html = reportHtml(app, `See ${url}, [a/b.rs](https://x), [\`c/d.rs\`](https://y) and \`${url}\`.\n`)
+  assert.ok(!html.includes('file-ref'), html)
+  assert.ok(html.includes(`<a href="${url}">${url}</a>`), html)
+  assert.ok(html.includes('<a href="https://x">a/b.rs</a>'), html)
+  assert.ok(html.includes('<a href="https://y"><code>c/d.rs</code></a>'), html)
+})
+
+test('fenced code bodies do not link', () => {
+  const app = markdownDashboard()
+  const html = reportHtml(app, '```rust\n// a/b.rs:3\nfn main() {}\n```\n')
+
+  assert.ok(!html.includes('file-ref'), html)
+  assert.ok(html.includes('a/b.rs:3'), html)
+})
+
+test('code block path header links its first line', () => {
+  const app = markdownDashboard()
+  const html = reportHtml(app, '```rust path=app/x.rs lines=10-20\nfn main() {}\n```\n')
+
+  assert.ok(html.includes(`<div class="code-path">${fileRef('app/x.rs', 10, 'app/x.rs:10-20')}</div>`), html)
 })
 
 const excerptSource = readFileSync(`${__dirname}/../../mcp/src/excerpt.rs`, 'utf8')
@@ -1473,6 +1607,78 @@ test('a shown diff draws through diff2html and redraws in the clicked layout', a
   assert.equal(draws[1].text, diffText)
   assert.equal(draws[1].config.outputFormat, 'side-by-side')
   assert.deepEqual(buttons.map((button) => button.attributes['aria-pressed']), ['false', 'true'])
+})
+
+// Returns a dashboard showing `report.md` with `text`, and the URLs it posts.
+async function citationApp(text, reply = () => response('', true, { status: 204 })) {
+  const api = fileApi({ 'report.md': text })
+  const posts = []
+  const app = markdownDashboard({
+    fetcher: (url, options = {}) => {
+      if (options.method !== 'POST') return api.fetcher(url, options)
+      posts.push(url)
+      return reply()
+    },
+  })
+
+  app.context.session = editSession
+  app.run('state.sessions = [session]')
+  app.context.location.hash = app.run('fileHref(session, "report.md")')
+  app.run('render()')
+  await settle()
+  return { app, posts }
+}
+
+// Clicks a `file-ref` link and returns true if the handler called `preventDefault`.
+function clickCitation(app, dataset, modifiers = {}) {
+  let prevented = false
+  const link = { dataset }
+  const target = { closest: (selector) => (selector === 'a.file-ref' ? link : null) }
+  app.elements.get('view').dispatch('click', { target, altKey: false, ...modifiers, preventDefault: () => { prevented = true } })
+  return prevented
+}
+
+test('click on a citation opens it in zed', async () => {
+  const { app, posts } = await citationApp('See a/b.rs:3 now.\n')
+  assert.ok(app.elements.get('view').innerHTML.includes(fileRef('a/b.rs', 3, 'a/b.rs:3')), app.elements.get('view').innerHTML)
+
+  assert.ok(clickCitation(app, { file: 'a/b.rs', line: '3' }))
+  await settle()
+  assert.deepEqual(posts, ['api/open/zed/o/r/main/s?file=a%2Fb.rs&line=3'])
+})
+
+test('command click opens it in intellij', async () => {
+  const { app, posts } = await citationApp('See a/b.rs:3 now.\n')
+
+  assert.ok(clickCitation(app, { file: 'a/b.rs', line: '3' }, { metaKey: true }))
+  await settle()
+  assert.deepEqual(posts, ['api/open/intellij/o/r/main/s?file=a%2Fb.rs&line=3'])
+})
+
+test('citation without a line sends no line field', async () => {
+  const { app, posts } = await citationApp('See a/b.rs now.\n')
+
+  assert.ok(clickCitation(app, { file: 'a/b.rs' }))
+  await settle()
+  assert.deepEqual(posts, ['api/open/zed/o/r/main/s?file=a%2Fb.rs'])
+})
+
+test('file names are percent-encoded', async () => {
+  const { app, posts } = await citationApp('See a/b.rs now.\n')
+
+  assert.ok(clickCitation(app, { file: 'a b/c?d#e.rs', line: '3' }))
+  await settle()
+  assert.deepEqual(posts, ['api/open/zed/o/r/main/s?file=a%20b%2Fc%3Fd%23e.rs&line=3'])
+})
+
+test('a failed open tells the user', async () => {
+  const { app, posts } = await citationApp('See a/b.rs:3 now.\n', () => response('boom', false))
+
+  assert.ok(clickCitation(app, { file: 'a/b.rs', line: '3' }))
+  await settle()
+  assert.deepEqual(posts, ['api/open/zed/o/r/main/s?file=a%2Fb.rs&line=3'])
+  assert.equal(app.elements.get('modal').open, true)
+  assert.equal(app.elements.get('modal-text').textContent, 'Could not open a/b.rs in Zed: boom')
 })
 
 // Returns a walk session of `editSession` at `stage`, with `done` of `planned` steps written.
