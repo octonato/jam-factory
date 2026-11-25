@@ -8,19 +8,23 @@
 <link rel="stylesheet" href="highlight-github.min.css">
 <link rel="stylesheet" href="diff2html.min.css">
 <style>
+  /* Colors and fonts of the lesson stylesheet, app/store/assets/lesson/course.css. */
   :root {
-    --bg: #f7f7f5;
+    --bg: #fffff8;
     --surface: #ffffff;
-    --ink: #1a1a19;
-    --ink-2: #55554f;
-    --muted: #8a8a82;
-    --line: #e2e2dc;
-    --good: #0ca30c;
-    --warning: #fab219;
-    --critical: #d03b3b;
-    --accent: #2f6fdb;
+    --ink: #1d1d1b;
+    --ink-2: #4a4943;
+    --muted: #6b6b66;
+    --line: #d9d6c8;
+    --code-bg: #f3f1e6;
+    --good: #2f6b2f;
+    --warning: #b0761c;
+    --critical: #9b2226;
+    --accent: #8a3b12;
     --done: var(--good);
-    --pending: #c4c4bc;
+    --pending: #c9c5b5;
+    --serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+    --sans: ui-sans-serif, -apple-system, "Helvetica Neue", sans-serif;
     --rail: 4px;
     --pip: 18px;
     --pip-top: 16px;
@@ -28,26 +32,34 @@
 
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
-      --bg: #121211;
-      --surface: #1a1a19;
-      --ink: #ededea;
-      --ink-2: #b5b5ae;
-      --muted: #85857e;
-      --line: #2e2e2b;
-      --accent: #6c9cf0;
-      --pending: #4a4a45;
+      --bg: #151513;
+      --surface: #1d1d1a;
+      --ink: #e8e6dc;
+      --ink-2: #c4c1b5;
+      --muted: #a19e92;
+      --line: #3a3933;
+      --code-bg: #22221e;
+      --good: #8fcf8f;
+      --warning: #e0b25c;
+      --critical: #ef8a8d;
+      --accent: #e39a6a;
+      --pending: #4a4840;
     }
   }
 
   :root[data-theme="dark"] {
-    --bg: #121211;
-    --surface: #1a1a19;
-    --ink: #ededea;
-    --ink-2: #b5b5ae;
-    --muted: #85857e;
-    --line: #2e2e2b;
-    --accent: #6c9cf0;
-    --pending: #4a4a45;
+    --bg: #151513;
+    --surface: #1d1d1a;
+    --ink: #e8e6dc;
+    --ink-2: #c4c1b5;
+    --muted: #a19e92;
+    --line: #3a3933;
+    --code-bg: #22221e;
+    --good: #8fcf8f;
+    --warning: #e0b25c;
+    --critical: #ef8a8d;
+    --accent: #e39a6a;
+    --pending: #4a4840;
   }
 
   * { box-sizing: border-box; }
@@ -61,7 +73,7 @@
     margin: 0;
     background: var(--bg);
     color: var(--ink);
-    font: 1rem/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+    font: 1rem/1.4 var(--sans);
   }
 
   #page {
@@ -90,7 +102,7 @@
   }
 
   header[hidden] { display: none; }
-  header h1 { margin: 0; font-size: 1.286rem; }
+  header h1 { margin: 0; font-family: var(--serif); font-size: 1.286rem; font-weight: 400; }
 
   .tabs { display: flex; gap: 4px; }
 
@@ -461,7 +473,7 @@
 
   #shortcuts::backdrop { background: rgb(0 0 0 / 40%); }
 
-  #shortcuts h2 { margin: 0 0 4px; font-size: 1.143rem; }
+  #shortcuts h2 { margin: 0 0 4px; font-family: var(--serif); font-size: 1.143rem; font-weight: 400; }
 
   #shortcuts h3 {
     margin: 16px 0 6px;
@@ -485,7 +497,7 @@
     padding: 0 6px;
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     font-size: 0.857rem;
-    background: var(--bg);
+    background: var(--code-bg);
     border: 1px solid var(--line);
     border-radius: 4px;
   }
@@ -577,7 +589,7 @@
     margin: 0 0 12px;
     padding: 10px 12px;
     overflow: auto;
-    background: var(--bg);
+    background: var(--code-bg);
     border: 1px solid var(--line);
     border-radius: 6px;
   }
@@ -884,7 +896,7 @@
     gap: 8px;
   }
 
-  .card-head .title { min-width: 0; font-weight: 600; font-size: 1.05rem; overflow-wrap: anywhere; }
+  .card-head .title { min-width: 0; font-family: var(--serif); font-weight: 600; font-size: 1.05rem; overflow-wrap: anywhere; }
   .card-head .when { margin-left: auto; white-space: nowrap; color: var(--muted); font-size: 0.85rem; font-variant-numeric: tabular-nums; }
 
   .card-foot { display: flex; justify-content: flex-end; }
@@ -1005,7 +1017,7 @@
   .viewer-head .by { color: var(--muted); font-size: 0.85rem; }
   .viewer-head .warn { color: var(--critical); font-size: 0.85rem; }
 
-  .markdown { line-height: 1.55; overflow-wrap: break-word; }
+  .markdown { font-family: var(--serif); line-height: 1.55; overflow-wrap: break-word; }
   .markdown > :first-child { margin-top: 0; }
 
   .markdown h1,
@@ -1018,8 +1030,8 @@
     line-height: 1.25;
   }
 
-  .markdown h1 { font-size: 1.571rem; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
-  .markdown h2 { font-size: 1.286rem; padding-bottom: 4px; border-bottom: 1px solid var(--line); }
+  .markdown h1 { font-size: 1.571rem; font-weight: 400; }
+  .markdown h2 { font-size: 1.286rem; font-weight: 400; font-style: italic; }
   .markdown h3 { font-size: 1.071rem; }
   .markdown h4, .markdown h5, .markdown h6 { font-size: 1rem; }
 
@@ -1048,22 +1060,23 @@
   .markdown td:not(.diff *) {
     padding: 6px 10px;
     text-align: left;
-    border: 1px solid var(--line);
+    vertical-align: top;
+    border-bottom: 1px solid var(--line);
   }
 
-  .markdown th { background: var(--bg); }
+  .markdown th:not(.diff *) { color: var(--muted); }
 
   .markdown :not(pre) > code {
     padding: 1px 4px;
-    background: var(--bg);
-    border-radius: 4px;
+    background: var(--code-bg);
+    border-radius: 3px;
   }
 
   .markdown blockquote {
     margin-left: 0;
     padding: 0 12px;
-    color: var(--ink-2);
-    border-left: 3px solid var(--line);
+    color: var(--muted);
+    border-left: 3px solid var(--accent);
   }
 
   .markdown hr { border: 0; border-top: 1px solid var(--line); }
@@ -1074,7 +1087,7 @@
 
   .diff, .code { margin: 0 0 12px; }
 
-  .diff { position: relative; }
+  .diff { position: relative; font-family: var(--sans); }
 
   #view .d2h-file-header.d2h-sticky-header { top: -16px; }
 
@@ -1100,6 +1113,22 @@
 
   .diff-bar button:hover { border-color: var(--accent); }
   .diff-bar button[aria-pressed="true"] { color: var(--surface); background: var(--accent); border-color: var(--accent); }
+
+  /* Small-caps labels, as in the lesson stylesheet. */
+  .tab,
+  .jump-tab,
+  .org-group .org,
+  .org-filter button,
+  .pr-chip,
+  .diff-bar button,
+  #modal button,
+  .markdown th:not(.diff *) {
+    font-family: var(--sans);
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
 
   .code-path {
     margin-bottom: 4px;
