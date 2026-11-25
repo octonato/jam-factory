@@ -22,8 +22,8 @@
     --done: var(--good);
     --pending: #c4c4bc;
     --rail: 4px;
-    --node: 18px;
-    --node-top: 16px;
+    --pip: 18px;
+    --pip-top: 16px;
   }
 
   @media (prefers-color-scheme: dark) {
@@ -375,7 +375,7 @@
     height: 100%;
   }
 
-  #metro-pane {
+  #timeline-pane {
     overflow: auto;
     padding: 16px 16px 48px;
   }
@@ -767,9 +767,9 @@
     border-radius: 999px;
   }
 
-  .metro { display: flex; flex-direction: column; }
+  .timeline { display: flex; flex-direction: column; }
 
-  .stop {
+  .node {
     display: grid;
     grid-template-columns: 44px minmax(0, 1fr);
   }
@@ -782,8 +782,8 @@
     width: var(--rail);
   }
 
-  .seg.up { top: 0; height: calc(var(--node-top) + var(--node) / 2); }
-  .seg.down { top: calc(var(--node-top) + var(--node) / 2); bottom: 0; }
+  .seg.up { top: 0; height: calc(var(--pip-top) + var(--pip) / 2); }
+  .seg.down { top: calc(var(--pip-top) + var(--pip) / 2); bottom: 0; }
   .seg.full { top: 0; bottom: 0; }
 
   .seg.travelled { background: var(--tone, var(--done)); }
@@ -792,31 +792,31 @@
     background: repeating-linear-gradient(to bottom, var(--pending) 0 8px, transparent 8px 13px);
   }
 
-  .stop.done { --tone: var(--done); }
-  .stop.current { --tone: var(--accent); }
-  .stop.waiting { --tone: var(--warning); }
-  .stop.blocked { --tone: var(--critical); }
-  .stop.pending { --tone: var(--pending); }
-  .stop.writing { --tone: var(--accent); }
+  .node.done { --tone: var(--done); }
+  .node.current { --tone: var(--accent); }
+  .node.waiting { --tone: var(--warning); }
+  .node.blocked { --tone: var(--critical); }
+  .node.pending { --tone: var(--pending); }
+  .node.writing { --tone: var(--accent); }
 
   .seg.down.travelled, .seg.full.travelled { --tone: var(--done); }
 
-  .node {
+  .pip {
     position: absolute;
     z-index: 1;
-    top: var(--node-top);
-    left: calc(50% - var(--node) / 2);
+    top: var(--pip-top);
+    left: calc(50% - var(--pip) / 2);
     display: grid;
     place-items: center;
-    width: var(--node);
-    height: var(--node);
+    width: var(--pip);
+    height: var(--pip);
     color: var(--surface);
     background: var(--surface);
     border: 4px solid var(--tone);
     border-radius: 50%;
   }
 
-  .node svg {
+  .pip svg {
     width: 12px;
     height: 12px;
     fill: none;
@@ -826,30 +826,30 @@
     stroke-linejoin: round;
   }
 
-  .done > .rail .node { background: var(--tone); border-width: 0; }
-  .blocked > .rail .node { background: var(--tone); border-width: 0; border-radius: 4px; }
-  .waiting > .rail .node { background: var(--tone); border-width: 0; }
+  .done > .rail .pip { background: var(--tone); border-width: 0; }
+  .blocked > .rail .pip { background: var(--tone); border-width: 0; border-radius: 4px; }
+  .waiting > .rail .pip { background: var(--tone); border-width: 0; }
 
-  .current > .rail .node { animation: pulse 1.6s ease-out infinite; }
+  .current > .rail .pip { animation: pulse 1.6s ease-out infinite; }
 
   @keyframes pulse {
     0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 55%, transparent); }
     100% { box-shadow: 0 0 0 12px transparent; }
   }
 
-  .node.interchange {
-    height: calc(var(--node) + 14px);
+  .pip.capsule {
+    height: calc(var(--pip) + 14px);
     border-radius: 9px;
   }
 
-  .node.terminus {
-    --node: 22px;
-    top: calc(var(--node-top) - 2px);
+  .pip.ring {
+    --pip: 22px;
+    top: calc(var(--pip-top) - 2px);
     left: calc(50% - 11px);
     box-shadow: 0 0 0 3px var(--surface), 0 0 0 6px var(--tone);
   }
 
-  .stop .card {
+  .node .card {
     display: grid;
     gap: 6px;
     width: 100%;
@@ -863,15 +863,15 @@
     cursor: pointer;
   }
 
-  .stop .card:hover { border-color: var(--accent); border-left-color: var(--tone); }
-  .stop .card:not([data-path]) { cursor: default; }
+  .node .card:hover { border-color: var(--accent); border-left-color: var(--tone); }
+  .node .card:not([data-path]) { cursor: default; }
 
-  .stop .card.selected {
+  .node .card.selected {
     outline: 2px solid var(--ink-2);
     outline-offset: 2px;
   }
 
-  .stop.pending .card {
+  .node.pending .card {
     color: var(--muted);
     background: transparent;
     border-style: dashed;
@@ -974,7 +974,7 @@
   .reviewer .agent { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .reviewer .facts { grid-column: 2; color: var(--ink-2); font-size: 0.8rem; }
 
-  .stop.round .label {
+  .node.round .label {
     display: flex;
     align-items: center;
     gap: 8px;
@@ -986,7 +986,7 @@
     letter-spacing: 0.05em;
   }
 
-  .stop.round .label::after {
+  .node.round .label::after {
     content: '';
     flex: 1;
     border-top: 1px dashed var(--line);
@@ -1220,7 +1220,7 @@ const STAGE_FILE = {
   implement: 'tasks.md',
   done: 'deferred.md',
 }
-const STOP_LABELS = {
+const NODE_LABELS = {
   request: 'Request',
   spec: 'Spec',
   plan: 'Plan',
@@ -1274,7 +1274,7 @@ const TERMINAL_THEME = {
   brightWhite: '#e0e2e3',
 }
 
-const NODE_ICONS = {
+const PIP_ICONS = {
   done: '<path d="M3.5 8.5l3 3 6-7"/>',
   blocked: '<path d="M4.5 4.5l7 7M11.5 4.5l-7 7"/>',
   waiting: '<path d="M8 4v5M8 12v.01"/>',
@@ -1470,7 +1470,7 @@ const SHORTCUTS = [
     title: 'Session item',
     rows: [
       { keys: ['l', 'Esc', '⌘['], text: 'Go back' },
-      { keys: ['↑', '↓'], text: 'Select the previous or next stop' },
+      { keys: ['↑', '↓'], text: 'Select the previous or next node' },
       { keys: ['w'], text: 'Edit the shown file' },
       { keys: ['⌘S'], text: 'Save the edited file' },
       { keys: ['Esc'], text: 'Save the edited file and stop editing' },
@@ -1528,7 +1528,7 @@ let worktreePrs = null
 let tabsHtml = ''
 let listView = { html: '', el: null }
 let homeView = { el: null }
-let sessionView = { dir: null, card: '', metro: '', head: '', stops: [], selected: -1 }
+let sessionView = { dir: null, card: '', timeline: '', head: '', nodes: [], selected: -1 }
 // The shown worktree page, where `item` is the dir of the selected session, `GITHUB_ITEM` for the GitHub item, or null for the Terminal item.
 let worktreeView = { path: null, el: null, item: null, card: '', bar: '', tabs: '' }
 // The GitHub item last entered: its worktree path, its URL or the error that replaced it, whether its fetch runs, and the number of its last fetch.
@@ -2600,15 +2600,15 @@ function buildWorktreePage(path, item) {
 
   resizeSessionPage(page)
   $('session-card').addEventListener('click', onCardAction)
-  $('metro').addEventListener('click', onMetroClick)
+  $('timeline').addEventListener('click', onTimelineClick)
   $('splitter').addEventListener('pointerdown', onSplitterDown)
   $('view').addEventListener('click', onDiffToggle)
   $('view').addEventListener('click', onCitationClick)
-  sessionView = { dir: item, card: '', metro: '', head: '', stops: [], selected: -1 }
+  sessionView = { dir: item, card: '', timeline: '', head: '', nodes: [], selected: -1 }
   lastView = { key: null, path: null, text: null, version: null }
 }
 
-// Returns the markup of the worktree page that shows `item`: the card and the bar, then the terminal tabs when `item` is null, the GitHub view when `item` is `GITHUB_ITEM`, else the session strip, the metro, the splitter and the viewer.
+// Returns the markup of the worktree page that shows `item`: the card and the bar, then the terminal tabs when `item` is null, the GitHub view when `item` is `GITHUB_ITEM`, else the session strip, the timeline, the splitter and the viewer.
 function worktreePageHtml(item) {
   const head = `
         <div class="session-bar" id="worktree-card"></div>
@@ -2636,8 +2636,8 @@ function worktreePageHtml(item) {
   return `
       <div class="session-page">${head}
         <div class="session-strip" id="session-card"></div>
-        <section id="metro-pane">
-          <div class="metro" id="metro"></div>
+        <section id="timeline-pane">
+          <div class="timeline" id="timeline"></div>
         </section>
         <div id="splitter"></div>
         <section class="viewer">
@@ -3481,12 +3481,12 @@ function shownRounds(session, files, runs) {
   return rounds
 }
 
-// Returns a pending stop of `kind`, with `file` as its main file when the file exists.
-function newStop(kind, round, file, files) {
+// Returns a pending node of `kind`, with `file` as its main file when the file exists.
+function newNode(kind, round, file, files) {
   return {
     kind,
     round,
-    label: STOP_LABELS[kind],
+    label: NODE_LABELS[kind],
     state: 'pending',
     file: files.includes(file) ? file : null,
     links: [],
@@ -3500,18 +3500,18 @@ function newStop(kind, round, file, files) {
   }
 }
 
-// Attaches to `stop` the runs of its kind in `round` and returns it.
-function withRuns(stop, runs, round = stop.round) {
-  stop.runs = runs.filter((run) => run.stop === stop.kind && run.round === round)
-  return stop
+// Attaches to `node` the runs of its kind in `round` and returns it.
+function withRuns(node, runs, round = node.round) {
+  node.runs = runs.filter((run) => run.stop === node.kind && run.round === round)
+  return node
 }
 
 function existingLinks(files, links) {
   return links.filter((link) => files.includes(link.path))
 }
 
-function findStop(stops, kind, round) {
-  return stops.findIndex((stop) => stop.kind === kind && stop.round === round)
+function findNode(nodes, kind, round) {
+  return nodes.findIndex((node) => node.kind === kind && node.round === round)
 }
 
 function taskProgress(session) {
@@ -3530,55 +3530,55 @@ function triageCounts(session) {
   return Object.values(triage).some((count) => count !== null) ? triage : null
 }
 
-// Returns the Review stop of `round`, with one reviewer per review file, the runs of `kinds` that no reviewer claims, and the time of all its runs.
-function reviewStop(round, files, runs, kinds) {
-  const stop = newStop('review', round, `round-${round}/report.md`, files)
-  stop.links = existingLinks(files, [{ label: 'extras', path: `round-${round}/extras.md` }])
+// Returns the Review node of `round`, with one reviewer per review file, the runs of `kinds` that no reviewer claims, and the time of all its runs.
+function reviewNode(round, files, runs, kinds) {
+  const node = newNode('review', round, `round-${round}/report.md`, files)
+  node.links = existingLinks(files, [{ label: 'extras', path: `round-${round}/extras.md` }])
 
   const reviews = runs.filter((run) => run.stop === 'review' && run.round === round)
-  stop.reviewers = reviewNames(files, round).map((name) => {
+  node.reviewers = reviewNames(files, round).map((name) => {
     const path = `round-${round}/reviews/${name}.md`
     return { name, path, run: reviews.findLast((run) => run.file === path) ?? null }
   })
 
   const owned = runs.filter((run) => kinds.includes(run.stop) && run.round === round)
-  const claimed = new Set(stop.reviewers.map((reviewer) => reviewer.path))
+  const claimed = new Set(node.reviewers.map((reviewer) => reviewer.path))
   const claims = (run) => run.stop === 'review' && claimed.has(run.file)
-  stop.runs = owned.filter((run) => !claims(run))
-  stop.durationMs = elapsedMs(owned)
-  return stop
+  node.runs = owned.filter((run) => !claims(run))
+  node.durationMs = elapsedMs(owned)
+  return node
 }
 
-// Returns the Triage stop of `round`, linking each round file that no other stop shows.
-function triageStop(session, round, files, runs) {
+// Returns the Triage node of `round`, linking each round file that no other node shows.
+function triageNode(session, round, files, runs) {
   const prefix = `round-${round}/`
-  const stop = withRuns(newStop('triage', round, `${prefix}triage.md`, files), runs)
+  const node = withRuns(newNode('triage', round, `${prefix}triage.md`, files), runs)
 
   const shown = new Set([
     ...['report.md', 'triage.md', 'extras.md', 'submit.md'].map((name) => prefix + name),
     ...reviewNames(files, round).map((name) => `${prefix}reviews/${name}.md`),
   ])
-  stop.links = files
+  node.links = files
     .filter((path) => path.startsWith(prefix) && !shown.has(path))
     .sort((a, b) => a.localeCompare(b))
     .map((path) => ({ label: displayName(path.slice(prefix.length)), path }))
 
-  if (round === sessionRound(session) && stop.file !== null) stop.triage = triageCounts(session)
-  return stop
+  if (round === sessionRound(session) && node.file !== null) node.triage = triageCounts(session)
+  return node
 }
 
-function doneStop(files) {
-  const stop = newStop('done', 0, 'deferred.md', files)
-  stop.links = existingLinks(files, [{ label: 'decisions', path: 'decisions.md' }])
-  return stop
+function doneNode(files) {
+  const node = newNode('done', 0, 'deferred.md', files)
+  node.links = existingLinks(files, [{ label: 'decisions', path: 'decisions.md' }])
+  return node
 }
 
-// Returns the stops of a build session and the index of its current stop.
-function buildFlowStops(session, files, runs, outcomes) {
-  const stops = [
-    withRuns(newStop('request', 0, 'request.md', files), runs),
-    withRuns(newStop('spec', 0, 'spec.md', files), runs),
-    withRuns(newStop('plan', 0, 'plan.md', files), runs),
+// Returns the nodes of a build session and the index of its current node.
+function buildFlowNodes(session, files, runs, outcomes) {
+  const nodes = [
+    withRuns(newNode('request', 0, 'request.md', files), runs),
+    withRuns(newNode('spec', 0, 'spec.md', files), runs),
+    withRuns(newNode('plan', 0, 'plan.md', files), runs),
   ]
   const open = openRound(session, files, runs)
   const progress = taskProgress(session)
@@ -3586,153 +3586,153 @@ function buildFlowStops(session, files, runs, outcomes) {
   for (const round of shownRounds(session, files, runs)) {
     // A round after a `finalize` triage starts at its Review.
     if (outcomes[round - 1] !== 'finalize') {
-      const implement = withRuns(newStop('implement', round, 'tasks.md', files), runs)
+      const implement = withRuns(newNode('implement', round, 'tasks.md', files), runs)
       if (round === open) implement.progress = progress
-      stops.push(implement)
+      nodes.push(implement)
     }
-    stops.push(reviewStop(round, files, runs, ['review', 'report']), triageStop(session, round, files, runs))
+    nodes.push(reviewNode(round, files, runs, ['review', 'report']), triageNode(session, round, files, runs))
   }
 
   const final = hasFinalImplement(session, files)
   if (final) {
-    const implement = withRuns(newStop('implement', 0, 'tasks.md', files), runs, open)
+    const implement = withRuns(newNode('implement', 0, 'tasks.md', files), runs, open)
     implement.progress = progress
-    stops.push(implement)
+    nodes.push(implement)
   }
-  stops.push(doneStop(files))
+  nodes.push(doneNode(files))
 
   const stage = phaseStage(session)
   let current = -1
-  if (stage === 'spec' || stage === 'plan') current = findStop(stops, stage, 0)
-  if (stage === 'implement') current = findStop(stops, 'implement', final ? 0 : open)
-  if (stage === 'verify') current = findStop(stops, 'review', open)
-  if (stage === 'triage') current = findStop(stops, 'triage', sessionRound(session))
-  if (stage === 'done') current = findStop(stops, 'done', 0)
-  return { stops, current }
+  if (stage === 'spec' || stage === 'plan') current = findNode(nodes, stage, 0)
+  if (stage === 'implement') current = findNode(nodes, 'implement', final ? 0 : open)
+  if (stage === 'verify') current = findNode(nodes, 'review', open)
+  if (stage === 'triage') current = findNode(nodes, 'triage', sessionRound(session))
+  if (stage === 'done') current = findNode(nodes, 'done', 0)
+  return { nodes, current }
 }
 
-// Returns the stops of a review session and the index of its current stop.
-function reviewFlowStops(session, files, runs) {
-  const stops = [withRuns(newStop('request', 0, 'request.md', files), runs)]
+// Returns the nodes of a review session and the index of its current node.
+function reviewFlowNodes(session, files, runs) {
+  const nodes = [withRuns(newNode('request', 0, 'request.md', files), runs)]
   for (const round of shownRounds(session, files, runs)) {
-    stops.push(
-      reviewStop(round, files, runs, ['review']),
-      withRuns(newStop('report', round, `round-${round}/report.md`, files), runs),
-      withRuns(newStop('comment', round, `round-${round}/submit.md`, files), runs),
+    nodes.push(
+      reviewNode(round, files, runs, ['review']),
+      withRuns(newNode('report', round, `round-${round}/report.md`, files), runs),
+      withRuns(newNode('comment', round, `round-${round}/submit.md`, files), runs),
     )
   }
-  stops.push(doneStop(files))
+  nodes.push(doneNode(files))
 
   const stage = phaseStage(session)
   const open = openRound(session, files, runs)
   let current = -1
-  if (stage === 'verify') current = findStop(stops, files.includes(`round-${open}/report.md`) ? 'report' : 'review', open)
-  if (stage === 'submit') current = findStop(stops, 'comment', sessionRound(session))
-  if (stage === 'done') current = findStop(stops, 'done', 0)
-  return { stops, current }
+  if (stage === 'verify') current = findNode(nodes, files.includes(`round-${open}/report.md`) ? 'report' : 'review', open)
+  if (stage === 'submit') current = findNode(nodes, 'comment', sessionRound(session))
+  if (stage === 'done') current = findNode(nodes, 'done', 0)
+  return { nodes, current }
 }
 
-// Returns the stops of a vibe session and the index of its current stop.
-function vibeFlowStops(session, files, runs) {
-  const implement = withRuns(newStop('implement', 0, 'tasks.md', files), runs)
+// Returns the nodes of a vibe session and the index of its current node.
+function vibeFlowNodes(session, files, runs) {
+  const implement = withRuns(newNode('implement', 0, 'tasks.md', files), runs)
   implement.progress = taskProgress(session)
-  const stops = [withRuns(newStop('request', 0, 'request.md', files), runs), implement, doneStop(files)]
+  const nodes = [withRuns(newNode('request', 0, 'request.md', files), runs), implement, doneNode(files)]
 
   const stage = phaseStage(session)
   let current = -1
   if (stage === 'implement') current = 1
   if (stage === 'done') current = 2
-  return { stops, current }
+  return { nodes, current }
 }
 
-// Returns the stops of a walk session: the overview, then one stop per step of `walk` with its file when it is written.
-function walkFlowStops(session, files, runs, walk) {
-  const overview = { ...newStop('overview', 0, null, files), file: 'overview.md', summary: stringOrNull(walk?.summary) }
+// Returns the nodes of a walk session: the overview, then one node per step of `walk` with its file when it is written.
+function walkFlowNodes(session, files, runs, walk) {
+  const overview = { ...newNode('overview', 0, null, files), file: 'overview.md', summary: stringOrNull(walk?.summary) }
   const steps = (walk?.steps ?? []).map(({ n, title, summary }) => ({
-    ...newStop('step', 0, stepPath(n), files),
+    ...newNode('step', 0, stepPath(n), files),
     label: `Step ${n}: ${title}`,
     summary: stringOrNull(summary),
   }))
   return [overview, ...steps]
 }
 
-// Sets the states of the walk stops, and puts the reason of a blocked walk on the overview.
-function setWalkStates(session, stops) {
-  const unwritten = (stop) => stop.kind === 'step' && stop.file === null
-  const writing = session.stage === 'walk' ? stops.findIndex(unwritten) : -1
-  stops.forEach((stop, i) => {
-    if (!unwritten(stop)) stop.state = 'done'
-    else stop.state = i === writing ? 'writing' : 'pending'
+// Sets the states of the walk nodes, and puts the reason of a blocked walk on the overview.
+function setWalkStates(session, nodes) {
+  const unwritten = (node) => node.kind === 'step' && node.file === null
+  const writing = session.stage === 'walk' ? nodes.findIndex(unwritten) : -1
+  nodes.forEach((node, i) => {
+    if (!unwritten(node)) node.state = 'done'
+    else node.state = i === writing ? 'writing' : 'pending'
   })
 
-  const overview = stops[0]
+  const overview = nodes[0]
   if (session.stage === 'blocked') {
     overview.state = 'blocked'
     overview.note = stringOrNull(session.blocked?.reason)
     overview.links.push({ label: 'session.json', path: 'session.json' })
   }
-  return stops
+  return nodes
 }
 
-// Returns the stops of a lesson session: the track, then one stop per lesson and per reference page of `track`, each with its file when it is written.
-function lessonFlowStops(session, files, runs, track) {
-  const index = { ...newStop('track', 0, 'index.html', files), summary: stringOrNull(track?.summary) }
+// Returns the nodes of a lesson session: the track, then one node per lesson and per reference page of `track`, each with its file when it is written.
+function lessonFlowNodes(session, files, runs, track) {
+  const index = { ...newNode('track', 0, 'index.html', files), summary: stringOrNull(track?.summary) }
   const lessons = (track?.lessons ?? []).map(({ n, title, summary, file }) => ({
-    ...newStop('lesson', 0, file, files),
+    ...newNode('lesson', 0, file, files),
     label: `${String(n).padStart(4, '0')}: ${title}`,
     summary: stringOrNull(summary),
   }))
-  const reference = (track?.reference ?? []).map(({ title, file }) => ({ ...newStop('reference', 0, file, files), label: title }))
+  const reference = (track?.reference ?? []).map(({ title, file }) => ({ ...newNode('reference', 0, file, files), label: title }))
   return [index, ...lessons, ...reference]
 }
 
-// Sets the states of the lesson stops, and puts the reason of a blocked track on the track stop.
-function setLessonStates(session, stops) {
-  const unwritten = (stop) => stop.kind === 'lesson' && stop.file === null
-  const writing = session.stage === 'lesson' ? stops.findIndex(unwritten) : -1
-  stops.forEach((stop, i) => {
-    if (stop.file !== null) stop.state = 'done'
-    else stop.state = i === writing ? 'writing' : 'pending'
+// Sets the states of the lesson nodes, and puts the reason of a blocked track on the track node.
+function setLessonStates(session, nodes) {
+  const unwritten = (node) => node.kind === 'lesson' && node.file === null
+  const writing = session.stage === 'lesson' ? nodes.findIndex(unwritten) : -1
+  nodes.forEach((node, i) => {
+    if (node.file !== null) node.state = 'done'
+    else node.state = i === writing ? 'writing' : 'pending'
   })
 
-  const track = stops[0]
+  const track = nodes[0]
   if (session.stage === 'blocked') {
     track.state = 'blocked'
     track.note = stringOrNull(session.blocked?.reason)
     track.links.push({ label: 'session.json', path: 'session.json' })
   }
-  return stops
+  return nodes
 }
 
-function currentState(session, stop) {
+function currentState(session, node) {
   if (session.stage === 'blocked') return 'blocked'
-  if (session.stage === 'done' && stop.kind === 'done') return 'done'
+  if (session.stage === 'done' && node.kind === 'done') return 'done'
   if ((session.stage === 'triage' || session.stage === 'submit') && sessionMode(session) === 'interactive') return 'waiting'
   return 'current'
 }
 
-// Returns the stops of the session's line, with their states, files and runs. `walk` is the walk of a walk session or the track of a lesson session.
-function buildStops(session, files, runs, outcomes = {}, walk = null) {
+// Returns the nodes of the session timeline, with their states, files and runs. `walk` is the walk of a walk session or the track of a lesson session.
+function buildNodes(session, files, runs, outcomes = {}, walk = null) {
   const flow = sessionFlow(session)
-  if (flow === 'walk') return setWalkStates(session, walkFlowStops(session, files, runs, walk))
-  if (flow === 'lesson') return setLessonStates(session, lessonFlowStops(session, files, runs, walk))
+  if (flow === 'walk') return setWalkStates(session, walkFlowNodes(session, files, runs, walk))
+  if (flow === 'lesson') return setLessonStates(session, lessonFlowNodes(session, files, runs, walk))
 
-  const flowStops = flow === 'review' ? reviewFlowStops : flow === 'vibe' ? vibeFlowStops : buildFlowStops
-  const { stops, current } = flowStops(session, files, runs, outcomes)
+  const flowNodes = flow === 'review' ? reviewFlowNodes : flow === 'vibe' ? vibeFlowNodes : buildFlowNodes
+  const { nodes, current } = flowNodes(session, files, runs, outcomes)
 
-  stops.forEach((stop, i) => {
-    if (stop.kind === 'request' || (current >= 0 && i < current)) stop.state = 'done'
-    else if (i === current) stop.state = currentState(session, stop)
-    else stop.state = 'pending'
+  nodes.forEach((node, i) => {
+    if (node.kind === 'request' || (current >= 0 && i < current)) node.state = 'done'
+    else if (i === current) node.state = currentState(session, node)
+    else node.state = 'pending'
   })
 
-  const blocked = stops[current]
+  const blocked = nodes[current]
   if (blocked?.state === 'blocked') {
     if (blocked.kind === 'implement' && blocked.file !== null) blocked.links.push({ label: 'tasks', path: blocked.file })
     blocked.file = 'session.json'
     blocked.note = stringOrNull(session.blocked?.reason)
   }
-  return stops
+  return nodes
 }
 
 function distinct(values) {
@@ -3763,34 +3763,34 @@ function runTotals(runs) {
   }
 }
 
-// Returns true when `stop` opens `path` as its main file, a link or a reviewer.
-function stopShows(stop, path) {
-  if (stop === undefined || path === null) return false
+// Returns true when `node` opens `path` as its main file, a link or a reviewer.
+function nodeShows(node, path) {
+  if (node === undefined || path === null) return false
 
   return (
-    stop.file === path ||
-    stop.links.some((link) => link.path === path) ||
-    (stop.reviewers ?? []).some((reviewer) => reviewer.path === path)
+    node.file === path ||
+    node.links.some((link) => link.path === path) ||
+    (node.reviewers ?? []).some((reviewer) => reviewer.path === path)
   )
 }
 
-// Returns the index of the last non-pending stop that shows `path`, else of the first stop that shows it, else -1.
-function stopIndexForFile(stops, path) {
-  const matches = stops.flatMap((stop, i) => (stopShows(stop, path) ? [i] : []))
-  const reached = matches.filter((i) => stops[i].state !== 'pending')
+// Returns the index of the last non-pending node that shows `path`, else of the first node that shows it, else -1.
+function nodeIndexForFile(nodes, path) {
+  const matches = nodes.flatMap((node, i) => (nodeShows(node, path) ? [i] : []))
+  const reached = matches.filter((i) => nodes[i].state !== 'pending')
   return reached.at(-1) ?? matches[0] ?? -1
 }
 
-// Returns the names of the stop model cases that fail.
-function metroSelfCheck() {
+// Returns the names of the node model cases that fail.
+function timelineSelfCheck() {
   const buildSession = (fields) => ({ flow: 'build', mode: 'default', round: 0, lastRound: false, blocked: null, ...fields })
-  const kinds = (stops) => stops.map((stop) => stop.kind).join(' ')
-  const line = (stops) => stops.map((stop) => `${stop.kind}${stop.round}:${stop.state}`).join(' ')
+  const kinds = (nodes) => nodes.map((node) => node.kind).join(' ')
+  const line = (nodes) => nodes.map((node) => `${node.kind}${node.round}:${node.state}`).join(' ')
 
   const cases = {
     'no-runs': () => {
-      const stops = buildStops(buildSession({ stage: 'verify', round: 1 }), ['request.md', 'round-1/triage.md'], parseRuns(''))
-      return parseRuns('').length === 0 && stops.every((stop) => stop.runs.length === 0)
+      const nodes = buildNodes(buildSession({ stage: 'verify', round: 1 }), ['request.md', 'round-1/triage.md'], parseRuns(''))
+      return parseRuns('').length === 0 && nodes.every((node) => node.runs.length === 0)
     },
 
     'truncated-line': () => {
@@ -3813,82 +3813,82 @@ function metroSelfCheck() {
     },
 
     'verify-before-bump': () => {
-      const stops = buildStops(buildSession({ stage: 'verify', round: 1 }), ['round-1/triage.md'], [])
-      const current = stops.find((stop) => stop.state === 'current')
+      const nodes = buildNodes(buildSession({ stage: 'verify', round: 1 }), ['round-1/triage.md'], [])
+      const current = nodes.find((node) => node.state === 'current')
       return current?.kind === 'review' && current.round === 2
     },
 
     blocked: () => {
       const session = buildSession({ stage: 'blocked', round: 1, blocked: { stage: 'implement', reason: 'x' } })
-      const stops = buildStops(session, ['round-1/triage.md'], [])
-      const i = stops.findIndex((stop) => stop.state === 'blocked')
+      const nodes = buildNodes(session, ['round-1/triage.md'], [])
+      const i = nodes.findIndex((node) => node.state === 'blocked')
       return (
-        stops[i]?.kind === 'implement' &&
-        stops[i].note === 'x' &&
-        stops[i].file === 'session.json' &&
-        stops.slice(i + 1).every((stop) => stop.state === 'pending')
+        nodes[i]?.kind === 'implement' &&
+        nodes[i].note === 'x' &&
+        nodes[i].file === 'session.json' &&
+        nodes.slice(i + 1).every((node) => node.state === 'pending')
       )
     },
 
     waiting: () => {
-      const stops = buildStops(buildSession({ stage: 'triage', round: 1, mode: 'interactive' }), ['round-1/report.md'], [])
-      return stops.find((stop) => stop.kind === 'triage')?.state === 'waiting'
+      const nodes = buildNodes(buildSession({ stage: 'triage', round: 1, mode: 'interactive' }), ['round-1/report.md'], [])
+      return nodes.find((node) => node.kind === 'triage')?.state === 'waiting'
     },
 
     'last-round': () => {
       const session = buildSession({ stage: 'implement', round: 2, lastRound: true })
-      const stops = buildStops(session, ['round-1/triage.md', 'round-2/triage.md'], [])
-      const i = stops.findIndex((stop) => stop.state === 'current')
-      return stops[i]?.kind === 'implement' && stops[i - 1]?.kind === 'triage' && stops[i + 1]?.kind === 'done'
+      const nodes = buildNodes(session, ['round-1/triage.md', 'round-2/triage.md'], [])
+      const i = nodes.findIndex((node) => node.state === 'current')
+      return nodes[i]?.kind === 'implement' && nodes[i - 1]?.kind === 'triage' && nodes[i + 1]?.kind === 'done'
     },
 
     'review-flow': () => {
-      const stops = buildStops({ flow: 'review', stage: 'submit', round: 1 }, ['round-1/report.md'], [])
-      return kinds(stops) === 'request review report comment done'
+      const nodes = buildNodes({ flow: 'review', stage: 'submit', round: 1 }, ['round-1/report.md'], [])
+      return kinds(nodes) === 'request review report comment done'
     },
 
     'no-findings-round': () => {
       const session = { flow: 'review', stage: 'blocked', round: 1, blocked: { stage: 'verify' } }
       const runs = parseRuns('{"stop":"comment","round":1,"outcome":"done"}')
-      const stops = buildStops(session, ['request.md', 'round-1/report.md'], runs)
+      const nodes = buildNodes(session, ['request.md', 'round-1/report.md'], runs)
       const expected = 'request0:done review1:done report1:done comment1:done review2:blocked report2:pending comment2:pending done0:pending'
-      return line(stops) === expected
+      return line(nodes) === expected
     },
 
     'verify-after-finalize': () => {
       const outcomes = { 1: 'next round', 2: triageOutcome('# Triage: round 2\n\n- F1: dismiss → D1\n\noutcome: finalize\n') }
-      const stops = buildStops(buildSession({ stage: 'verify', round: 2 }), ['round-1/triage.md', 'round-2/triage.md'], [], outcomes)
+      const nodes = buildNodes(buildSession({ stage: 'verify', round: 2 }), ['round-1/triage.md', 'round-2/triage.md'], [], outcomes)
       const expected =
         'request0:done spec0:done plan0:done implement1:done review1:done triage1:done implement2:done review2:done triage2:done ' +
         'review3:current triage3:pending done0:pending'
-      return line(stops) === expected
+      return line(nodes) === expected
     },
 
     'verify-after-last-round': () => {
       const outcomes = { 1: 'next round', 2: 'last round' }
-      const stops = buildStops(buildSession({ stage: 'verify', round: 2 }), ['round-1/triage.md', 'round-2/triage.md'], [], outcomes)
-      return line(stops).endsWith('triage2:done implement3:done review3:current triage3:pending done0:pending')
+      const nodes = buildNodes(buildSession({ stage: 'verify', round: 2 }), ['round-1/triage.md', 'round-2/triage.md'], [], outcomes)
+      return line(nodes).endsWith('triage2:done implement3:done review3:current triage3:pending done0:pending')
     },
 
     'feedback-after-finalize': () => {
       const session = buildSession({ stage: 'triage', round: 2, feedbackImport: { round: 2, phase: 'normalize' } })
       const files = ['round-1/triage.md', 'round-2/reviews/github-feedback.md']
-      const stops = buildStops(session, files, [], { 1: 'finalize' })
+      const nodes = buildNodes(session, files, [], { 1: 'finalize' })
       const expected =
         'request0:done spec0:done plan0:done implement1:done review1:done triage1:done review2:done triage2:current done0:pending'
-      return line(stops) === expected
+      return line(nodes) === expected
     },
 
     'vibe-flow': () => {
-      const stops = buildStops({ flow: 'vibe', stage: 'implement', round: 0 }, [], [])
-      return kinds(stops) === 'request implement done'
+      const nodes = buildNodes({ flow: 'vibe', stage: 'implement', round: 0 }, [], [])
+      return kinds(nodes) === 'request implement done'
     },
 
     'walk-flow': () => {
       const walk = parseWalk('{"steps":[{"n":1,"title":"A"},{"n":2,"title":"B"}]}')
       const session = { flow: 'walk', stage: 'walk', counts: { stepsPlanned: 2, stepsDone: 1 } }
-      const stops = buildStops(session, ['overview.md', 'steps/01.md'], [], {}, walk)
-      return stops.map((stop) => stop.state).join(' ') === 'done done writing'
+      const nodes = buildNodes(session, ['overview.md', 'steps/01.md'], [], {}, walk)
+      return nodes.map((node) => node.state).join(' ') === 'done done writing'
     },
 
     'lesson-flow': () => {
@@ -3896,14 +3896,14 @@ function metroSelfCheck() {
         '{"lessons":[{"n":1,"title":"A","file":"lessons/0001-a.html"},{"n":2,"title":"B","file":"lessons/0002-b.html"}]}',
       )
       const session = { flow: 'lesson', stage: 'lesson', counts: { lessonsPlanned: 2, lessonsDone: 1 } }
-      const stops = buildStops(session, ['index.html', 'lessons/0001-a.html'], [], {}, track)
-      return stops.map((stop) => stop.state).join(' ') === 'done done writing'
+      const nodes = buildNodes(session, ['index.html', 'lessons/0001-a.html'], [], {}, track)
+      return nodes.map((node) => node.state).join(' ') === 'done done writing'
     },
 
     'reviewer-run': () => {
       const path = 'round-1/reviews/a.md'
       const runs = parseRuns(`{"stop":"review","round":1,"file":"${path}"}\n{"stop":"review","round":1,"file":null}`)
-      const review = buildStops(buildSession({ stage: 'triage', round: 1 }), [path], runs).find((stop) => stop.kind === 'review')
+      const review = buildNodes(buildSession({ stage: 'triage', round: 1 }), [path], runs).find((node) => node.kind === 'review')
       return review.reviewers[0]?.run?.file === path && review.runs.length === 1 && review.runs[0].file === null
     },
 
@@ -3915,8 +3915,8 @@ function metroSelfCheck() {
       const untimed = '{"stop":"review","round":1,"durationMs":1000}'
 
       const time = (lines) => {
-        const stops = buildStops(buildSession({ stage: 'triage', round: 1 }), files, parseRuns(lines.join('\n')))
-        return stops.find((stop) => stop.kind === 'review').durationMs
+        const nodes = buildNodes(buildSession({ stage: 'triage', round: 1 }), files, parseRuns(lines.join('\n')))
+        return nodes.find((node) => node.kind === 'review').durationMs
       }
       return time([a, b, report]) === 585000 && time([b, report, untimed]) === 526000
     },
@@ -3986,13 +3986,13 @@ function sessionStripHtml(session, runs) {
     </div>`
 }
 
-// Returns the node of `stop`: a capsule for Review, a double ring for Done, else a circle.
-function nodeHtml(stop) {
-  const shape = stop.kind === 'review' ? ' interchange' : stop.kind === 'done' ? ' terminus' : ''
-  const icon = Object.hasOwn(NODE_ICONS, stop.state)
-    ? `<svg viewBox="0 0 16 16" aria-hidden="true">${NODE_ICONS[stop.state]}</svg>`
+// Returns the pip of `node`: a capsule for Review, a double ring for Done, else a circle.
+function pipHtml(node) {
+  const shape = node.kind === 'review' ? ' capsule' : node.kind === 'done' ? ' ring' : ''
+  const icon = Object.hasOwn(PIP_ICONS, node.state)
+    ? `<svg viewBox="0 0 16 16" aria-hidden="true">${PIP_ICONS[node.state]}</svg>`
     : ''
-  return `<span class="node${shape}">${icon}</span>`
+  return `<span class="pip${shape}">${icon}</span>`
 }
 
 function segHtml(position, reached) {
@@ -4032,92 +4032,92 @@ function reviewersHtml(reviewers, open) {
   return `<div class="reviewers">${rows.join('')}</div>`
 }
 
-// Returns the card of `stop`: its title, its badge and the facts the session has data for.
-function stopCardHtml(stop, open, selected) {
-  const totals = runTotals(stop.runs)
+// Returns the card of `node`: its title, its badge and the facts the session has data for.
+function nodeCardHtml(node, open, selected) {
+  const totals = runTotals(node.runs)
   const lines = []
 
-  if (stop.summary !== null) lines.push(`<div class="note">${escape(stop.summary)}</div>`)
+  if (node.summary !== null) lines.push(`<div class="note">${escape(node.summary)}</div>`)
 
   if (totals.agents.length > 0) lines.push(`<div class="meta mono">${escape(totals.agents.join(', '))}</div>`)
 
   const usage = usageFacts(totals)
   if (usage.length > 0) lines.push(metaHtml(usage))
 
-  if (stop.progress !== null) {
-    const { done, total } = stop.progress
+  if (node.progress !== null) {
+    const { done, total } = node.progress
     lines.push(metaHtml([`tasks <b>${done}/${total}</b>`]))
     lines.push(`<div class="bar"><span style="width: ${Math.round((100 * done) / total)}%"></span></div>`)
   }
 
-  if (stop.triage !== null) {
+  if (node.triage !== null) {
     const counts = Object.entries(TRIAGE_LABELS)
-      .filter(([key]) => stop.triage[key] !== null)
-      .map(([key, label]) => `<b>${stop.triage[key]}</b> ${label}`)
+      .filter(([key]) => node.triage[key] !== null)
+      .map(([key, label]) => `<b>${node.triage[key]}</b> ${label}`)
     lines.push(metaHtml(counts))
   }
 
-  if ((stop.reviewers ?? []).length > 0) lines.push(reviewersHtml(stop.reviewers, open))
-  if (stop.note !== null) lines.push(`<div class="note">${escape(stop.note)}</div>`)
+  if ((node.reviewers ?? []).length > 0) lines.push(reviewersHtml(node.reviewers, open))
+  if (node.note !== null) lines.push(`<div class="note">${escape(node.note)}</div>`)
 
-  if (stop.links.length > 0) {
-    const links = stop.links.map(
+  if (node.links.length > 0) {
+    const links = node.links.map(
       ({ label, path }) => `<button type="button" class="file" data-path="${escape(path)}">${escape(label)}</button>`,
     )
     lines.push(`<div class="meta">${links.join('')}</div>`)
   }
 
-  const durationMs = stop.kind === 'request' ? null : stop.durationMs ?? totals.durationMs
+  const durationMs = node.kind === 'request' ? null : node.durationMs ?? totals.durationMs
   const when = durationMs !== null ? `<span class="when">${formatDuration(durationMs)}</span>` : ''
-  const path = stop.file !== null ? ` data-path="${escape(stop.file)}"` : ''
+  const path = node.file !== null ? ` data-path="${escape(node.file)}"` : ''
   return `
     <div class="card${selected ? ' selected' : ''}"${path}>
       <div class="card-head">
-        <span class="title">${escape(stop.label)}</span>
+        <span class="title">${escape(node.label)}</span>
         ${when}
       </div>
       ${lines.join('')}
-      <div class="card-foot"><span class="badge">${BADGES[stop.state]}</span></div>
+      <div class="card-foot"><span class="badge">${BADGES[node.state]}</span></div>
     </div>`
 }
 
-// Returns the metro line: a round label before each round's first stop, then one row per stop.
-function metroHtml(stops, open, selected) {
-  const reached = (stop) => stop !== undefined && stop.state !== 'pending'
+// Returns the session timeline: a round label before each round's first node, then one row per node.
+function timelineHtml(nodes, open, selected) {
+  const reached = (node) => node !== undefined && node.state !== 'pending'
   const rows = []
   let labelled = 0
 
-  stops.forEach((stop, i) => {
-    if (stop.round > 0 && stop.round !== labelled) {
-      labelled = stop.round
+  nodes.forEach((node, i) => {
+    if (node.round > 0 && node.round !== labelled) {
+      labelled = node.round
       rows.push(`
-        <div class="stop round">
-          <div class="rail">${segHtml('full', reached(stop))}</div>
-          <div class="label">Round ${stop.round}</div>
+        <div class="node round">
+          <div class="rail">${segHtml('full', reached(node))}</div>
+          <div class="label">Round ${node.round}</div>
         </div>`)
     }
 
-    const up = i > 0 ? segHtml('up', reached(stop)) : ''
-    const down = i < stops.length - 1 ? segHtml('down', reached(stops[i + 1])) : ''
+    const up = i > 0 ? segHtml('up', reached(node)) : ''
+    const down = i < nodes.length - 1 ? segHtml('down', reached(nodes[i + 1])) : ''
     rows.push(`
-      <div class="stop ${stop.state}" data-index="${i}">
-        <div class="rail">${up}${down}${nodeHtml(stop)}</div>
-        ${stopCardHtml(stop, open, i === selected)}
+      <div class="node ${node.state}" data-index="${i}">
+        <div class="rail">${up}${down}${pipHtml(node)}</div>
+        ${nodeCardHtml(node, open, i === selected)}
       </div>`)
   })
   return rows.join('')
 }
 
-// Returns the viewer head: the open path, then the label and agents of `stop`.
-function viewerHeadHtml(stop, open) {
+// Returns the viewer head: the open path, then the label and agents of `node`.
+function viewerHeadHtml(node, open) {
   if (open === null) return ''
 
   const path = `<span class="path">${escape(open)}</span>`
-  if (stop === undefined) return path
+  if (node === undefined) return path
 
-  const reviewer = (stop.reviewers ?? []).find((r) => r.path === open)
-  const agents = reviewer ? (reviewer.run?.agent ? [reviewer.run.agent] : []) : runTotals(stop.runs).agents
-  return `${path}<span class="by">${escape([stop.label, ...agents].join(' · '))}</span>`
+  const reviewer = (node.reviewers ?? []).find((r) => r.path === open)
+  const agents = reviewer ? (reviewer.run?.agent ? [reviewer.run.agent] : []) : runTotals(node.runs).agents
+  return `${path}<span class="by">${escape([node.label, ...agents].join(' · '))}</span>`
 }
 
 // Shows `path` in the pane, or a blank pane when it is null or missing. Leaves the pane alone while the editor is open.
@@ -5351,9 +5351,9 @@ function runWipAction(main, path, action) {
   else if (action === 'claude') openWorktree(path, 'claude')
 }
 
-// Scrolls the metro pane to show the card of stop `index`.
-function revealStop(index) {
-  const card = $('metro').querySelector(`.stop[data-index="${index}"] > .card`)
+// Scrolls the timeline pane to show the card of node `index`.
+function revealNode(index) {
+  const card = $('timeline').querySelector(`.node[data-index="${index}"] > .card`)
   if (!card) return
 
   card.scrollIntoView({ block: 'nearest' })
@@ -5365,18 +5365,18 @@ function openPath(session, path) {
   else location.hash = fileHref(session, path)
 }
 
-// Selects the stop of the clicked card, reviewer or link, and opens its file.
-function onMetroClick(event) {
+// Selects the node of the clicked card, reviewer or link, and opens its file.
+function onTimelineClick(event) {
   const target = event.target.closest('[data-path]')
-  const stop = event.target.closest('.stop[data-index]')
-  if (!target || !stop) return
+  const node = event.target.closest('.node[data-index]')
+  if (!target || !node) return
 
   const session = state.sessions.find((s) => s.dir === sessionView.dir)
   if (!session) return
 
   const path = target.dataset.path
   const select = () => {
-    sessionView.selected = Number(stop.dataset.index)
+    sessionView.selected = Number(node.dataset.index)
     openPath(session, path)
   }
 
@@ -5384,18 +5384,18 @@ function onMetroClick(event) {
   else confirmDiscard(select)
 }
 
-// Selects the nearest stop with a file in direction `step`, opens the file and returns true when one exists.
-function moveStop(session, step) {
+// Selects the nearest node with a file in direction `step`, opens the file and returns true when one exists.
+function moveNode(session, step) {
   if (sessionView.dir !== session.dir) return false
 
-  const { stops, selected } = sessionView
-  let next = selected < 0 && step < 0 ? stops.length - 1 : selected + step
-  while (next >= 0 && next < stops.length && stops[next].file === null) next += step
-  if (next < 0 || next >= stops.length) return false
+  const { nodes, selected } = sessionView
+  let next = selected < 0 && step < 0 ? nodes.length - 1 : selected + step
+  while (next >= 0 && next < nodes.length && nodes[next].file === null) next += step
+  if (next < 0 || next >= nodes.length) return false
 
   sessionView.selected = next
-  revealStop(next)
-  openPath(session, stops[next].file)
+  revealNode(next)
+  openPath(session, nodes[next].file)
   return true
 }
 
@@ -5439,7 +5439,7 @@ function onSplitterDown(event) {
   )
 }
 
-// Shows `session` on its item of the worktree page: its strip, its metro, and `file` or its default file in the viewer.
+// Shows `session` on its item of the worktree page: its strip, its timeline, and `file` or its default file in the viewer.
 async function renderSessionContent(session, file) {
   const seq = renderSeq
 
@@ -5456,22 +5456,22 @@ async function renderSessionContent(session, file) {
     sessionView.card = strip
   }
 
-  const stops = buildStops(session, files, runs, outcomes, walk ?? track)
+  const nodes = buildNodes(session, files, runs, outcomes, walk ?? track)
   const open = editing !== null ? editing.path : file ?? defaultFile(session, files, sessionRound(session))
-  if (!stopShows(stops[sessionView.selected], open)) sessionView.selected = stopIndexForFile(stops, open)
-  sessionView.stops = stops
+  if (!nodeShows(nodes[sessionView.selected], open)) sessionView.selected = nodeIndexForFile(nodes, open)
+  sessionView.nodes = nodes
 
-  const metro = metroHtml(stops, open, sessionView.selected)
-  if (sessionView.metro !== metro) {
-    const first = sessionView.metro === ''
-    const top = $('metro-pane').scrollTop
-    $('metro').innerHTML = metro
-    $('metro-pane').scrollTop = top
-    sessionView.metro = metro
-    if (first) revealStop(sessionView.selected)
+  const timeline = timelineHtml(nodes, open, sessionView.selected)
+  if (sessionView.timeline !== timeline) {
+    const first = sessionView.timeline === ''
+    const top = $('timeline-pane').scrollTop
+    $('timeline').innerHTML = timeline
+    $('timeline-pane').scrollTop = top
+    sessionView.timeline = timeline
+    if (first) revealNode(sessionView.selected)
   }
 
-  const head = viewerHeadHtml(stops[sessionView.selected], open)
+  const head = viewerHeadHtml(nodes[sessionView.selected], open)
   if (sessionView.head !== head) {
     $('viewer-head').innerHTML = head
     sessionView.head = head
@@ -5734,7 +5734,7 @@ function sessionKey(key, session) {
     return true
   }
 
-  if (key === 'ArrowDown' || key === 'ArrowUp') return moveStop(session, key === 'ArrowDown' ? 1 : -1)
+  if (key === 'ArrowDown' || key === 'ArrowUp') return moveNode(session, key === 'ArrowDown' ? 1 : -1)
 
   if (key === 'a') {
     archiveSession(session)
@@ -6278,7 +6278,7 @@ async function poll() {
     }
     problems.push(...reposProblems())
     problems.push(...missingScripts())
-    if (state.failedChecks.length > 0) problems.push(`metro self-check failed: ${state.failedChecks.join(', ')}`)
+    if (state.failedChecks.length > 0) problems.push(`timeline self-check failed: ${state.failedChecks.join(', ')}`)
 
     state.sessions = sessions
     state.problems = problems
@@ -6313,7 +6313,7 @@ window.addEventListener('resize', showGithubView)
 window.addEventListener('focus', onWindowFocus)
 window.addEventListener('message', onLessonMessage)
 document.addEventListener('keydown', onKey)
-state.failedChecks = metroSelfCheck()
+state.failedChecks = timelineSelfCheck()
 loadVersion()
 poll()
 setInterval(poll, POLL_MS)

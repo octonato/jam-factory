@@ -219,8 +219,8 @@ const sessionsReply = (sessions) => response(JSON.stringify({ sessions }))
 const plain = (value) => JSON.parse(JSON.stringify(value))
 
 function modelGate(app) {
-  const failures = Array.from(app.run('metroSelfCheck()'))
-  assert.equal(failures.length, 0, `metro self-check failed: ${failures.join(', ')}`)
+  const failures = Array.from(app.run('timelineSelfCheck()'))
+  assert.equal(failures.length, 0, `timeline self-check failed: ${failures.join(', ')}`)
 }
 
 test('the actual dashboard model passes every self-check', () => {
@@ -233,7 +233,7 @@ test('the model gate rejects integerOrNull returning zero', () => {
   const original = 'function integerOrNull(value) {\n  return Number.isInteger(value) ? value : null\n}'
   assert.ok(source.includes(original), 'integerOrNull mutation target changed')
   const script = source.replace(original, 'function integerOrNull(value) {\n  return 0\n}')
-  assert.throws(() => modelGate(dashboard({ script })), /metro self-check failed:.*bad-types/)
+  assert.throws(() => modelGate(dashboard({ script })), /timeline self-check failed:.*bad-types/)
 })
 
 test('rendering an old session lists files and never fetches an absent run log', async () => {
@@ -316,14 +316,14 @@ test('window resizing before opening a session is safe', () => {
   dashboard().window.dispatch('resize')
 })
 
-test('revealing a stop scrolls its card into view without a header offset', async () => {
+test('revealing a node scrolls its card into view without a header offset', async () => {
   const app = dashboard({ fetcher: () => filesReply(['session.json']) })
   app.context.session = session
   await app.run('renderWorktreePage("", session, null)')
 
   const card = { style: {}, scrolled: null, scrollIntoView(options) { this.scrolled = options } }
-  app.elements.get('metro').querySelector = () => card
-  app.run('revealStop(0)')
+  app.elements.get('timeline').querySelector = () => card
+  app.run('revealNode(0)')
 
   assert.equal(card.style.scrollMarginTop, undefined)
   assert.deepEqual(plain(card.scrolled), { block: 'nearest' })
@@ -335,11 +335,11 @@ test('Request timing is hidden in every flow, including legacy zero and derived 
     for (const durationMs of [0, 5000, null]) {
       app.context.session = { ...session, flow }
       app.context.entry = { stop: 'request', round: 0, durationMs, started: '2026-10-22T10:00:00Z', ended: '2026-10-22T10:01:00Z' }
-      const card = app.run('stopCardHtml(buildStops(session, ["request.md"], parseRuns(JSON.stringify(entry)))[0], null, false)')
+      const card = app.run('nodeCardHtml(buildNodes(session, ["request.md"], parseRuns(JSON.stringify(entry)))[0], null, false)')
       assert.doesNotMatch(card, /class="when"/)
     }
   }
-  const card = app.run('stopCardHtml(withRuns(newStop("implement", 1, null, []), parseRuns(\'{"stop":"implement","round":1,"durationMs":5000}\')), null, false)')
+  const card = app.run('nodeCardHtml(withRuns(newNode("implement", 1, null, []), parseRuns(\'{"stop":"implement","round":1,"durationMs":5000}\')), null, false)')
   assert.match(card, /class="when">5s/)
 })
 
@@ -368,11 +368,11 @@ test('blocked Implement keeps existing tasks as a link and session.json as its m
   const app = dashboard()
   for (const flow of ['build', 'vibe']) {
     app.context.session = { ...session, flow, stage: 'blocked', blocked: { stage: 'implement', reason: 'needs input' } }
-    const stop = app.run('buildStops(session, ["tasks.md"], []).find((stop) => stop.state === "blocked")')
-    assert.equal(stop.file, 'session.json')
-    assert.equal(stop.note, 'needs input')
-    assert.deepEqual(plain(stop.links), [{ label: 'tasks', path: 'tasks.md' }])
-    assert.deepEqual(plain(app.run('buildStops(session, [], []).find((stop) => stop.state === "blocked").links')), [])
+    const node = app.run('buildNodes(session, ["tasks.md"], []).find((node) => node.state === "blocked")')
+    assert.equal(node.file, 'session.json')
+    assert.equal(node.note, 'needs input')
+    assert.deepEqual(plain(node.links), [{ label: 'tasks', path: 'tasks.md' }])
+    assert.deepEqual(plain(app.run('buildNodes(session, [], []).find((node) => node.state === "blocked").links')), [])
   }
 })
 
@@ -387,8 +387,8 @@ test('review rounds close on successful comments without submit.md and retain su
 test('finalize skips the following Implement while the next-round outcome retains it', () => {
   const app = dashboard()
   app.context.session = { ...session, stage: 'verify', round: 1 }
-  assert.equal(app.run('buildStops(session, ["round-1/triage.md"], [], { 1: "finalize" }).some((stop) => stop.kind === "implement" && stop.round === 2)'), false)
-  assert.equal(app.run('buildStops(session, ["round-1/triage.md"], [], { 1: "next round" }).some((stop) => stop.kind === "implement" && stop.round === 2)'), true)
+  assert.equal(app.run('buildNodes(session, ["round-1/triage.md"], [], { 1: "finalize" }).some((node) => node.kind === "implement" && node.round === 2)'), false)
+  assert.equal(app.run('buildNodes(session, ["round-1/triage.md"], [], { 1: "next round" }).some((node) => node.kind === "implement" && node.round === 2)'), true)
 })
 
 test('rendering a session reads each round triage outcome and skips Implement after finalize', async () => {
@@ -400,9 +400,9 @@ test('rendering a session reads each round triage outcome and skips Implement af
   app.context.session = { ...session, stage: 'verify', round: 1 }
   await app.run('renderWorktreePage("", session, null)')
 
-  const stops = app.run('sessionView.stops')
-  assert.equal(stops.some((stop) => stop.kind === 'implement' && stop.round === 2), false, 'Implement shown after finalize')
-  assert.equal(stops.find((stop) => stop.kind === 'review' && stop.round === 2)?.state, 'current')
+  const nodes = app.run('sessionView.nodes')
+  assert.equal(nodes.some((node) => node.kind === 'implement' && node.round === 2), false, 'Implement shown after finalize')
+  assert.equal(nodes.find((node) => node.kind === 'review' && node.round === 2)?.state, 'current')
   assert.ok(app.calls.includes(`${session.dir}round-1/triage.md`), 'triage outcome was not fetched')
 })
 
@@ -413,9 +413,9 @@ test('parallel Review time spans all runs and falls back to durations when any t
     { stop: 'review', round: 1, started: '2026-10-22T10:01:00Z', ended: '2026-10-22T10:09:00Z', durationMs: 480000 },
     { stop: 'report', round: 1, started: '2026-10-22T10:09:00Z', ended: '2026-10-22T10:09:45Z', durationMs: 45000 },
   ]
-  const review = () => app.run('reviewStop(1, [], parseRuns(entries.map(JSON.stringify).join("\\n")), ["review", "report"])')
+  const review = () => app.run('reviewNode(1, [], parseRuns(entries.map(JSON.stringify).join("\\n")), ["review", "report"])')
   assert.equal(review().durationMs, 585000)
-  assert.match(app.run('stopCardHtml(reviewStop(1, [], parseRuns(entries.map(JSON.stringify).join("\\n")), ["review", "report"]), null, false)'), /9m 45s/)
+  assert.match(app.run('nodeCardHtml(reviewNode(1, [], parseRuns(entries.map(JSON.stringify).join("\\n")), ["review", "report"]), null, false)'), /9m 45s/)
   for (const started of [null, 'invalid']) {
     app.context.entries[1].started = started
     assert.equal(review().durationMs, 825000)
@@ -1701,12 +1701,12 @@ const walkJson = JSON.stringify({
   ],
 })
 
-// Returns the stops of `session` over `files` and `walkJson`.
-function walkStops(app, session, files) {
+// Returns the nodes of `session` over `files` and `walkJson`.
+function walkNodes(app, session, files) {
   app.context.session = session
   app.context.files = files
   app.context.walkText = walkJson
-  return plain(app.run('buildStops(session, files, [], {}, parseWalk(walkText))'))
+  return plain(app.run('buildNodes(session, files, [], {}, parseWalk(walkText))'))
 }
 
 // Returns a dashboard that shows the session page of `session` from `api`.
@@ -1751,45 +1751,45 @@ test('a row names its branch and run and shows the folder category', () => {
   assert.equal(app.run('sessionClass(session)'), 'review')
 })
 
-test('walk stops follow walk.json and the step files', () => {
+test('walk nodes follow walk.json and the step files', () => {
   const app = dashboard()
-  const stops = walkStops(app, walkSession('walk'), ['overview.md', 'walk.json', 'steps/01.md'])
+  const nodes = walkNodes(app, walkSession('walk'), ['overview.md', 'walk.json', 'steps/01.md'])
 
-  assert.deepEqual(stops.map((stop) => stop.label), ['Overview', 'Step 1: A', 'Step 2: B'])
-  assert.deepEqual(stops.map((stop) => stop.file), ['overview.md', 'steps/01.md', null])
-  assert.deepEqual(stops.map((stop) => stop.state), ['done', 'done', 'writing'])
-  assert.deepEqual(stops.map((stop) => stop.summary), ['Adds rate limiting.', 'The limiter.', 'The wiring.'])
+  assert.deepEqual(nodes.map((node) => node.label), ['Overview', 'Step 1: A', 'Step 2: B'])
+  assert.deepEqual(nodes.map((node) => node.file), ['overview.md', 'steps/01.md', null])
+  assert.deepEqual(nodes.map((node) => node.state), ['done', 'done', 'writing'])
+  assert.deepEqual(nodes.map((node) => node.summary), ['Adds rate limiting.', 'The limiter.', 'The wiring.'])
 
-  app.context.stop = stops[2]
-  const card = app.run('stopCardHtml(stop, null, false)')
+  app.context.node = nodes[2]
+  const card = app.run('nodeCardHtml(node, null, false)')
   assert.match(card, /<span class="title">Step 2: B<\/span>/)
   assert.match(card, /<div class="card-foot"><span class="badge">writing<\/span><\/div>\s*<\/div>$/)
   assert.match(card, /<div class="note">The wiring\.<\/div>/)
   assert.doesNotMatch(card, /data-path=/)
-  assert.match(html, /\.stop\.writing \{ --tone: var\(--accent\); \}/)
+  assert.match(html, /\.node\.writing \{ --tone: var\(--accent\); \}/)
 })
 
 test('a done walk marks every written step done', () => {
   const app = dashboard()
   const done = walkSession('done', 2, 2)
 
-  assert.deepEqual(walkStops(app, done, ['overview.md', 'steps/01.md', 'steps/02.md']).map((stop) => stop.state), ['done', 'done', 'done'])
-  assert.deepEqual(walkStops(app, done, ['overview.md', 'steps/01.md']).map((stop) => stop.state), ['done', 'done', 'pending'])
+  assert.deepEqual(walkNodes(app, done, ['overview.md', 'steps/01.md', 'steps/02.md']).map((node) => node.state), ['done', 'done', 'done'])
+  assert.deepEqual(walkNodes(app, done, ['overview.md', 'steps/01.md']).map((node) => node.state), ['done', 'done', 'pending'])
   assert.equal(app.run('stepLabel(session)'), 'walk-through · done')
 })
 
 test('a blocked walk shows its reason on the overview', () => {
   const app = dashboard()
   const blocked = walkSession('blocked', 1, 2, { blocked: { stage: 'walk', reason: 'git failed' } })
-  const stops = walkStops(app, blocked, ['overview.md', 'steps/01.md'])
+  const nodes = walkNodes(app, blocked, ['overview.md', 'steps/01.md'])
 
-  assert.deepEqual(stops.map((stop) => stop.state), ['blocked', 'done', 'pending'])
-  assert.equal(stops[0].file, 'overview.md')
-  assert.equal(stops[0].note, 'git failed')
-  assert.deepEqual(stops[0].links, [{ label: 'session.json', path: 'session.json' }])
+  assert.deepEqual(nodes.map((node) => node.state), ['blocked', 'done', 'pending'])
+  assert.equal(nodes[0].file, 'overview.md')
+  assert.equal(nodes[0].note, 'git failed')
+  assert.deepEqual(nodes[0].links, [{ label: 'session.json', path: 'session.json' }])
   assert.equal(app.run('stepLabel(session)'), 'walk-through · blocked')
   assert.equal(app.run('defaultFile(session, [], 0)'), 'session.json')
-  assert.equal(app.run('stopIndexForFile(buildStops(session, files, [], {}, parseWalk(walkText)), "session.json")'), 0)
+  assert.equal(app.run('nodeIndexForFile(buildNodes(session, files, [], {}, parseWalk(walkText)), "session.json")'), 0)
 })
 
 test('a walk without walk.json shows only the overview', async () => {
@@ -1813,12 +1813,12 @@ test('a walk without walk.json shows only the overview', async () => {
   assert.deepEqual(app.calls, ['api/file/o/r/main/s/walk.json'])
 
   app.context.session = walkSession('walk', 0, 0)
-  const stops = plain(app.run('buildStops(session, ["request.md"], [], {}, null)'))
-  assert.equal(stops.length, 1)
-  assert.equal(stops[0].label, 'Overview')
-  assert.equal(stops[0].file, 'overview.md')
-  assert.equal(stops[0].state, 'done')
-  assert.equal(stops[0].summary, null)
+  const nodes = plain(app.run('buildNodes(session, ["request.md"], [], {}, null)'))
+  assert.equal(nodes.length, 1)
+  assert.equal(nodes[0].label, 'Overview')
+  assert.equal(nodes[0].file, 'overview.md')
+  assert.equal(nodes[0].state, 'done')
+  assert.equal(nodes[0].summary, null)
 })
 
 test('walk rows read writing n/m', () => {
@@ -1841,7 +1841,7 @@ test('a walk opens its overview by default', async () => {
 
   assert.equal(app.run('defaultFile(session, [], 0)'), 'overview.md')
   assert.equal(app.run('sessionView.selected'), 0)
-  assert.deepEqual(plain(app.run('sessionView.stops.map((stop) => stop.label)')), ['Overview', 'Step 1: A', 'Step 2: B'])
+  assert.deepEqual(plain(app.run('sessionView.nodes.map((node) => node.label)')), ['Overview', 'Step 1: A', 'Step 2: B'])
   assert.match(app.elements.get('viewer-head').innerHTML, /<span class="path">overview\.md<\/span><span class="by">Overview<\/span>/)
   assert.match(app.elements.get('view').innerHTML, /# Overview/)
 })
@@ -1859,16 +1859,16 @@ test('a done review opens its comment by default', async () => {
   app.context.files = Object.keys(api.files)
   assert.equal(app.run('defaultFile(session, files, sessionRound(session))'), 'round-1/submit.md')
 
-  const selected = plain(app.run('sessionView.stops[sessionView.selected]'))
+  const selected = plain(app.run('sessionView.nodes[sessionView.selected]'))
   assert.equal(selected.kind, 'comment')
   assert.equal(selected.file, 'round-1/submit.md')
 
   assert.match(app.elements.get('viewer-head').innerHTML, /<span class="path">round-1\/submit\.md<\/span><span class="by">Comment<\/span>/)
   assert.match(app.elements.get('view').innerHTML, /A title/)
-  assert.match(app.elements.get('metro').innerHTML, /<div class="card selected" data-path="round-1\/submit\.md">\s*<div class="card-head">\s*<span class="title">Comment<\/span>/)
+  assert.match(app.elements.get('timeline').innerHTML, /<div class="card selected" data-path="round-1\/submit\.md">\s*<div class="card-head">\s*<span class="title">Comment<\/span>/)
 })
 
-test('moving between walk stops skips unwritten steps', async () => {
+test('moving between walk nodes skips unwritten steps', async () => {
   const steps = [1, 2, 3].map((n) => ({ n, title: `S${n}` }))
   const api = fileApi({ 'walk.json': JSON.stringify({ steps }), 'overview.md': '# Overview\n', 'steps/01.md': '## 1\n', 'steps/03.md': '## 3\n' })
   const app = await openSession(api, walkSession('walk', 2, 3))
@@ -1905,63 +1905,63 @@ const trackJson = JSON.stringify({
   reference: [{ title: 'Glossary', file: 'reference/glossary.html' }],
 })
 
-// Returns the stops of `session` over `files` and `trackJson`.
-function lessonStops(app, session, files) {
+// Returns the nodes of `session` over `files` and `trackJson`.
+function lessonNodes(app, session, files) {
   app.context.session = session
   app.context.files = files
   app.context.trackText = trackJson
-  return plain(app.run('buildStops(session, files, [], {}, parseTrack(trackText))'))
+  return plain(app.run('buildNodes(session, files, [], {}, parseTrack(trackText))'))
 }
 
-test('lesson stops follow track.json', () => {
+test('lesson nodes follow track.json', () => {
   const app = dashboard()
-  const stops = lessonStops(app, lessonSession('lesson'), ['index.html', 'track.json', 'lessons/0001-a.html'])
+  const nodes = lessonNodes(app, lessonSession('lesson'), ['index.html', 'track.json', 'lessons/0001-a.html'])
 
-  assert.deepEqual(stops.map((stop) => stop.kind), ['track', 'lesson', 'lesson', 'reference'])
-  assert.deepEqual(stops.map((stop) => stop.label), ['Track', '0001: A', '0002: B', 'Glossary'])
-  assert.deepEqual(stops.map((stop) => stop.file), ['index.html', 'lessons/0001-a.html', null, null])
-  assert.deepEqual(stops.map((stop) => stop.summary), ['How a trace forms.', 'Spans.', 'Context.', null])
+  assert.deepEqual(nodes.map((node) => node.kind), ['track', 'lesson', 'lesson', 'reference'])
+  assert.deepEqual(nodes.map((node) => node.label), ['Track', '0001: A', '0002: B', 'Glossary'])
+  assert.deepEqual(nodes.map((node) => node.file), ['index.html', 'lessons/0001-a.html', null, null])
+  assert.deepEqual(nodes.map((node) => node.summary), ['How a trace forms.', 'Spans.', 'Context.', null])
 
-  const later = lessonStops(app, lessonSession('lesson'), ['lessons/0002-b.html', 'reference/glossary.html'])
-  assert.deepEqual(later.map((stop) => stop.file), [null, null, 'lessons/0002-b.html', 'reference/glossary.html'])
+  const later = lessonNodes(app, lessonSession('lesson'), ['lessons/0002-b.html', 'reference/glossary.html'])
+  assert.deepEqual(later.map((node) => node.file), [null, null, 'lessons/0002-b.html', 'reference/glossary.html'])
 })
 
 test('a writing lesson track', () => {
   const app = dashboard()
 
-  const stops = lessonStops(app, lessonSession('lesson'), ['index.html', 'lessons/0001-a.html'])
-  assert.deepEqual(stops.map((stop) => stop.state), ['done', 'done', 'writing', 'pending'])
+  const nodes = lessonNodes(app, lessonSession('lesson'), ['index.html', 'lessons/0001-a.html'])
+  assert.deepEqual(nodes.map((node) => node.state), ['done', 'done', 'writing', 'pending'])
 
-  app.context.stop = stops[2]
-  const card = app.run('stopCardHtml(stop, null, false)')
+  app.context.node = nodes[2]
+  const card = app.run('nodeCardHtml(node, null, false)')
   assert.match(card, /<span class="title">0002: B<\/span>/)
   assert.match(card, /<div class="card-foot"><span class="badge">writing<\/span><\/div>\s*<\/div>$/)
   assert.doesNotMatch(card, /data-path=/)
 
-  const started = lessonStops(app, lessonSession('lesson', 0), [])
-  assert.deepEqual(started.map((stop) => stop.state), ['pending', 'writing', 'pending', 'pending'])
+  const started = lessonNodes(app, lessonSession('lesson', 0), [])
+  assert.deepEqual(started.map((node) => node.state), ['pending', 'writing', 'pending', 'pending'])
 })
 
 test('a done lesson track', () => {
   const app = dashboard()
   const files = ['index.html', 'lessons/0001-a.html', 'lessons/0002-b.html', 'reference/glossary.html']
-  const stops = lessonStops(app, lessonSession('done', 2, 2), files)
+  const nodes = lessonNodes(app, lessonSession('done', 2, 2), files)
 
-  assert.deepEqual(stops.map((stop) => stop.state), ['done', 'done', 'done', 'done'])
+  assert.deepEqual(nodes.map((node) => node.state), ['done', 'done', 'done', 'done'])
   assert.equal(app.run('stepLabel(session)'), 'lesson · done')
 })
 
 test('a blocked lesson track', () => {
   const app = dashboard()
   const blocked = lessonSession('blocked', 1, 2, { blocked: { stage: 'lesson', reason: 'boom' } })
-  const stops = lessonStops(app, blocked, ['index.html', 'lessons/0001-a.html'])
+  const nodes = lessonNodes(app, blocked, ['index.html', 'lessons/0001-a.html'])
 
-  assert.deepEqual(stops.map((stop) => stop.state), ['blocked', 'done', 'pending', 'pending'])
-  assert.equal(stops[0].file, 'index.html')
-  assert.equal(stops[0].note, 'boom')
-  assert.deepEqual(stops[0].links, [{ label: 'session.json', path: 'session.json' }])
+  assert.deepEqual(nodes.map((node) => node.state), ['blocked', 'done', 'pending', 'pending'])
+  assert.equal(nodes[0].file, 'index.html')
+  assert.equal(nodes[0].note, 'boom')
+  assert.deepEqual(nodes[0].links, [{ label: 'session.json', path: 'session.json' }])
   assert.equal(app.run('stepLabel(session)'), 'lesson · blocked')
-  assert.equal(app.run('stopIndexForFile(buildStops(session, files, [], {}, parseTrack(trackText)), "session.json")'), 0)
+  assert.equal(app.run('nodeIndexForFile(buildNodes(session, files, [], {}, parseTrack(trackText)), "session.json")'), 0)
 })
 
 test('no or invalid track.json', () => {
@@ -1994,12 +1994,12 @@ test('no or invalid track.json', () => {
   assert.deepEqual(plain(app.run('parseTrack(\'{"lessons":[],"reference":{}}\')')), { summary: null, lessons: [], reference: [] })
 
   app.context.session = lessonSession('lesson', 0, 0)
-  const stops = plain(app.run('buildStops(session, ["index.html"], [], {}, null)'))
-  assert.equal(stops.length, 1)
-  assert.equal(stops[0].label, 'Track')
-  assert.equal(stops[0].file, 'index.html')
-  assert.equal(stops[0].state, 'done')
-  assert.equal(stops[0].summary, null)
+  const nodes = plain(app.run('buildNodes(session, ["index.html"], [], {}, null)'))
+  assert.equal(nodes.length, 1)
+  assert.equal(nodes[0].label, 'Track')
+  assert.equal(nodes[0].file, 'index.html')
+  assert.equal(nodes[0].state, 'done')
+  assert.equal(nodes[0].summary, null)
 })
 
 test('loadTrack reads track.json only when listed', async () => {
@@ -2037,14 +2037,14 @@ test('a lesson session opens index.html by default', async () => {
 
   assert.equal(app.run('defaultFile(session, [], 0)'), 'index.html')
   assert.equal(app.run('sessionView.selected'), 0)
-  assert.deepEqual(plain(app.run('sessionView.stops.map((stop) => stop.label)')), ['Track', '0001: A', '0002: B', 'Glossary'])
+  assert.deepEqual(plain(app.run('sessionView.nodes.map((node) => node.label)')), ['Track', '0001: A', '0002: B', 'Glossary'])
   assert.match(app.elements.get('viewer-head').innerHTML, /<span class="path">index\.html<\/span><span class="by">Track<\/span>/)
 
   app.context.session = lessonSession('blocked', 1, 2, { blocked: { stage: 'lesson', reason: 'boom' } })
   assert.equal(app.run('defaultFile(session, [], 0)'), 'session.json')
 })
 
-test('moving between lesson stops skips unwritten lessons', async () => {
+test('moving between lesson nodes skips unwritten lessons', async () => {
   const lessons = [1, 2, 3].map((n) => ({ n, title: `L${n}`, file: `lessons/000${n}-l.html` }))
   const reference = [{ title: 'Glossary', file: 'reference/glossary.html' }]
   const api = fileApi({
@@ -2076,10 +2076,10 @@ test('moving between lesson stops skips unwritten lessons', async () => {
 test('the lesson-flow self-check passes', () => {
   modelGate(dashboard())
 
-  const original = "const writing = session.stage === 'lesson' ? stops.findIndex(unwritten) : -1"
+  const original = "const writing = session.stage === 'lesson' ? nodes.findIndex(unwritten) : -1"
   assert.ok(source.includes(original), 'setLessonStates mutation target changed')
   const script = source.replace(original, 'const writing = -1')
-  assert.throws(() => modelGate(dashboard({ script })), /metro self-check failed:.*lesson-flow/)
+  assert.throws(() => modelGate(dashboard({ script })), /timeline self-check failed:.*lesson-flow/)
 })
 
 const lessonRoot = 'http://h/api/file/o/r/b/id/'
@@ -2680,12 +2680,12 @@ test('the Terminal item shows the tab strip at full width', async () => {
   assert.match(html, /\.session-page\.terminal-item \{\s*grid-template-columns: minmax\(0, 1fr\);\s*grid-template-rows: auto auto minmax\(0, 1fr\);\s*\}/)
 })
 
-test('a session item shows its strip, metro and viewer', async () => {
+test('a session item shows its strip, timeline and viewer', async () => {
   const { app } = await worktreeApp(worktreePath, [sessionAt('s1', worktreePath)])
   navigate(app, '#/o/r/main/s1')
   await settle()
 
-  assert.deepEqual(pageIds(app), ['worktree-card', 'worktree-bar', 'session-card', 'metro-pane', 'metro', 'splitter', 'viewer-head', 'view'])
+  assert.deepEqual(pageIds(app), ['worktree-card', 'worktree-bar', 'session-card', 'timeline-pane', 'timeline', 'splitter', 'viewer-head', 'view'])
   assert.match(app.elements.get('page').innerHTML, /<div class="session-page">/)
 
   const strip = app.elements.get('session-card').innerHTML
@@ -2728,7 +2728,7 @@ test('a session on an unlisted worktree renders the page with the reason', async
     { href: '#/o/r/main/s1', text: 's1 build implement' },
   ])
   assert.equal(textOf(app.elements.get('worktree-card').innerHTML), `${gone} not a configured worktree`)
-  assert.ok(pageIds(app).includes('metro'))
+  assert.ok(pageIds(app).includes('timeline'))
 
   navigate(app, worktreeHashOf(gone))
   assert.deepEqual(pageIds(app), ['worktree-card', 'worktree-bar', 'term-tabs', 'term-view'])
@@ -2746,7 +2746,7 @@ test('a session without a worktree renders its page', async () => {
     assert.deepEqual(barLinks(app), [{ href: '#/org/repo/main/session', text: 'session build implement' }])
     assert.deepEqual(currentBarLinks(app), ['#/org/repo/main/session'])
     assert.doesNotMatch(app.elements.get('worktree-bar').innerHTML, /#\/worktree\//)
-    assert.ok(pageIds(app).includes('metro'))
+    assert.ok(pageIds(app).includes('timeline'))
 
     for (const hash of ['#/org/repo/main/session', '#/org/repo/main/session/spec.md']) {
       navigate(app, hash)
@@ -2906,7 +2906,7 @@ test('terminals survive leaving and returning', async () => {
 
   navigate(app, '#/o/r/main/s1')
   await settle()
-  assert.match(app.elements.get('page').innerHTML, /id="metro-pane"/)
+  assert.match(app.elements.get('page').innerHTML, /id="timeline-pane"/)
   assert.deepEqual(new Set(app.elements.get('term-store').children), new Set([first.el, second.el]))
 
   app.run('render()')
@@ -4188,7 +4188,7 @@ test('a click or Enter on a Sessions row shows the worktree page with that sessi
   await settle()
 
   assert.deepEqual(currentBarLinks(app), ['#/o/r/main/s1'])
-  assert.ok(pageIds(app).includes('metro'))
+  assert.ok(pageIds(app).includes('timeline'))
 
   navigate(app, '#/sessions')
   assert.ok(press(app, 'Enter'))

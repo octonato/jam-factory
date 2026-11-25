@@ -313,7 +313,7 @@ verify(N) ─► submit(N) ─► done
 - **submit**: writes the PR comment to `round-N/submit.md`, drops the findings already on the PR, then offers to open the comment.
 - **done**: shows the PR URL, the comment's path and its number of findings.
 
-Jam Board shows the session. Its Comment stop opens `round-N/submit.md`.
+Jam Board shows the session. Its Comment node opens `round-N/submit.md`.
 
 The session's `mode` sets when a review session asks you something:
 

@@ -163,13 +163,13 @@ mod tests {
     }
 
     #[test]
-    fn dashboard_builds_stops_from_runs() {
+    fn dashboard_builds_nodes_from_runs() {
         let html = std::str::from_utf8(embedded("/dashboard.html").unwrap().bytes).unwrap();
 
         assert!(html.contains("function parseRuns("));
-        assert!(html.contains("function buildStops("));
+        assert!(html.contains("function buildNodes("));
         assert!(html.contains("function runTotals("));
-        assert!(html.contains("function metroSelfCheck("));
+        assert!(html.contains("function timelineSelfCheck("));
         assert!(html.contains("runs.jsonl"));
     }
 
@@ -294,10 +294,10 @@ mod tests {
     }
 
     #[test]
-    fn dashboard_runs_the_metro_self_check() {
+    fn dashboard_runs_the_timeline_self_check() {
         let html = std::str::from_utf8(embedded("/dashboard.html").unwrap().bytes).unwrap();
         let calls = html
-            .match_indices("metroSelfCheck()")
+            .match_indices("timelineSelfCheck()")
             .filter(|(i, _)| !html[..*i].ends_with("function "));
 
         assert!(calls.count() > 0);
