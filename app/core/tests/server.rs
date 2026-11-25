@@ -799,6 +799,7 @@ fn dashboard_is_served() {
         ("dashboard.html", "text/html; charset=utf-8"),
         ("marked.min.js", "text/javascript; charset=utf-8"),
         ("purify.min.js", "text/javascript; charset=utf-8"),
+        ("logo.svg", "image/svg+xml"),
     ] {
         let path = format!("/{name}");
 

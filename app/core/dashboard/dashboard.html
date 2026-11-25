@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Jam Board</title>
+<link rel="icon" href="logo.svg" type="image/svg+xml">
 <link rel="stylesheet" href="xterm.css">
 <link rel="stylesheet" href="highlight-github.min.css">
 <link rel="stylesheet" href="diff2html.min.css">
@@ -103,6 +104,7 @@
 
   header[hidden] { display: none; }
   header h1 { margin: 0; font-family: var(--serif); font-size: 1.286rem; font-weight: 400; }
+  header .logo { width: 1.75rem; height: 1.75rem; align-self: center; margin-right: -4px; }
 
   .tabs { display: flex; gap: 4px; }
 
@@ -1154,6 +1156,7 @@
 </head>
 <body>
 <header id="board-header">
+  <img class="logo" src="logo.svg" alt="">
   <h1>Jam Board</h1>
   <nav class="tabs" id="tabs"><a class="tab" href="#/sessions">Sessions</a><a class="tab" href="#/terminals">Terminals</a></nav>
   <span id="status">loading…</span>

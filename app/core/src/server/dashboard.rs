@@ -17,6 +17,7 @@
 const HTML: &str = "text/html; charset=utf-8";
 const JAVASCRIPT: &str = "text/javascript; charset=utf-8";
 const CSS: &str = "text/css; charset=utf-8";
+const SVG: &str = "image/svg+xml";
 
 /// An embedded file and its content type.
 pub struct Embedded {
@@ -50,6 +51,7 @@ pub fn embedded(path: &str) -> Option<Embedded> {
             JAVASCRIPT,
         ),
         "/diff2html.min.css" => (include_bytes!("../../dashboard/diff2html.min.css"), CSS),
+        "/logo.svg" => (include_bytes!("../../dashboard/logo.svg"), SVG),
         _ => return None,
     };
 
@@ -82,6 +84,23 @@ mod tests {
         assert!(html.contains("<title>Jam Board</title>"));
         assert!(html.contains("<h1>Jam Board</h1>"));
         assert!(!html.contains("Octo Factory"));
+    }
+
+    #[test]
+    fn dashboard_shows_the_logo() {
+        let html = std::str::from_utf8(embedded("/dashboard.html").unwrap().bytes).unwrap();
+        let start = html.find("<header id=\"board-header\">").unwrap();
+        let header = &html[start..];
+
+        assert!(html.contains("<link rel=\"icon\" href=\"logo.svg\" type=\"image/svg+xml\">"));
+        let logo = header
+            .find("<img class=\"logo\" src=\"logo.svg\" alt=\"\">")
+            .unwrap();
+        assert!(logo < header.find("<h1>Jam Board</h1>").unwrap());
+
+        let svg = embedded("/logo.svg").unwrap();
+        assert_eq!(svg.content_type, SVG);
+        assert!(svg.bytes.starts_with(b"<svg"));
     }
 
     #[test]
