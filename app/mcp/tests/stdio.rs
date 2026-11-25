@@ -526,6 +526,7 @@ fn list_sessions_filters() {
         ("o1", "r1", "main", "walk"),
         ("o1", "r2", "main", "session"),
         ("o2", "r1", "fix", "review"),
+        ("o1", "r1", "main", "lesson"),
     ] {
         server.ok(
             "start_session",
@@ -559,20 +560,22 @@ fn list_sessions_filters() {
     let repo = server.ok("list_sessions", json!({ "repo": "r1" }));
     let branch = server.ok("list_sessions", json!({ "branch": "fix" }));
     let category = server.ok("list_sessions", json!({ "category": "walk" }));
+    let lesson = server.ok("list_sessions", json!({ "category": "lesson" }));
     let bad = server.fail("list_sessions", json!({ "org": ".." }));
     let bad_category = server.fail("list_sessions", json!({ "category": "build" }));
 
     let all_names = names(&all);
 
-    assert_eq!(all_names.len(), 2, "{all}");
-    assert!(all_names[0].starts_with("o1/r1/main/walk-"), "{all}");
-    assert!(all_names[0].ends_with("-3f00486"), "{all}");
-    assert!(all_names[1].starts_with("o2/r1/fix/review-"), "{all}");
-    assert_eq!(all["sessions"][0]["category"], "walk");
-    assert_eq!(all["sessions"][0]["data"]["flow"], "walk");
-    assert_eq!(names(&with_archived).len(), 3);
-    assert_eq!(names(&org).len(), 2);
-    assert_eq!(names(&repo).len(), 2);
+    assert_eq!(all_names.len(), 3, "{all}");
+    assert!(all_names[0].starts_with("o1/r1/main/lesson-"), "{all}");
+    assert!(all_names[1].starts_with("o1/r1/main/walk-"), "{all}");
+    assert!(all_names[1].ends_with("-3f00486"), "{all}");
+    assert!(all_names[2].starts_with("o2/r1/fix/review-"), "{all}");
+    assert_eq!(all["sessions"][1]["category"], "walk");
+    assert_eq!(all["sessions"][1]["data"]["flow"], "walk");
+    assert_eq!(names(&with_archived).len(), 4);
+    assert_eq!(names(&org).len(), 3);
+    assert_eq!(names(&repo).len(), 3);
     assert!(
         names(&branch)[0].starts_with("o2/r1/fix/review-"),
         "{branch}"
@@ -581,6 +584,11 @@ fn list_sessions_filters() {
     assert!(
         names(&category)[0].starts_with("o1/r1/main/walk-"),
         "{category}"
+    );
+    assert_eq!(names(&lesson).len(), 1, "{lesson}");
+    assert!(
+        names(&lesson)[0].starts_with("o1/r1/main/lesson-"),
+        "{lesson}"
     );
     assert_eq!(bad["code"], "bad_name");
     assert_eq!(bad_category["code"], "bad_name");
@@ -670,6 +678,33 @@ fn start_session_names_a_review_by_its_pr() {
     let mut zero = start;
     zero["pr"] = json!(0);
     assert_eq!(server.fail("start_session", zero)["code"], "bad_name");
+}
+
+#[test]
+fn start_session_seeds_a_lesson() {
+    let mut server = Server::start();
+
+    let started = server.ok(
+        "start_session",
+        json!({
+            "org": "o",
+            "repo": "r",
+            "branch": "main",
+            "category": "lesson",
+            "head": "3f00486",
+            "fields": { "flow": "lesson", "stage": "lesson" },
+        }),
+    );
+    let id = started["session"].as_str().unwrap();
+
+    assert!(id.starts_with("lesson-"), "{started}");
+
+    let files = server.ok("list_files", in_session_of("o", "r", id, json!({})));
+
+    assert_eq!(
+        files,
+        json!({ "files": ["assets/course.css", "assets/quiz.js", "session.json"] })
+    );
 }
 
 #[test]

@@ -57,7 +57,7 @@ pub struct ListSessionsArgs {
     /// Lists only the sessions of this branch (last segment of its name).
     branch: Option<String>,
 
-    /// Lists only the sessions of this category: `session`, `review` or `walk`.
+    /// Lists only the sessions of this category: `session`, `review`, `walk` or `lesson`.
     category: Option<String>,
 
     /// Lists the archived sessions too.
@@ -77,7 +77,7 @@ pub struct StartSessionArgs {
     /// The last segment of the branch name.
     branch: String,
 
-    /// The category of the session: `session`, `review` or `walk`.
+    /// The category of the session: `session`, `review`, `walk` or `lesson`.
     category: String,
 
     /// The short sha of HEAD.
@@ -292,7 +292,7 @@ impl FactoryServer {
     }
 
     #[tool(
-        description = "Creates a session folder `{category}-{YYYYMMDD-HHMM}-{head}` on the branch, or `review-pr{pr}-{YYYYMMDD-HHMM}-{head}` for a review with `pr`, with `fields` in its `session.json`. Returns `org`, `repo`, `branch`, `session` and the version. Fails with `exists` when the branch already holds a live `session` or `review`."
+        description = "Creates a session folder `{category}-{YYYYMMDD-HHMM}-{head}` on the branch, or `review-pr{pr}-{YYYYMMDD-HHMM}-{head}` for a review with `pr`, with `fields` in its `session.json`. A `lesson` also gets `assets/course.css` and `assets/quiz.js`. Returns `org`, `repo`, `branch`, `session` and the version. A branch holds at most one live `session` and one live `review`. Fails with `exists` when the branch already holds a live one of the category."
     )]
     async fn start_session(
         &self,

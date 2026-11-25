@@ -85,16 +85,23 @@ pub enum Category {
     Session,
     Review,
     Walk,
+    Lesson,
 }
 
 impl Category {
-    pub const ALL: [Category; 3] = [Category::Session, Category::Review, Category::Walk];
+    pub const ALL: [Category; 4] = [
+        Category::Session,
+        Category::Review,
+        Category::Walk,
+        Category::Lesson,
+    ];
 
     pub fn name(self) -> &'static str {
         match self {
             Category::Session => "session",
             Category::Review => "review",
             Category::Walk => "walk",
+            Category::Lesson => "lesson",
         }
     }
 
@@ -124,7 +131,7 @@ impl FromStr for Category {
             .find(|category| category.name() == name)
             .ok_or_else(|| {
                 StoreError::BadName(format!(
-                    "{name:?} is not a category: use session, review or walk"
+                    "{name:?} is not a category: use session, review, walk or lesson"
                 ))
             })
     }
@@ -169,6 +176,8 @@ mod tests {
             ("walk-", None),
             ("walk", None),
             ("walking-1", None),
+            ("lesson-20261104-0912-3f00486", Some(Category::Lesson)),
+            ("lessons-1", None),
             ("rate-limit", None),
         ];
 

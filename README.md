@@ -225,8 +225,9 @@ A branch holds one folder per session. The session id is `<category>-<YYYYMMDD-H
 - `session`: a build or vibe session of `/jam:take` or `/jam:just-vibe`.
 - `review`: a review session of `/jam:review`.
 - `walk`: a walk of `/jam:walk-through`.
+- `lesson`: a track of `/jam:learn`.
 
-A branch holds at most one live `session` and one live `review`, and any number of walks. So a review and a walk can run on the same branch at once, from two agent sessions. Archive a session on Jam Board to start a new one of its category.
+A branch holds at most one live `session` and one live `review`, and any number of walks and lessons. So a review and a walk can run on the same branch at once, from two agent sessions. Archive a session on Jam Board to start a new one of its category.
 
 The `jam-factory-mcp` server moves sessions of the older `<root>/<org>/<repo>/sessions/<session id>/` layout into their branch folder when it starts. A moved session's id ends with `-migrated`.
 
@@ -381,6 +382,25 @@ A step in changes mode holds git diffs. A step in code-path mode holds lines of 
 
 `-i` walks you through the steps in the terminal instead. It writes no files and creates no session.
 
+### Lesson sessions
+
+`/jam:learn <topic>` writes a whole track of HTML lessons on a topic into a lesson session, with `flow: lesson` in `session.json`. The skill ships only in the Claude Code plugin. It runs on any branch, the base branch included. Each run creates a new session under the current branch, with an id such as `lesson-20261124-1800-00bab69`. It refuses to run on a detached HEAD.
+
+```
+lesson ─► done
+```
+
+- **lesson**: the skill researches the topic and reads the code it touches. It writes the mission and the outline to `mission.md` and `track.json`. Then it writes the track's landing page, each lesson one after the other, and the reference pages. Jam Board shows a stop for each lesson in `track.json`. A stop opens its lesson as soon as the lesson is written.
+- **done**: the skill prints the session and the lesson titles. Read the track on Jam Board, and ask your questions in the conversation.
+
+In `default` mode, the skill asks a few questions when your reason or your prior knowledge is unclear. Then it shows the mission and the outline once, and waits for your approval. `-a` or `--autonomously` skips both. No lesson waits on quiz results.
+
+Jam Board renders each lesson as HTML, in a sandboxed frame. The lessons share the session's `assets/course.css` and `assets/quiz.js`. A link to another lesson opens it and moves the metro to its stop. A click on a `path:line` citation opens the file in Zed. A ⌘-click opens it in IntelliJ. An outside link opens in the browser.
+
+On an error it cannot resolve, the skill sets the stage to `blocked`, with the reason in `session.json`. A lesson session has no resume: run `/jam:learn` again.
+
+Adapted from the `teach` skill of https://github.com/mattpocock/skills (MIT). See [`claude-plugin/skills/learn/LICENSE`](claude-plugin/skills/learn/LICENSE).
+
 ### Files
 
 ```
@@ -463,6 +483,7 @@ The examples below use Claude Code and Antigravity syntax: `/jam:take`, `/jam:ve
 | `/jam:independent-reviewer` | Independent, read-only code review of a PR, a commit range or the current branch. A fresh subagent reviews the change and never learns how it was built. It writes the report to .nogit/verify-{timestamp}/independent-review.md. Add --report-in-chat to get the report in chat instead. |
 | `/jam:verify-fix` | Fix the findings of a /jam:verify run, each in its own commit. Runs on its own by default; add -i to fix one at a time. Pass --resume verify-{timestamp} to use a run on disk. Otherwise pick a run from a list, or run a new review. Never pushes. |
 | `/jam:walk-through` | Walk-through of a code path or a set of changes, broken into logical steps. By default it saves the walk as a factory session. Jam Board shows each step as soon as it is written. Replay the walk in the terminal with `/jam:walk-replay`. Add `-i` to walk through it one step at a time in the terminal instead. `-i` writes no files. |
+| `/jam:learn` | Writes a whole track of HTML lessons on a topic into a factory lesson session. Jam Board shows each lesson as soon as it is written, and renders it as HTML. It runs on any branch. It may ask a few questions, then waits for your approval of the outline. Add `-a` to skip both. It ships only in the Claude Code plugin. |
 
 ## Agents
 

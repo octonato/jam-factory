@@ -149,6 +149,8 @@ mod tests {
         assert!(html.contains("`api/open/"));
         assert!(!html.contains("listDir("));
         assert!(!html.contains("DOMParser"));
+        assert!(html.contains("sandbox=\"allow-scripts\""));
+        assert!(!html.contains("allow-same-origin"));
     }
 
     #[test]

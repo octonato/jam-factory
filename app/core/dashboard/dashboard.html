@@ -564,6 +564,15 @@
     zoom: var(--viewer-zoom, 1);
   }
 
+  #view:has(.lesson-frame) { padding: 0; }
+
+  .lesson-frame {
+    display: block;
+    width: 100%;
+    height: 100%;
+    border: 0;
+  }
+
   #view pre {
     margin: 0 0 12px;
     padding: 10px 12px;
@@ -1196,8 +1205,15 @@ const FLOWS = {
       done: 'done',
     },
   },
+  lesson: {
+    phases: ['lesson', 'done'],
+    stagePhase: {
+      lesson: 'lesson',
+      done: 'done',
+    },
+  },
 }
-const SESSION_CLASSES = { build: 'implementation', vibe: 'implementation', review: 'review', walk: 'walk-through' }
+const SESSION_CLASSES = { build: 'implementation', vibe: 'implementation', review: 'review', walk: 'walk-through', lesson: 'lesson' }
 const STAGE_FILE = {
   spec: 'spec.md',
   plan: 'plan.md',
@@ -1215,6 +1231,7 @@ const STOP_LABELS = {
   comment: 'Comment',
   done: 'Done',
   overview: 'Overview',
+  track: 'Track',
 }
 
 const ORG_KEY = 'jam-board-org'
@@ -1714,6 +1731,37 @@ function stepPath(n) {
   return `steps/${String(n).padStart(2, '0')}.md`
 }
 
+// Returns the summary, lessons and reference pages of a `track.json` text, or null when it has no `lessons` array.
+// Drops a lesson without an integer `n`, and any entry without a string `title` and a string `file`.
+function parseTrack(text) {
+  let value
+  try {
+    value = JSON.parse(text)
+  } catch {
+    return null
+  }
+  if (value === null || typeof value !== 'object' || !Array.isArray(value.lessons)) return null
+
+  const lessons = value.lessons
+    .filter((lesson) => Number.isInteger(lesson?.n) && typeof lesson.title === 'string' && typeof lesson.file === 'string')
+    .map(({ n, title, summary, file }) => ({ n, title, summary: stringOrNull(summary), file }))
+  const reference = (Array.isArray(value.reference) ? value.reference : [])
+    .filter((page) => typeof page?.title === 'string' && typeof page.file === 'string')
+    .map(({ title, file }) => ({ title, file }))
+  return { summary: stringOrNull(value.summary), lessons, reference }
+}
+
+// Returns the track of the session in `dir`, or null when its `track.json` is absent or cannot be read.
+async function loadTrack(dir, files) {
+  if (!files.includes('track.json')) return null
+
+  try {
+    return parseTrack(await fetchText(encodePath(`${dir}track.json`)))
+  } catch {
+    return null
+  }
+}
+
 // Returns the sessions of the `api/sessions` reply, and a problem line for each entry with an error.
 async function loadSessions() {
   const { sessions: entries } = JSON.parse(await fetchText('api/sessions'))
@@ -2005,8 +2053,22 @@ function walkStepLabel(session) {
   return `${escape(sessionClass(session))} · ${escape(stage)}`
 }
 
+// Returns the written and planned lessons of a lesson session, such as `3/10`.
+function lessonProgress(session) {
+  const done = integerOrNull(session.counts?.lessonsDone) ?? 0
+  const planned = integerOrNull(session.counts?.lessonsPlanned) ?? 0
+  return `${done}/${planned}`
+}
+
+// Returns the label of a lesson row: its class, then its progress while it runs, else its stage.
+function lessonStepLabel(session) {
+  const stage = session.stage === 'lesson' ? `writing ${lessonProgress(session)}` : session.stage || 'unknown'
+  return `${escape(sessionClass(session))} · ${escape(stage)}`
+}
+
 function stepLabel(session) {
   if (sessionFlow(session) === 'walk') return walkStepLabel(session)
+  if (sessionFlow(session) === 'lesson') return lessonStepLabel(session)
 
   const phase = currentPhase(session) || phaseStage(session) || 'unknown'
   const parts = [escape(sessionMode(session))]
@@ -3152,7 +3214,8 @@ function markdownRenderer() {
   return renderer
 }
 
-function fileHtml(path, text) {
+// Returns the markup of `path` with `text`, and of an `.html` file a sandboxed frame at the `{ baseHref, root }` of `frame`.
+function fileHtml(path, text, frame) {
   if (path.endsWith('.md') && missingScripts().length === 0) {
     pendingDiffs = []
     const markdown = marked.parse(text, { gfm: true, renderer: markdownRenderer() })
@@ -3160,7 +3223,127 @@ function fileHtml(path, text) {
     return `<div class="markdown">${html}</div>`
   }
   if (path.endsWith('.json')) return codeBlock(prettyJson(text))
+  if (path.endsWith('.html')) {
+    const srcdoc = lessonSrcdoc(text, frame.baseHref, frame.root)
+    return `<iframe class="lesson-frame" sandbox="allow-scripts" srcdoc="${escape(srcdoc)}"></iframe>`
+  }
   return codeBlock(text)
+}
+
+// Returns the folder of `path` with a trailing `/`, or '' for a file at the top.
+function dirOf(path) {
+  return path.slice(0, path.lastIndexOf('/') + 1)
+}
+
+// Returns the URLs of the folder of `session`, as `root`, and of the folder of its file `path`, as `baseHref`.
+function lessonFrame(session, path) {
+  return {
+    root: new URL(encodePath(session.dir), location.href).href,
+    baseHref: new URL(encodePath(session.dir + dirOf(path)), location.href).href,
+  }
+}
+
+// Returns `html` with a `<base>` at `baseHref` and the bridge for `root` after its `<head>` tag, else after its doctype, else at its start.
+function lessonSrcdoc(html, baseHref, root) {
+  const bridge = `(${lessonBridge})(${JSON.stringify(root)}, ${JSON.stringify(CITATION.source)}, ${JSON.stringify([...CITATION_EXTENSIONS])})`
+  const tags = `<base href="${escape(baseHref)}"><script>${bridge}<\/script>`
+
+  const open = /<head(?:\s[^>]*)?>/i.exec(html) ?? /^\s*<!doctype[^>]*>/i.exec(html)
+  const at = open === null ? 0 : open.index + open[0].length
+  return html.slice(0, at) + tags + html.slice(at)
+}
+
+// Tells whether `path` is relative, with non-empty segments that do not start with `.`.
+function isSessionPath(path) {
+  if (typeof path !== 'string' || /[\\\0]/.test(path)) return false
+  return path.split('/').every((segment) => segment !== '' && !segment.startsWith('.'))
+}
+
+// Returns the path of `url` under the folder URL `root`, without its query and fragment, or null when it is not a session path there.
+function sessionPathOf(url, root) {
+  const target = new URL(url)
+  target.search = ''
+  target.hash = ''
+  if (!target.href.startsWith(root)) return null
+
+  const path = target.href.slice(root.length)
+  return isSessionPath(path) ? path : null
+}
+
+// Links the file citations of a lesson, and posts each click on a citation or on a link under `root` to the board. Runs inside the lesson frame.
+function lessonBridge(root, citationSource, citationExtensions) {
+  const citation = new RegExp(citationSource, 'g')
+  const extensions = new Set(citationExtensions)
+  const post = (message) => parent.postMessage(message, '*')
+
+  const fileRef = (path, line, token) => {
+    const link = document.createElement('a')
+    link.className = 'file-ref'
+    link.href = '#'
+    link.dataset.file = path
+    if (line !== undefined) link.dataset.line = line
+    link.textContent = token
+    return link
+  }
+
+  const citationNodes = (text) => {
+    const nodes = []
+    let last = 0
+    for (const match of text.matchAll(citation)) {
+      const [token, path, ext, line] = match
+      if (!path.includes('/') && !extensions.has(ext)) continue
+
+      nodes.push(document.createTextNode(text.slice(last, match.index)), fileRef(path, line, token))
+      last = match.index + token.length
+    }
+
+    if (nodes.length > 0) nodes.push(document.createTextNode(text.slice(last)))
+    return nodes
+  }
+
+  const linkCitations = () => {
+    const walker = document.createTreeWalker(document.body)
+    const texts = []
+    for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
+      if (node.nodeType === Node.TEXT_NODE && !node.parentElement.closest('a, script, style, textarea, svg, .quiz')) texts.push(node)
+    }
+
+    for (const node of texts) {
+      const nodes = citationNodes(node.textContent)
+      if (nodes.length > 0) node.replaceWith(...nodes)
+    }
+  }
+
+  const onClick = (event) => {
+    const cite = event.target.closest('a.file-ref')
+    if (cite) {
+      event.preventDefault()
+      post({ kind: 'cite', path: cite.dataset.file, line: cite.dataset.line, meta: event.metaKey })
+      return
+    }
+
+    const link = event.target.closest('a[href]')
+    if (!link) return
+
+    const href = link.getAttribute('href')
+    if (href.startsWith('#')) {
+      event.preventDefault()
+      document.getElementById(href.slice(1))?.scrollIntoView()
+      return
+    }
+
+    const url = new URL(href, document.baseURI)
+    url.search = ''
+    url.hash = ''
+    if (!url.href.startsWith(root)) return
+
+    event.preventDefault()
+    post({ kind: 'open', path: url.href.slice(root.length) })
+  }
+
+  document.addEventListener('click', onClick, true)
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', linkCitations)
+  else linkCitations()
 }
 
 // Draws each diff block of `view` unified from `pendingDiffs`, and keeps its text on the block.
@@ -3202,6 +3385,19 @@ function onCitationClick(event) {
   openCitation(session, link.dataset.file, link.dataset.line, event.metaKey ? 'intellij' : 'zed')
 }
 
+// Opens the file or the citation that the lesson frame in the pane posts, and ignores any other message.
+function onLessonMessage(event) {
+  const frame = $('view')?.querySelector('iframe.lesson-frame')
+  if (!frame || event.source !== frame.contentWindow) return
+
+  const session = state.sessions.find((s) => s.dir === sessionView.dir)
+  if (!session) return
+
+  const { kind, path, line, meta } = event.data ?? {}
+  if (kind === 'open' && isSessionPath(path)) openPath(session, path)
+  if (kind === 'cite' && typeof path === 'string') openCitation(session, path, /^\d+$/.test(line) ? line : undefined, meta ? 'intellij' : 'zed')
+}
+
 function reviewNames(files, round) {
   const prefix = `round-${round}/reviews/`
   return files
@@ -3220,6 +3416,7 @@ function defaultFile(session, files, round) {
   if (sessionFlow(session) === 'vibe') return vibeDefaultFile(session)
   if (session.stage === 'blocked') return 'session.json'
   if (sessionFlow(session) === 'walk') return 'overview.md'
+  if (sessionFlow(session) === 'lesson') return 'index.html'
 
   const stage = phaseStage(session)
   const report = `round-${round}/report.md`
@@ -3477,6 +3674,36 @@ function setWalkStates(session, stops) {
   return stops
 }
 
+// Returns the stops of a lesson session: the track, then one stop per lesson and per reference page of `track`, each with its file when it is written.
+function lessonFlowStops(session, files, runs, track) {
+  const index = { ...newStop('track', 0, 'index.html', files), summary: stringOrNull(track?.summary) }
+  const lessons = (track?.lessons ?? []).map(({ n, title, summary, file }) => ({
+    ...newStop('lesson', 0, file, files),
+    label: `${String(n).padStart(4, '0')}: ${title}`,
+    summary: stringOrNull(summary),
+  }))
+  const reference = (track?.reference ?? []).map(({ title, file }) => ({ ...newStop('reference', 0, file, files), label: title }))
+  return [index, ...lessons, ...reference]
+}
+
+// Sets the states of the lesson stops, and puts the reason of a blocked track on the track stop.
+function setLessonStates(session, stops) {
+  const unwritten = (stop) => stop.kind === 'lesson' && stop.file === null
+  const writing = session.stage === 'lesson' ? stops.findIndex(unwritten) : -1
+  stops.forEach((stop, i) => {
+    if (stop.file !== null) stop.state = 'done'
+    else stop.state = i === writing ? 'writing' : 'pending'
+  })
+
+  const track = stops[0]
+  if (session.stage === 'blocked') {
+    track.state = 'blocked'
+    track.note = stringOrNull(session.blocked?.reason)
+    track.links.push({ label: 'session.json', path: 'session.json' })
+  }
+  return stops
+}
+
 function currentState(session, stop) {
   if (session.stage === 'blocked') return 'blocked'
   if (session.stage === 'done' && stop.kind === 'done') return 'done'
@@ -3484,10 +3711,11 @@ function currentState(session, stop) {
   return 'current'
 }
 
-// Returns the stops of the session's line, with their states, files and runs.
+// Returns the stops of the session's line, with their states, files and runs. `walk` is the walk of a walk session or the track of a lesson session.
 function buildStops(session, files, runs, outcomes = {}, walk = null) {
   const flow = sessionFlow(session)
   if (flow === 'walk') return setWalkStates(session, walkFlowStops(session, files, runs, walk))
+  if (flow === 'lesson') return setLessonStates(session, lessonFlowStops(session, files, runs, walk))
 
   const flowStops = flow === 'review' ? reviewFlowStops : flow === 'vibe' ? vibeFlowStops : buildFlowStops
   const { stops, current } = flowStops(session, files, runs, outcomes)
@@ -3663,6 +3891,15 @@ function metroSelfCheck() {
       return stops.map((stop) => stop.state).join(' ') === 'done done writing'
     },
 
+    'lesson-flow': () => {
+      const track = parseTrack(
+        '{"lessons":[{"n":1,"title":"A","file":"lessons/0001-a.html"},{"n":2,"title":"B","file":"lessons/0002-b.html"}]}',
+      )
+      const session = { flow: 'lesson', stage: 'lesson', counts: { lessonsPlanned: 2, lessonsDone: 1 } }
+      const stops = buildStops(session, ['index.html', 'lessons/0001-a.html'], [], {}, track)
+      return stops.map((stop) => stop.state).join(' ') === 'done done writing'
+    },
+
     'reviewer-run': () => {
       const path = 'round-1/reviews/a.md'
       const runs = parseRuns(`{"stop":"review","round":1,"file":"${path}"}\n{"stop":"review","round":1,"file":null}`)
@@ -3723,10 +3960,11 @@ function firstStarted(runs) {
 // Returns the session strip: the facts of `session` and its `runs` as pills, then the archive button.
 function sessionStripHtml(session, runs) {
   const stage = session.stage === 'blocked' ? `blocked at ${phaseStage(session) ?? 'unknown'}` : session.stage ?? 'unknown'
-  const facts =
-    sessionFlow(session) === 'walk'
-      ? [sessionClass(session), stage, `${walkProgress(session)} steps`]
-      : [sessionFlow(session), sessionMode(session), stage]
+  const flow = sessionFlow(session)
+  let facts = [flow, sessionMode(session), stage]
+  if (flow === 'walk') facts = [sessionClass(session), stage, `${walkProgress(session)} steps`]
+  if (flow === 'lesson') facts = [sessionClass(session), stage, `${lessonProgress(session)} lessons`]
+
   if (sessionRound(session) > 0) facts.push(`round ${sessionRound(session)}`)
   if (session.lastRound === true) facts.push('last round')
 
@@ -3897,7 +4135,7 @@ async function showFile(session, files, path, seq) {
 
   const sameFile = lastView.key === key
   lastView = { key, path, text, version: file?.version ?? null }
-  $('view').innerHTML = text === null ? '' : fileHtml(path, text)
+  $('view').innerHTML = text === null ? '' : fileHtml(path, text, lessonFrame(session, path))
   drawDiffs($('view'))
   if (!sameFile) $('view').scrollTop = 0
 }
@@ -5209,6 +5447,7 @@ async function renderSessionContent(session, file) {
   const runs = await loadRuns(session.dir, files)
   const outcomes = await loadOutcomes(session.dir, files)
   const walk = sessionFlow(session) === 'walk' ? await loadWalk(session.dir, files) : null
+  const track = sessionFlow(session) === 'lesson' ? await loadTrack(session.dir, files) : null
   if (seq !== renderSeq) return
 
   const strip = sessionStripHtml(session, runs)
@@ -5217,7 +5456,7 @@ async function renderSessionContent(session, file) {
     sessionView.card = strip
   }
 
-  const stops = buildStops(session, files, runs, outcomes, walk)
+  const stops = buildStops(session, files, runs, outcomes, walk ?? track)
   const open = editing !== null ? editing.path : file ?? defaultFile(session, files, sessionRound(session))
   if (!stopShows(stops[sessionView.selected], open)) sessionView.selected = stopIndexForFile(stops, open)
   sessionView.stops = stops
@@ -6072,6 +6311,7 @@ window.addEventListener('beforeunload', onBeforeUnload)
 window.addEventListener('resize', onSessionResize)
 window.addEventListener('resize', showGithubView)
 window.addEventListener('focus', onWindowFocus)
+window.addEventListener('message', onLessonMessage)
 document.addEventListener('keydown', onKey)
 state.failedChecks = metroSelfCheck()
 loadVersion()

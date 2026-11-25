@@ -37,6 +37,7 @@ A branch holds one folder per session. The folder name is `{category}-{YYYYMMDD-
 - `session`: a build or vibe session of `$jam:take` or `$jam:just-vibe`.
 - `review`: a review session of `$jam:review`.
 - `walk`: a walk of `$jam:walk-through`.
+- `lesson`: a track of `/jam:learn`, a skill of the Claude Code plugin.
 
 A review with a PR number gets the folder name `review-pr{n}-{YYYYMMDD-HHMM}-{short sha}`, such as `review-pr42-20261104-0905-3f00486`.
 
@@ -48,7 +49,7 @@ Call `start_session` with `org`, `repo`, `branch`, `category`, `head` and `field
 
 It returns `org`, `repo`, `branch`, the new `session` id and the `version` of `session.json`. Use that `session` id for every later call.
 
-A branch holds at most one live `session` and one live `review`. A live session is one whose `session.json` does not hold `archived: true`. `start_session` fails with `exists` when the branch already holds a live session of the category, and its message names that session. A branch holds any number of walks.
+A branch holds at most one live `session` and one live `review`. A live session is one whose `session.json` does not hold `archived: true`. `start_session` fails with `exists` when the branch already holds a live session of the category, and its message names that session. A branch holds any number of walks and lessons.
 
 To find the live session of a category, call `list_sessions` with `org`, `repo`, `branch` and `category`. It lists at most one session for `session` and `review`.
 
@@ -88,6 +89,8 @@ A vibe session writes only `session.json`, `request.md`, `tasks.md` and `runs.js
 
 A walk session writes only the files `skills/walk-through/state.md` lists.
 
+A lesson session holds the files the Claude Code plugin's `skills/learn/state.md` lists.
+
 ## session.json
 
 Only the factory skill writes it, with two exceptions. The dashboard's Archive button sets `archived` and `updated`. I may edit `mode` by hand.
@@ -119,7 +122,7 @@ Create it once with `start_session`, as **Start a session** says. After that, ch
 ```
 
 - `id`: the session folder name. `start_session` sets it.
-- `category`: `session` or `review`. `start_session` sets it.
+- `category`: `session`, `review`, `walk` or `lesson`. `start_session` sets it.
 - `branch`: the full name of the branch the session runs on.
 - `repo`: the name of the worktree's parent folder.
 - `worktree`: an absolute path.
@@ -225,7 +228,7 @@ Each line is one JSON object: one agent run or one main-conversation stage.
 
 | Field | Type | Meaning |
 |---|---|---|
-| `stop` | string, required | `request`, `spec`, `plan`, `implement`, `review`, `report`, `triage`, `comment`, `walk` |
+| `stop` | string, required | `request`, `spec`, `plan`, `implement`, `review`, `report`, `triage`, `comment`, `walk`, `lesson` |
 | `round` | integer, required | the open round when the run started, or `0` before round 1 |
 | `agent` | string | the agent name, or `main` for the main conversation |
 | `task` | string | the task ID, for an Implement run |

@@ -188,7 +188,8 @@ function dashboard({ script = source, pageWidth = 1200, pageLeft = 0, pageTop = 
   const context = vm.createContext({
     document,
     window,
-    location: { hash, search, replace(url) { this.hash = url } },
+    location: { hash, search, get href() { return `http://127.0.0.1:8731/dashboard.html${this.search}${this.hash}` }, replace(url) { this.hash = url } },
+    URL,
     URLSearchParams,
     localStorage: {
       getItem: (key) => storage.get(key) ?? null,
@@ -1883,6 +1884,558 @@ test('moving between walk stops skips unwritten steps', async () => {
   assert.deepEqual(at(), [1, href('steps/01.md')])
   assert.ok(press(app, 'ArrowUp'))
   assert.deepEqual(at(), [0, href('overview.md')])
+})
+
+// Returns a lesson session of `editSession` at `stage`, with `done` of `planned` lessons written.
+const lessonSession = (stage, done = 1, planned = 2, fields = {}) => ({
+  ...editSession,
+  flow: 'lesson',
+  stage,
+  counts: { lessonsPlanned: planned, lessonsDone: done },
+  blocked: null,
+  ...fields,
+})
+
+const trackJson = JSON.stringify({
+  summary: 'How a trace forms.',
+  lessons: [
+    { n: 1, title: 'A', summary: 'Spans.', file: 'lessons/0001-a.html' },
+    { n: 2, title: 'B', summary: 'Context.', file: 'lessons/0002-b.html' },
+  ],
+  reference: [{ title: 'Glossary', file: 'reference/glossary.html' }],
+})
+
+// Returns the stops of `session` over `files` and `trackJson`.
+function lessonStops(app, session, files) {
+  app.context.session = session
+  app.context.files = files
+  app.context.trackText = trackJson
+  return plain(app.run('buildStops(session, files, [], {}, parseTrack(trackText))'))
+}
+
+test('lesson stops follow track.json', () => {
+  const app = dashboard()
+  const stops = lessonStops(app, lessonSession('lesson'), ['index.html', 'track.json', 'lessons/0001-a.html'])
+
+  assert.deepEqual(stops.map((stop) => stop.kind), ['track', 'lesson', 'lesson', 'reference'])
+  assert.deepEqual(stops.map((stop) => stop.label), ['Track', '0001: A', '0002: B', 'Glossary'])
+  assert.deepEqual(stops.map((stop) => stop.file), ['index.html', 'lessons/0001-a.html', null, null])
+  assert.deepEqual(stops.map((stop) => stop.summary), ['How a trace forms.', 'Spans.', 'Context.', null])
+
+  const later = lessonStops(app, lessonSession('lesson'), ['lessons/0002-b.html', 'reference/glossary.html'])
+  assert.deepEqual(later.map((stop) => stop.file), [null, null, 'lessons/0002-b.html', 'reference/glossary.html'])
+})
+
+test('a writing lesson track', () => {
+  const app = dashboard()
+
+  const stops = lessonStops(app, lessonSession('lesson'), ['index.html', 'lessons/0001-a.html'])
+  assert.deepEqual(stops.map((stop) => stop.state), ['done', 'done', 'writing', 'pending'])
+
+  app.context.stop = stops[2]
+  const card = app.run('stopCardHtml(stop, null, false)')
+  assert.match(card, /<span class="title">0002: B<\/span>/)
+  assert.match(card, /<div class="card-foot"><span class="badge">writing<\/span><\/div>\s*<\/div>$/)
+  assert.doesNotMatch(card, /data-path=/)
+
+  const started = lessonStops(app, lessonSession('lesson', 0), [])
+  assert.deepEqual(started.map((stop) => stop.state), ['pending', 'writing', 'pending', 'pending'])
+})
+
+test('a done lesson track', () => {
+  const app = dashboard()
+  const files = ['index.html', 'lessons/0001-a.html', 'lessons/0002-b.html', 'reference/glossary.html']
+  const stops = lessonStops(app, lessonSession('done', 2, 2), files)
+
+  assert.deepEqual(stops.map((stop) => stop.state), ['done', 'done', 'done', 'done'])
+  assert.equal(app.run('stepLabel(session)'), 'lesson · done')
+})
+
+test('a blocked lesson track', () => {
+  const app = dashboard()
+  const blocked = lessonSession('blocked', 1, 2, { blocked: { stage: 'lesson', reason: 'boom' } })
+  const stops = lessonStops(app, blocked, ['index.html', 'lessons/0001-a.html'])
+
+  assert.deepEqual(stops.map((stop) => stop.state), ['blocked', 'done', 'pending', 'pending'])
+  assert.equal(stops[0].file, 'index.html')
+  assert.equal(stops[0].note, 'boom')
+  assert.deepEqual(stops[0].links, [{ label: 'session.json', path: 'session.json' }])
+  assert.equal(app.run('stepLabel(session)'), 'lesson · blocked')
+  assert.equal(app.run('stopIndexForFile(buildStops(session, files, [], {}, parseTrack(trackText)), "session.json")'), 0)
+})
+
+test('no or invalid track.json', () => {
+  const app = dashboard()
+  for (const text of ['{', '{}', 'null', '7', '{"lessons":{}}']) {
+    assert.equal(app.run(`parseTrack(${JSON.stringify(text)})`), null, text)
+  }
+
+  app.context.trackText = JSON.stringify({
+    summary: 7,
+    lessons: [
+      { n: 1, title: 'A', summary: 'S', file: 'lessons/0001-a.html' },
+      { n: '2', title: 'B', file: 'lessons/0002-b.html' },
+      { n: 3, file: 'lessons/0003-c.html' },
+      { n: 4, title: 'D' },
+      null,
+      { n: 5.5, title: 'E', file: 'lessons/0005-e.html' },
+      { n: 6, title: 'F', summary: 1, file: 'lessons/0006-f.html' },
+    ],
+    reference: [{ title: 'G', file: 'reference/g.html' }, { title: 'H' }, { file: 'reference/i.html' }, null],
+  })
+  assert.deepEqual(plain(app.run('parseTrack(trackText)')), {
+    summary: null,
+    lessons: [
+      { n: 1, title: 'A', summary: 'S', file: 'lessons/0001-a.html' },
+      { n: 6, title: 'F', summary: null, file: 'lessons/0006-f.html' },
+    ],
+    reference: [{ title: 'G', file: 'reference/g.html' }],
+  })
+  assert.deepEqual(plain(app.run('parseTrack(\'{"lessons":[],"reference":{}}\')')), { summary: null, lessons: [], reference: [] })
+
+  app.context.session = lessonSession('lesson', 0, 0)
+  const stops = plain(app.run('buildStops(session, ["index.html"], [], {}, null)'))
+  assert.equal(stops.length, 1)
+  assert.equal(stops[0].label, 'Track')
+  assert.equal(stops[0].file, 'index.html')
+  assert.equal(stops[0].state, 'done')
+  assert.equal(stops[0].summary, null)
+})
+
+test('loadTrack reads track.json only when listed', async () => {
+  const app = dashboard({ fetcher: () => response(trackJson) })
+
+  assert.equal(await app.run('loadTrack("api/file/o/r/main/s/", ["session.json"])'), null)
+  assert.deepEqual(app.calls, [])
+
+  const track = plain(await app.run('loadTrack("api/file/o/r/main/s/", ["track.json"])'))
+  assert.deepEqual(track.lessons.map((lesson) => lesson.title), ['A', 'B'])
+  assert.deepEqual(app.calls, ['api/file/o/r/main/s/track.json'])
+
+  const failing = dashboard({ fetcher: () => response('', false) })
+  assert.equal(await failing.run('loadTrack("api/file/o/r/main/s/", ["track.json"])'), null)
+})
+
+test('lesson rows show writing n/m', () => {
+  const app = dashboard()
+  app.context.session = lessonSession('lesson', 1, 2)
+
+  assert.equal(app.run('sessionClass(session)'), 'lesson')
+  assert.equal(app.run('stepLabel(session)'), 'lesson · writing 1/2')
+  assert.match(app.run('rowContent(session)'), /<span class="pill">lesson<\/span> lesson · writing 1\/2<\/span>/)
+
+  const facts = [...app.run('sessionStripHtml(session, [])').matchAll(/<span class="pill">([^<]*)<\/span>/g)].map((match) => match[1])
+  assert.deepEqual(facts, ['lesson', 'lesson', '1/2 lessons'])
+
+  app.context.session = lessonSession('lesson', 1, 2, { counts: undefined })
+  assert.equal(app.run('stepLabel(session)'), 'lesson · writing 0/0')
+})
+
+test('a lesson session opens index.html by default', async () => {
+  const api = fileApi({ 'session.json': '{}', 'track.json': trackJson, 'index.html': '<h1>Track</h1>\n', 'lessons/0001-a.html': '<h1>A</h1>\n' })
+  const app = await openSession(api, lessonSession('lesson'))
+
+  assert.equal(app.run('defaultFile(session, [], 0)'), 'index.html')
+  assert.equal(app.run('sessionView.selected'), 0)
+  assert.deepEqual(plain(app.run('sessionView.stops.map((stop) => stop.label)')), ['Track', '0001: A', '0002: B', 'Glossary'])
+  assert.match(app.elements.get('viewer-head').innerHTML, /<span class="path">index\.html<\/span><span class="by">Track<\/span>/)
+
+  app.context.session = lessonSession('blocked', 1, 2, { blocked: { stage: 'lesson', reason: 'boom' } })
+  assert.equal(app.run('defaultFile(session, [], 0)'), 'session.json')
+})
+
+test('moving between lesson stops skips unwritten lessons', async () => {
+  const lessons = [1, 2, 3].map((n) => ({ n, title: `L${n}`, file: `lessons/000${n}-l.html` }))
+  const reference = [{ title: 'Glossary', file: 'reference/glossary.html' }]
+  const api = fileApi({
+    'track.json': JSON.stringify({ lessons, reference }),
+    'index.html': '<h1>Track</h1>\n',
+    'lessons/0001-l.html': '<h1>1</h1>\n',
+    'lessons/0003-l.html': '<h1>3</h1>\n',
+    'reference/glossary.html': '<h1>G</h1>\n',
+  })
+  const app = await openSession(api, lessonSession('lesson', 2, 3))
+  const at = () => [app.run('sessionView.selected'), app.context.location.hash]
+  const href = (path) => app.run(`fileHref(session, ${JSON.stringify(path)})`)
+
+  assert.ok(press(app, 'ArrowDown'))
+  assert.deepEqual(at(), [1, href('lessons/0001-l.html')])
+  assert.ok(press(app, 'ArrowDown'))
+  assert.deepEqual(at(), [3, href('lessons/0003-l.html')])
+  assert.ok(press(app, 'ArrowDown'))
+  assert.deepEqual(at(), [4, href('reference/glossary.html')])
+  assert.equal(press(app, 'ArrowDown'), false)
+  assert.ok(press(app, 'ArrowUp'))
+  assert.deepEqual(at(), [3, href('lessons/0003-l.html')])
+  assert.ok(press(app, 'ArrowUp'))
+  assert.deepEqual(at(), [1, href('lessons/0001-l.html')])
+  assert.ok(press(app, 'ArrowUp'))
+  assert.deepEqual(at(), [0, href('index.html')])
+})
+
+test('the lesson-flow self-check passes', () => {
+  modelGate(dashboard())
+
+  const original = "const writing = session.stage === 'lesson' ? stops.findIndex(unwritten) : -1"
+  assert.ok(source.includes(original), 'setLessonStates mutation target changed')
+  const script = source.replace(original, 'const writing = -1')
+  assert.throws(() => modelGate(dashboard({ script })), /metro self-check failed:.*lesson-flow/)
+})
+
+const lessonRoot = 'http://h/api/file/o/r/b/id/'
+const lessonBase = `${lessonRoot}lessons/`
+
+const lessonFiles = {
+  'session.json': '{}',
+  'track.json': trackJson,
+  'index.html': '<html><head><title>Track</title></head><body><h1>Track</h1></body></html>',
+  'lessons/0001-a.html': '<html><head><title>A</title></head><body><p>See app/a.rs:12</p></body></html>',
+}
+
+// Returns `text` with its numeric character references decoded.
+const decodeHtml = (text) => text.replace(/&#(\d+);/g, (_, code) => String.fromCharCode(code))
+
+// Returns the decoded `srcdoc` of the lesson frame that `html` holds, or null when it holds no lesson frame.
+function frameSrcdoc(html) {
+  const frame = html.match(/^<iframe class="lesson-frame" sandbox="allow-scripts" srcdoc="([^"]*)"><\/iframe>$/)
+  return frame === null ? null : decodeHtml(frame[1])
+}
+
+// Returns a dashboard that shows `path` of a lesson session over `lessonFiles`, the URLs it posts, and the stub of its lesson frame.
+async function lessonApp(path) {
+  const api = fileApi({ ...lessonFiles })
+  const posts = []
+  const app = dashboard({
+    fetcher: (url, options = {}) => {
+      if (options.method !== 'POST') return api.fetcher(url, options)
+      posts.push(url)
+      return response('', true, { status: 204 })
+    },
+  })
+
+  app.context.session = lessonSession('lesson')
+  app.run('state.sessions = [session]')
+  app.context.location.hash = app.run(`fileHref(session, ${JSON.stringify(path)})`)
+  app.run('render()')
+  await settle()
+
+  const view = app.elements.get('view')
+  const frame = { contentWindow: {} }
+  view.querySelector = (selector) => (selector === 'iframe.lesson-frame' && frameSrcdoc(view.innerHTML) !== null ? frame : null)
+  return { app, api, posts, frame }
+}
+
+// Posts `data` from `source` to the board window of `app`.
+function postToBoard(app, source, data) {
+  app.window.dispatch('message', { source, data })
+}
+
+test('lessonSrcdoc puts base and the bridge in head', () => {
+  const app = dashboard()
+  const srcdoc = (text) => app.run(`lessonSrcdoc(${JSON.stringify(text)}, ${JSON.stringify(lessonBase)}, ${JSON.stringify(lessonRoot)})`)
+
+  const page = srcdoc('<html><head><title>x</title></head><body></body></html>')
+  assert.ok(page.startsWith(`<html><head><base href="${lessonBase}"><script>(function lessonBridge(`), page)
+  assert.ok(page.endsWith('</script><title>x</title></head><body></body></html>'), page)
+  assert.ok(page.includes(`})(${JSON.stringify(lessonRoot)}, ${JSON.stringify(app.run('CITATION.source'))}, ["java","scala",`), page)
+  assert.equal(page.match(/<\/script>/g).length, 1)
+
+  assert.ok(srcdoc('<HEAD lang="en"><title>x</title>').startsWith(`<HEAD lang="en"><base href="${lessonBase}"><script>`))
+  assert.ok(srcdoc('<!DOCTYPE html><p>x</p>').startsWith(`<!DOCTYPE html><base href="${lessonBase}"><script>`))
+  assert.ok(srcdoc('<p>no head</p>').startsWith('<base '))
+  assert.ok(srcdoc('<header>x</header>').startsWith('<base '))
+})
+
+test('sessionPathOf keeps paths inside the session', () => {
+  const app = dashboard()
+  const pathOf = (url) => app.run(`sessionPathOf(${JSON.stringify(url)}, ${JSON.stringify(lessonRoot)})`)
+
+  assert.equal(pathOf(`${lessonRoot}lessons/0002-b.html`), 'lessons/0002-b.html')
+  assert.equal(pathOf(`${lessonRoot}lessons/0002-b.html?x=1#q`), 'lessons/0002-b.html')
+  assert.equal(pathOf('http://h/api/file/o/r/b/other/x.html'), null)
+  assert.equal(pathOf('https://opentelemetry.io/'), null)
+  assert.equal(pathOf(`${lessonRoot}.hidden/x.html`), null)
+  assert.equal(pathOf(lessonRoot), null)
+
+  for (const path of ['index.html', 'lessons/0001-a.html', 'assets/course.css']) {
+    assert.equal(app.run(`isSessionPath(${JSON.stringify(path)})`), true, path)
+  }
+  for (const path of ['', '/x.html', '../x.html', 'a/../x.html', './x.html', 'a//x.html', 'a/', 'a\\x.html', 'a\0x.html', 7, null]) {
+    assert.equal(app.run(`isSessionPath(${JSON.stringify(path)})`), false, String(path))
+  }
+})
+
+test('an html file renders in a sandboxed frame', async () => {
+  const { app } = await lessonApp('lessons/0001-a.html')
+  const view = app.elements.get('view').innerHTML
+  const srcdoc = frameSrcdoc(view)
+
+  assert.ok(srcdoc !== null, view)
+  assert.equal(view.match(/<iframe/g).length, 1)
+  assert.ok(srcdoc.startsWith('<html><head><base href="http://127.0.0.1:8731/api/file/o/r/main/s/lessons/"><script>(function lessonBridge('), srcdoc)
+  assert.ok(srcdoc.includes('})("http://127.0.0.1:8731/api/file/o/r/main/s/", '), srcdoc)
+  assert.ok(srcdoc.endsWith('</script><title>A</title></head><body><p>See app/a.rs:12</p></body></html>'), srcdoc)
+
+  assert.equal(app.run('dirOf("lessons/a.html")'), 'lessons/')
+  assert.equal(app.run('dirOf("index.html")'), '')
+  assert.deepEqual(plain(app.run('lessonFrame(session, "index.html")')), {
+    root: 'http://127.0.0.1:8731/api/file/o/r/main/s/',
+    baseHref: 'http://127.0.0.1:8731/api/file/o/r/main/s/',
+  })
+  assert.match(html, /#view:has\(\.lesson-frame\) \{ padding: 0; \}/)
+})
+
+test('the same html text keeps the frame', async () => {
+  const { app, api } = await lessonApp('lessons/0001-a.html')
+  const writes = countHtmlWrites(app, 'view')
+
+  app.run('render()')
+  await settle()
+  assert.equal(writes.count, 0)
+
+  api.touch('lessons/0001-a.html', '<p>Changed</p>')
+  app.run('render()')
+  await settle()
+  assert.equal(writes.count, 1)
+  assert.match(frameSrcdoc(app.elements.get('view').innerHTML), /<p>Changed<\/p>$/)
+})
+
+test('a lesson open message opens the file', async () => {
+  const { app, frame } = await lessonApp('lessons/0001-a.html')
+  const href = (path) => app.run(`fileHref(session, ${JSON.stringify(path)})`)
+
+  postToBoard(app, frame.contentWindow, { kind: 'open', path: 'index.html' })
+  assert.equal(app.context.location.hash, href('index.html'))
+  app.window.dispatch('hashchange')
+  await settle()
+  assert.match(frameSrcdoc(app.elements.get('view').innerHTML), /<h1>Track<\/h1>/)
+  assert.equal(app.run('sessionView.selected'), 0)
+
+  postToBoard(app, frame.contentWindow, { kind: 'open', path: 'lessons/0002-b.html' })
+  assert.equal(app.context.location.hash, href('lessons/0002-b.html'))
+  app.window.dispatch('hashchange')
+  await settle()
+  assert.equal(app.elements.get('view').innerHTML, '')
+  assert.notEqual(app.elements.get('modal').open, true)
+})
+
+test('a lesson cite message opens the editor', async () => {
+  const { app, posts, frame } = await lessonApp('lessons/0001-a.html')
+
+  postToBoard(app, frame.contentWindow, { kind: 'cite', path: 'app/a.rs', line: '12', meta: false })
+  postToBoard(app, frame.contentWindow, { kind: 'cite', path: 'app/a.rs', line: '12', meta: true })
+  postToBoard(app, frame.contentWindow, { kind: 'cite', path: 'app/b.rs' })
+  postToBoard(app, frame.contentWindow, { kind: 'cite', path: 'app/b.rs', line: '3&file=x' })
+  await settle()
+
+  assert.deepEqual(posts, [
+    'api/open/zed/o/r/main/s?file=app%2Fa.rs&line=12',
+    'api/open/intellij/o/r/main/s?file=app%2Fa.rs&line=12',
+    'api/open/zed/o/r/main/s?file=app%2Fb.rs',
+    'api/open/zed/o/r/main/s?file=app%2Fb.rs',
+  ])
+})
+
+test('foreign lesson messages are ignored', async () => {
+  const { app, posts, frame } = await lessonApp('lessons/0001-a.html')
+  const hash = app.context.location.hash
+  const calls = app.calls.length
+  const open = { kind: 'open', path: 'index.html' }
+
+  postToBoard(app, {}, open)
+  postToBoard(app, app.window, open)
+  postToBoard(app, null, open)
+  for (const data of [
+    { kind: 'external', url: 'https://example.org/' },
+    { kind: 'open', path: '../x.html' },
+    { kind: 'open', path: '/x.html' },
+    { kind: 'open', path: 'lessons/./x.html' },
+    { kind: 'cite', path: 7 },
+    'open',
+    null,
+  ]) {
+    postToBoard(app, frame.contentWindow, data)
+  }
+
+  const stale = frame.contentWindow
+  frame.contentWindow = {}
+  postToBoard(app, stale, open)
+
+  app.elements.get('view').innerHTML = ''
+  postToBoard(app, frame.contentWindow, open)
+  await settle()
+
+  assert.equal(app.context.location.hash, hash)
+  assert.equal(app.calls.length, calls)
+  assert.deepEqual(posts, [])
+})
+
+// Returns a stub lesson element of `tag` over `children`, with the attributes `attributes`.
+function lessonElement(tag, children = [], attributes = {}) {
+  const el = {
+    nodeType: 1,
+    tagName: tag.toUpperCase(),
+    className: attributes.class ?? '',
+    parentElement: null,
+    children,
+    dataset: {},
+    getAttribute: (name) => attributes[name] ?? null,
+    closest: (selector) => (selector.split(',').some((part) => lessonMatches(el, part.trim())) ? el : el.parentElement?.closest(selector) ?? null),
+  }
+  for (const child of children) child.parentElement = el
+  return el
+}
+
+// Tells whether the stub element `el` matches `selector`, an optional tag with an optional class and an optional attribute.
+function lessonMatches(el, selector) {
+  const [, tag, cls, attribute] = selector.match(/^(\w+)?(?:\.([\w-]+))?(?:\[(\w+)\])?$/)
+  return (tag === undefined || el.tagName === tag.toUpperCase()) && (cls === undefined || el.className === cls) && (attribute === undefined || el.getAttribute(attribute) !== null)
+}
+
+// Returns a stub lesson text node of `text` that records its replacement.
+function lessonText(text) {
+  return {
+    nodeType: 3,
+    textContent: text,
+    parentElement: null,
+    replaced: null,
+    replaceWith(...nodes) { this.replaced = nodes },
+  }
+}
+
+// Runs the bridge script of the board in a fresh context over a lesson whose body holds `children`, and returns its click listeners, its posts and its scrolls.
+function runBridge(children) {
+  const board = dashboard()
+  const srcdoc = board.run(`lessonSrcdoc('', ${JSON.stringify(lessonBase)}, ${JSON.stringify(lessonRoot)})`)
+  const script = srcdoc.match(/<script>([\s\S]*)<\/script>/)[1]
+
+  const listeners = []
+  const posts = []
+  const scrolls = []
+  const body = lessonElement('body', children)
+  const document = {
+    readyState: 'complete',
+    baseURI: lessonBase,
+    body,
+    createTreeWalker: (root) => {
+      const nodes = []
+      const visit = (node) => {
+        for (const child of node.children ?? []) {
+          nodes.push(child)
+          visit(child)
+        }
+      }
+      visit(root)
+      return { nextNode: () => nodes.shift() ?? null }
+    },
+    createElement: (tag) => lessonElement(tag),
+    createTextNode: (text) => lessonText(text),
+    addEventListener: (type, listener, capture) => listeners.push({ type, listener, capture }),
+    getElementById: (id) => ({ scrollIntoView: () => scrolls.push(id) }),
+  }
+
+  const context = vm.createContext({
+    document,
+    Node: { TEXT_NODE: 3 },
+    URL,
+    parent: { postMessage: (message, origin) => posts.push({ message: plain(message), origin }) },
+  })
+  vm.runInContext(script, context, { filename: 'lesson.html' })
+  return { listeners, posts, scrolls }
+}
+
+// Clicks `target` through the click listener of the bridge, and returns true when the bridge prevented the default.
+function clickInLesson(bridge, target, modifiers = {}) {
+  let prevented = false
+  const click = bridge.listeners.find(({ type }) => type === 'click')
+  click.listener({ target, metaKey: false, ...modifiers, preventDefault: () => { prevented = true } })
+  return prevented
+}
+
+test('the bridge runs on its parameters alone', () => {
+  const bridge = runBridge([lessonElement('p')])
+
+  assert.deepEqual(bridge.listeners.map(({ type, capture }) => [type, capture]), [['click', true]])
+  assert.deepEqual(bridge.posts, [])
+})
+
+test('the bridge links citations outside links only', () => {
+  const inCode = lessonText('see app/a.rs:12')
+  const inLink = lessonText('app/b.rs:3')
+  const inScript = lessonText('app/c.rs:4')
+  const plainText = lessonText('no citation here')
+  runBridge([
+    lessonElement('p', [lessonElement('code', [inCode])]),
+    lessonElement('a', [inLink], { href: '#x' }),
+    lessonElement('script', [inScript]),
+    lessonElement('p', [plainText]),
+  ])
+
+  assert.equal(inLink.replaced, null)
+  assert.equal(inScript.replaced, null)
+  assert.equal(plainText.replaced, null)
+
+  const [before, link, after] = inCode.replaced
+  assert.equal(before.textContent, 'see ')
+  assert.equal(link.tagName, 'A')
+  assert.equal(link.className, 'file-ref')
+  assert.equal(link.href, '#')
+  assert.deepEqual(plain(link.dataset), { file: 'app/a.rs', line: '12' })
+  assert.equal(link.textContent, 'app/a.rs:12')
+  assert.equal(after.textContent, '')
+})
+
+test('the bridge leaves citations in SVG diagrams as text', () => {
+  const inLabel = lessonText('reads app/store/src/sessions.rs:166 first')
+  const inParagraph = lessonText('see app/a.rs:12')
+  runBridge([
+    lessonElement('svg', [lessonElement('g', [lessonElement('text', [inLabel])])]),
+    lessonElement('p', [inParagraph]),
+  ])
+
+  assert.equal(inLabel.replaced, null)
+  assert.equal(inParagraph.replaced.length, 3)
+})
+
+test('the bridge leaves citations in quiz options as text', () => {
+  const inOption = lessonText('app/store/src/sessions.rs:166')
+  const inParagraph = lessonText('see app/a.rs:12')
+  runBridge([
+    lessonElement('div', [lessonElement('ol', [lessonElement('li', [inOption])])], { class: 'quiz' }),
+    lessonElement('p', [inParagraph]),
+  ])
+
+  assert.equal(inOption.replaced, null)
+  assert.equal(inParagraph.replaced.length, 3)
+})
+
+test('the bridge posts citation clicks and session link clicks', () => {
+  const inCode = lessonText('see app/a.rs:12 and README.md')
+  const bridge = runBridge([lessonElement('code', [inCode])])
+  const [, cite, , bare] = inCode.replaced
+
+  assert.ok(clickInLesson(bridge, cite))
+  assert.ok(clickInLesson(bridge, cite, { metaKey: true }))
+  assert.ok(clickInLesson(bridge, bare))
+
+  // Returns a span inside a link to `href`.
+  const link = (href) => lessonElement('a', [lessonElement('span')], { href }).children[0]
+
+  assert.ok(clickInLesson(bridge, link('0002-b.html?x=1#q')))
+  assert.ok(clickInLesson(bridge, link('../index.html')))
+  assert.ok(clickInLesson(bridge, link('#q')))
+  assert.equal(clickInLesson(bridge, link('https://opentelemetry.io/')), false)
+  assert.equal(clickInLesson(bridge, link('../../other/x.html')), false)
+  assert.equal(clickInLesson(bridge, lessonElement('p')), false)
+
+  assert.deepEqual(bridge.posts, [
+    { message: { kind: 'cite', path: 'app/a.rs', line: '12', meta: false }, origin: '*' },
+    { message: { kind: 'cite', path: 'app/a.rs', line: '12', meta: true }, origin: '*' },
+    { message: { kind: 'cite', path: 'README.md', meta: false }, origin: '*' },
+    { message: { kind: 'open', path: 'lessons/0002-b.html' }, origin: '*' },
+    { message: { kind: 'open', path: 'index.html' }, origin: '*' },
+  ])
+  assert.deepEqual(bridge.scrolls, ['q'])
 })
 
 // Returns the bytes of a `Uint8Array` from any realm, and any other value unchanged.

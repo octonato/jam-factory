@@ -35,6 +35,14 @@ const UPDATED: &str = "updated";
 const UPDATED_FORMAT: &str = "%Y-%m-%dT%H:%M:%SZ";
 pub(crate) const STARTED_FORMAT: &str = "%Y%m%d-%H%M";
 
+pub(crate) const LESSON_CSS: &str = include_str!("../assets/lesson/course.css");
+pub(crate) const LESSON_QUIZ: &str = include_str!("../assets/lesson/quiz.js");
+
+const LESSON_ASSETS: [(&str, &str); 2] = [
+    ("assets/course.css", LESSON_CSS),
+    ("assets/quiz.js", LESSON_QUIZ),
+];
+
 /// Filters sessions by org, repo, branch, category and archived state.
 #[derive(Debug, Clone, Default)]
 pub struct SessionFilter {
@@ -122,6 +130,7 @@ impl Store {
     /// The name comes from the current UTC minute and `head`, such as `walk-20261104-0912-3f00486`.
     /// A review with `pr` gets the name `review-pr{pr}-{YYYYMMDD-HHMM}-{head}`.
     /// `fields` go in its `session.json`.
+    /// A lesson also gets `assets/course.css` and `assets/quiz.js`.
     ///
     /// Returns `exists` when the branch already holds a live `session` or `review` run.
     /// Returns `bad_name` when `pr` is 0 or comes with a category other than `review`.
@@ -163,7 +172,7 @@ impl Store {
 
         let _lock = files::lock_file(&branch_dir.join(LOCK_FILE))?;
 
-        if category != Category::Walk {
+        if matches!(category, Category::Session | Category::Review) {
             self.refuse_live(org, repo, branch, category)?;
         }
 
@@ -192,6 +201,12 @@ impl Store {
         let dir = self.dir(&s);
         fs::create_dir(&dir).map_err(|e| files::io_error(&dir, e))?;
         let version = self.write_file(&s, SESSION_FILE, &format!("{text}\n"), None)?;
+
+        if category == Category::Lesson {
+            for (path, text) in LESSON_ASSETS {
+                self.write_file(&s, path, text, None)?;
+            }
+        }
 
         Ok(Started {
             session: s,
@@ -714,6 +729,44 @@ mod tests {
     }
 
     #[test]
+    fn start_session_seeds_a_lesson() {
+        let (_root, store) = store();
+
+        let started = start(&store, Category::Lesson, at("09:12")).unwrap();
+
+        assert_eq!(started.session.session(), "lesson-20261104-0912-3f00486");
+
+        let files = store.list_files(&started.session).unwrap();
+        let css = store.read_file(&started.session, "assets/course.css");
+        let quiz = store.read_file(&started.session, "assets/quiz.js");
+
+        assert!(
+            files.contains(&"assets/course.css".to_string()),
+            "{files:?}"
+        );
+        assert!(files.contains(&"assets/quiz.js".to_string()), "{files:?}");
+        assert_eq!(css.unwrap().content, LESSON_CSS);
+        assert_eq!(quiz.unwrap().content, LESSON_QUIZ);
+    }
+
+    #[test]
+    fn start_session_allows_many_live_lessons() {
+        let (_root, store) = store();
+
+        assert!(start(&store, Category::Lesson, at("09:12")).is_ok());
+        assert!(start(&store, Category::Lesson, at("09:13")).is_ok());
+    }
+
+    #[test]
+    fn start_session_seeds_nothing_outside_a_lesson() {
+        let (_root, store) = store();
+
+        let started = start(&store, Category::Walk, at("09:12")).unwrap();
+
+        assert_eq!(store.list_files(&started.session).unwrap(), [SESSION_FILE]);
+    }
+
+    #[test]
     fn start_session_refuses_bad_names() {
         let (_root, store) = store();
         let fields = Map::new();
@@ -764,7 +817,7 @@ mod tests {
     fn start_session_refuses_a_pr_outside_a_review() {
         let (_root, store) = store();
 
-        for category in [Category::Session, Category::Walk] {
+        for category in [Category::Session, Category::Walk, Category::Lesson] {
             let result = start_pr(&store, category, Some(42), at("09:12"));
             assert_eq!(result.unwrap_err().code(), "bad_name", "{category}");
         }

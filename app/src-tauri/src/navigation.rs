@@ -40,7 +40,7 @@ pub enum Navigation {
 
 /// Keeps the dashboard served on `port` in the window and sends other web URLs to the browser.
 pub fn decide(url: &Url, port: u16) -> Navigation {
-    if url.as_str() == "about:blank" {
+    if matches!(url.as_str(), "about:blank" | "about:srcdoc") {
         return Navigation::Stay;
     }
 
@@ -130,6 +130,7 @@ mod tests {
             Navigation::Stay
         );
         assert_eq!(decide_str("about:blank"), Navigation::Stay);
+        assert_eq!(decide_str("about:srcdoc"), Navigation::Stay);
     }
 
     #[test]
